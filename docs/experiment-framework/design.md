@@ -1,152 +1,206 @@
-# MedEvolve 实验框架设计
+# MedEvolve Specification
 
-## 1. 研究目标与任务定义
+## 1. 研究目标与实验边界
 
-### 1.1 研究目标
+系统通过更新出题指导和生成配比，逐轮生成质量更好、难度更高的医疗任务。模型权重固定。质量评价、固定解题器的提示词、模型和预算保持一致。
 
-MedEvolve 通过探索医疗环境、生成任务、评测任务和更新出题策略，逐轮提高任务质量与难度。进化对象是出题指导和生成配比，模型参数保持固定。
+项目在独立的 MedEvolve 仓库实现。参考 AgentEvolver 的环境交互、探索、任务总结与核验分工，适用代码和提示词按需复用。运行代码不依赖其训练数据集、PPO、训练 tokenizer 或经验训练模块。
 
-任务质量关注临床价值、医学与事实正确性、纵向信息整合需求、表达清晰度。任务难度由固定解题 Agent 的完成表现提供反馈。证据不足、题意含糊、工具故障和环境不可用分别记录，不计作难度提升。
+五类初始任务方向为诊断与解释、检查与风险分层、治疗规划、药物处方、治疗重规划。出题模式由探索与反馈沉淀为自然语言指导。
 
-### 1.2 初始任务方向
+### 患者与轮次
 
-五类初始任务方向为诊断与解释、检查与风险分层、治疗规划、药物处方、治疗重规划。它们提供探索和生成的方向，不预设具体患者、事件组合或关键词匹配规则。
+患者固定分为进化组与评测组，两组不相交。进化患者参与初始数据探索、迭代出题与反馈更新。评测患者只在固定策略后的评测阶段使用，不参与初始探索或策略更新。
 
-出题模式由 Agent 从病历探索及历轮反馈中总结，以自然语言进入出题指导。查询经验与出题要求保存在同一份指导中，随轮次更新。
+初始阶段整理并缓存患者轨迹；缓存评测患者轨迹不意味着向探索角色开放它们。各轮按配置中的进化患者列表逐个出题，每次只传一个患者，每患者每轮尝试生成 2 题。每轮可以配置不同患者列表，分组本身不变。
 
-### 1.3 任务范围
+题型与难度方向配比控制这 2 个生成位置的安排，不改变生成数量。不足 2 题时记录实际产量，不补造任务。最终评测默认使用最终策略；各轮策略快照允许在相同评测条件下比较，评测结果不回流。
 
-任务以完整病程中的检索、比较和综合为基础，也可要求执行环境原生支持的临床操作。仅在模拟某次就诊或预测未来时使用时间截断，时间边界由任务场景确定。
-
-每个任务包含：
-
-- 任务指令与任务类型；
-- 环境、患者范围和可见记录范围；
-- 完成标准：参考答案、必要事实或预期环境状态；
-- 支持任务前提及答案的证据；
-- 生成轮次及来源方法。
-
-查询任务按答案和证据核验；写入任务按操作后的资源与字段核验。患者后来实际接受的治疗可以作为事实回顾的答案，不自动构成治疗建议的唯一正确答案。
-
-## 2. 远程环境与本机工具
-
-### 2.1 部署边界
-
-实验代码和模型调用在本机运行。Docker 环境及其数据存储在远程服务器运行。
-
-远程环境管理服务负责创建实例、返回访问地址、释放实例。本机的工具执行代码直接访问该实例的原生服务，无需经由统一 FHIR 请求转发层。
+## 2. 主流程
 
 ```text
-本机实验入口 ── 创建、释放 ──► 远程环境管理服务
-      │                              │
-      │                              ▼
-      └── 环境工具调用 ───────► 独立 Docker 环境
+整理并缓存患者轨迹
+        │
+        ├─ 数据探索：自由读取多位进化患者的轨迹 ─► 数据探索指导
+        └─ 环境探索：交互了解原生工具与约束   ─► 环境探索指导
+                                                        │
+进化患者单人轨迹 + 两份初始指导 + 当前策略 ────────────────┘
+        │
+        ▼
+单次 LLM 出题（尝试 2 题）
+        │
+        ▼
+公共核验、质量评价、固定 Agent 试解
+        │
+        ▼
+单次 LLM 反馈分析 ─► 单次 LLM 策略更新 ─► 下一轮出题
+        │
+        ▼
+固定策略，在评测患者上生成并评测
 ```
 
-### 2.2 实例生命周期
+### 两种初始探索
 
-一次探索或解题运行使用一个独立环境实例。实例从指定的初始数据启动，运行结束后保存产物并释放。
+数据探索是主方法的独立组成部分。探索 Agent 自由读取多位进化患者的缓存轨迹，归纳数据组织方式、病程关联、可利用的信息变化和出题机会。输出为不绑定具体患者的抽象指导；原始读取轨迹单独保存。
 
-生成阶段的写入不会进入解题实例。核验与独立试解从同一初始数据分别启动实例，避免已有操作改变后续运行条件。需要复现的任务前提必须进入任务描述或明确的初始数据设置。
+环境探索 Agent 在独立实例中了解工具名称、参数、返回结构、原生读写能力与操作约束。输出为抽象的环境指导。它不替代数据探索，也不将具体患者观察当成公共指导。
 
-独立实例包含独立的数据状态；多个容器不能通过共享可写数据库或数据卷相互影响。
+两种探索只在初始阶段运行，其指导在实验内保持固定。历轮经验和新模式进入可更新的出题指导。
 
-### 2.3 环境能力与工具
+### 单次任务生成
 
-环境提供哪些操作，Agent 就使用哪些工具。支持写入的环境开放其原生写工具；开放范围以环境工具定义为准。
+一次调用接收一个患者的缓存轨迹、两份初始指导、当前出题指导，以及本次两个题型／难度方向。生成角色没有环境查询工具。
 
-PhysicianBench、MedAgentBench、FHIR-AgentBench 分别维护自己的环境工具与字段适配。Docker 启停、服务就绪和清理属于远程环境管理；模型调用和工具调用循环属于本机运行代码。
+每题生成题目、题型、参考答案和数据证据。患者 ID、环境名称、任务 ID、轮次和来源方法由调用端附加，不能依赖模型自行命名。证据引用轨迹中的来源 ID。参考答案经公共核验后使用，不建设单独标注体系，也不称为金标准。
 
-## 3. 主方法及进化循环
+### 反馈与更新
 
-### 3.1 初始状态
+反馈分析接收本轮任务、其患者轨迹、核验、质量评价、解题轨迹和操作状态，输出质量问题、难度表现、失败原因与改进建议。模型分析与执行记录分开保存，完成情况和故障事实不能由反馈模型改写。
 
-初始状态包含五类任务方向、初始出题指导以及题型与难度的生成配比。出题指导描述任务要求、病历查询方式和证据要求，不包含预制的结构化模式匹配器。
+策略更新只接收当前策略与反馈分析结果，更新出题指导和配比。生成配比为带题型与难度描述的权重列表；实验入口按权重和固定随机种子抽取每患者的两个生成方向。只检查合法题型、非负权重和至少一个正权重，不限制自然语言模式如何变化。
 
-### 3.2 单轮流程
+## 3. 公共环境与模型运行
 
-1. **探索**：申请环境，Agent 阅读病历并交互，保存探索轨迹和观察。
-2. **生成**：依据探索结果、当前出题指导与配比生成任务，记录证据及完成标准。
-3. **核验与试解**：在独立环境中核验任务，固定解题 Agent 尝试完成任务，记录结果和失败原因。
-4. **反馈与更新**：汇总质量、完成表现和失败归因，更新出题指导与题型／难度配比。
-5. **保存与清理**：保存本轮产物，释放环境；下一轮使用更新后的策略。
+### 环境
 
-### 3.3 进化对象
+模型调用与实验入口在本机；Docker 服务和数据存储在远程。远程管理服务创建实例、返回可由本机访问的原生服务地址、释放实例。本机业务工具直接访问对应实例。
 
-| 对象 | 内容 | 更新依据 |
-| --- | --- | --- |
-| 出题指导 | 数据理解、自然语言出题模式、查询经验、生成要求 | 探索发现、任务质量、解题轨迹与失败归因 |
-| 生成配比 | 各题型与难度方向的生成尝试次数或比例 | 有效任务产量、质量和解题完成表现 |
+轨迹整理、环境探索、任务核验和固定解题分别使用独立实例，均从指定初始数据启动。实例之间不共享可写存储。写入仅限环境原生开放的能力；任务核验和解题不能继承探索产生的写入。
 
-出题模式允许新增、修改和淘汰，其价值依据产出任务的质量评价。难度以逐步提高为目标，以任务成立、质量达标为前提。
+患者轨迹的具体内容由环境适配决定。统一提供按时间组织的轨迹正文与原始记录引用，保留用于出题和核验的关键事实。证据引用须可回查原始数据，压缩不能凭空补充事实。初始数据不可变时，同一实验内复用缓存。
 
-策略更新属于主方法内部。最终质量评测的标准和解题 Agent 保持固定，不随出题指导更新。
+各环境适配独立实现；只有通过实际原生工具和隔离验证的环境才声明可运行。PhysicianBench、MedAgentBench、FHIR-AgentBench 的具体启动、工具与数据要求按其原始实现核对。
 
-## 4. 评测与对比实验
+### 模型运行
 
-### 4.1 评测分工
+提供两个入口：单次 LLM 调用、SDK Agent 运行。单次入口完成一次模型请求，不隐式增加反思或修复调用；解析失败保存原始响应并返回失败状态。Agent 入口使用 OpenAI Agents SDK 的 Agent、Runner 与工具封装，由 SDK 组织多轮调用。
 
-| 环节 | 判断内容 | 输出 |
-| --- | --- | --- |
-| 任务核验 | 前提、证据、参考答案或预期操作状态是否成立 | 核验结果与具体失败原因 |
-| 质量评测 | 临床价值、正确性、纵向整合需求与清晰度 | 各项评价及理由 |
-| 固定解题器 | 能否在规定环境和工具预算内完成任务 | 完成结果、工具轨迹及操作后的状态 |
+共享运行结果包含最终结构化输出、调用轨迹、模型用量、完成状态与错误。模型轮次预算与工具调用预算分开记录。模型名称、连接地址和 API key 环境变量由配置指定；不硬编码模型或价格。
 
-纵向整合需求评价的是作答所必需的信息，而非引用记录或资源类型的数量。解题完成率下降可以提供难度反馈，但不能单独证明难度提升；需结合质量核验及失败原因解释。
+## 4. 公共评测与决策点
 
-### 4.2 实验单位
+公共评测先核验题目和参考答案是否有数据证据支持，评价质量，再运行固定解题 Agent。首版分别记录临床价值、正确性、纵向整合需求和清晰度的评价与依据，不设加权总分。
 
-实验由方法、环境、患者集合、模型配置、调用预算和轮数共同确定。方法与环境分开选择，每个方法声明可运行的环境。
+解题 Agent 仅接收题目、患者 ID、环境工具和可选决策点，不接收参考答案、证据列表或完整缓存轨迹。评审角色可读取这些材料。查询任务评价答案；写入任务同时检查操作后状态。运行故障与临床未完成分开记录，不将故障当成难度提升。
 
-同一环境内进行方法比较，共用初始数据、适用的患者集合、评测标准和解题预算。方法特有的探索与生成流程保留在方法内部。工具能力不同的运行记录对应差异，不将不同环境产生的分数直接当作方法优劣。
+方法名称不进入评审输入。主方法与对比方法在同一环境内共用初始数据、患者范围、评测配置和解题预算；方法的探索及生成算法保持各自特点。
 
-各方法的产物进入公共评测；方法名称不进入质量评审输入。进化阶段使用的患者与最终评测患者分开，患者分组以一份实验配置记录。
+### 决策点
 
-### 4.3 对比方法接入
+决策点是可选任务字段，默认为空。启用时，解题查询工具只返回决策点之前的信息；完整轨迹中的之后信息可供出题与核验生成参考答案。后续真实治疗不是临床决策题的唯一正确方案。
 
-对比方法包括 SingleShot、SelfGen、Workflow、TaskCraft、EnvExplore，分别依据原始论文或开源代码实现。
+时间可见范围由环境适配保证，覆盖列表检索、按 ID 获取与关联读取。预留字段和能力入口；首版未实现时间过滤的环境必须明确拒绝带决策点的任务，不能静默暴露完整记录。具体适配完成后，再开放此类任务。
 
-实验入口向方法传入环境访问方式、模型配置和预算。方法输出任务及运行记录；公共评测读取这些产物。各方法按自身算法执行，对比方法无需具有主方法的进化循环。
+## 5. 共享数据与接口
 
-### 4.4 实验记录
+`contracts.py` 是共享结构的唯一代码定义，归属模型运行模块的基础任务。五个模块引用它，不建立各自同名结构。所有函数为异步，只有文件保存与结果汇总使用同步函数。
 
-每次运行保存配置、各轮出题指导与配比、生成任务、核验与评分结果、解题轨迹、失败原因和调用成本。结果保存在普通文件中，轮次目录表达策略与任务的对应关系。
+以下类型映射为 Pydantic 模型；`JsonObject` 表示可 JSON 序列化的字典。时间点采用含时区的 ISO 8601 字符串，由环境解释其可见语义。
 
-任务结构、工具参数和环境就绪检查保证实验能够运行。失败单独记录，不替换为零分或临床答错。首版不建设独立版本管理、数据库、工作流引擎或复杂恢复状态机。
+| 类型 | 字段 |
+| --- | --- |
+| EnvironmentConfig | name: str, manager_url: str, seed_data: str |
+| EnvironmentInstance | instance_id: str, endpoint: str, environment: str |
+| Evidence | source_id: str, statement: str |
+| PatientTrajectory | patient_id: str, environment: str, text: str, sources: list[Evidence] |
+| ExplorationGuidance | data_guidance: str, environment_guidance: str |
+| GenerationDirection | task_type: str, difficulty: str, weight: float |
+| Strategy | generation_guidance: str, allocation: list[GenerationDirection] |
+| GeneratedQuestion | instruction: str, task_type: str, reference_answer: str, evidence: list[Evidence], decision_point: str 或空 |
+| TaskBatch | questions: list[GeneratedQuestion] |
+| Task | GeneratedQuestion 的字段，加 id: str, patient_id: str, environment: str, round_index: int, source_method: str |
+| ModelConfig | model: str, base_url: str 或空, api_key_env: str |
+| Budget | max_model_turns: int, max_tool_calls: int |
+| RunResult | output: JsonObject 或空, trace: list[JsonObject], usage: JsonObject, status: str, error: str 或空 |
+| Verification | valid: bool, reason: str |
+| QualityReview | dimensions: JsonObject，四个维度各有 judgment 与 reason |
+| CompletionReview | completed: bool, reason: str |
+| EvaluationResult | task_id: str, verification: Verification 或空, quality: QualityReview 或空, completion: CompletionReview 或空, solver_run: RunResult 或空, observed_state: JsonObject, status: str, failure_category: str 或空, runs: list[RunResult] |
+| Feedback | quality_findings: list[str], difficulty_findings: list[str], failure_findings: list[str], suggestions: list[str] |
+| SolverInput | instruction: str, patient_id: str, decision_point: str 或空 |
+| SolverAnswer | answer: str |
+| DataExploration | guidance: str |
+| EnvironmentExploration | guidance: str |
+| RuntimeConfig | models: dict[str, ModelConfig], budgets: dict[str, Budget] |
+| EvaluationConfig | runtime: RuntimeConfig，角色为 verifier、quality、solver、completion |
+| ExperimentConfig | run_id: str, method: str, environment: EnvironmentConfig, runtime: RuntimeConfig, evaluation: EvaluationConfig, evolution_patients: list[str], evaluation_patients: list[str], round_patients: list[list[str]], initial_strategy: Strategy, random_seed: int, output_dir: str |
 
-## 5. 项目目录与运行方式
+RunResult.status 为 completed、budget_exhausted 或 failed；EvaluationResult.status 为 completed、invalid 或 failed。failure_category 为 clinical、insufficient_evidence、ambiguous_task、tool_error、environment_error、model_error 或空。无法完成核验时 verification 为空，不能伪造为任务不成立。
 
-### 5.1 代码分工
+### 环境接口
+
+```python
+async def create_environment(config: EnvironmentConfig) -> EnvironmentInstance: ...
+async def get_tools(instance: EnvironmentInstance, patient_ids: list[str],
+                    decision_point: str | None = None) -> list[Tool]: ...
+async def read_state(instance: EnvironmentInstance, task: Task) -> JsonObject: ...
+async def release_environment(config: EnvironmentConfig,
+                              instance: EnvironmentInstance) -> None: ...
+async def prepare_trajectory(instance: EnvironmentInstance,
+                             patient_id: str) -> PatientTrajectory: ...
+```
+
+Tool 为 OpenAI Agents SDK 的工具类型。工具绑定本次实例；解题时绑定单个患者与可见范围。环境探索传入进化患者列表；固定解题传入仅含当前患者的列表。工具不能访问列表之外的患者。
+
+### 模型运行接口
+
+```python
+async def call_llm(*, instructions: str, input_text: str,
+                   output_type: type[BaseModel], model: ModelConfig) -> RunResult: ...
+async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
+                    output_type: type[BaseModel], model: ModelConfig,
+                    budget: Budget) -> RunResult: ...
+```
+
+RunResult.output 为 output_type 校验后的字典，成功结果可通过 `output_type.model_validate(result.output)` 恢复模型。失败不返回伪造的成功对象。
+
+### 主方法接口
+
+```python
+async def explore_data(trajectories: list[PatientTrajectory],
+                       runtime: RuntimeConfig) -> RunResult: ...
+async def explore_environment(config: EnvironmentConfig, patient_ids: list[str],
+                              runtime: RuntimeConfig) -> RunResult: ...
+async def generate_tasks(trajectory: PatientTrajectory, guidance: ExplorationGuidance,
+                         strategy: Strategy, directions: list[GenerationDirection],
+                         runtime: RuntimeConfig) -> RunResult: ...
+async def analyze_feedback(tasks: list[Task], trajectories: list[PatientTrajectory],
+                           evaluations: list[EvaluationResult],
+                           runtime: RuntimeConfig) -> RunResult: ...
+async def update_strategy(strategy: Strategy, feedback: Feedback,
+                          runtime: RuntimeConfig) -> RunResult: ...
+```
+
+初始探索的输出模型分别为只有 guidance: str 的 DataExploration、EnvironmentExploration。任务生成输出为 TaskBatch；反馈输出为 Feedback；更新输出为 Strategy。directions 必须有两个元素，生成角色按照各位置方向尝试出题。数据探索的工具仅读取传入的缓存轨迹。
+
+### 公共评测与实验接口
+
+```python
+async def evaluate_task(task: Task, trajectory: PatientTrajectory,
+                        environment: EnvironmentConfig,
+                        config: EvaluationConfig) -> EvaluationResult: ...
+async def run_experiment(config: ExperimentConfig) -> None: ...
+def summarize_run(output_dir: str) -> JsonObject: ...
+```
+
+只有实验入口负责患者分组、缓存路径、轮次和任务运行信息。主方法不调度公共评测，评测不更新策略。未接入的对比方法在配置入口返回明确错误，不替代为主方法运行。
+
+## 6. 模块分工与产物
 
 ```text
 MedEvolve/
-  docs/experiment-framework/
-  configs/
-  environments/              环境配置、本机工具与各环境适配
-  runtime/                   OpenAI Agents SDK 配置、角色创建与运行记录
-  methods/medevolve/          探索、生成、指导更新和配比更新
-  evaluation/                任务核验、质量评测与固定解题器
-  experiments/               实验入口和结果汇总
-  server/                    远程环境管理与 Docker 启停
-  outputs/                   实验产物
+  contracts.py
+  configs/experiment.json
+  environments/       管理客户端、环境适配、轨迹整理
+  server/             Docker 生命周期与管理接口
+  runtime/            单次调用、SDK Agent、模型配置和记录
+  methods/medevolve/  初始探索、出题、反馈分析与更新
+  evaluation/         公共核验、质量、固定解题与完成评价
+  experiments/        缓存、患者分配、轮次、保存和汇总
+  tests/
+  outputs/
 ```
 
-目录按职责划分，模块以普通函数和明确的数据结构连接。对比方法在实际接入时各自增加目录。
+每次运行保存配置、两份初始指导、患者轨迹、各轮使用策略与更新策略、任务、评测、反馈和所有模型运行记录。轨迹按进化组和评测组分目录。调用成本有配置价格时计算，否则报告 token 用量。
 
-Agent 采用 OpenAI Agents SDK 的 `Agent` 与 `Runner`，环境操作通过 `function_tool` 提供。SDK 负责模型与工具的多轮调用；实验入口通过普通 Python 函数组织探索、生成、评测和策略更新。不同角色使用不同提示词、工具和输出结构，角色之间由主流程传递结果。
-
-探索 Agent 获得环境工具；生成 Agent 接收探索记录和出题指导；核验与解题 Agent 各自获得独立环境；策略更新 Agent 接收本轮反馈。角色划分不要求使用 SDK 的 handoff 或额外工作流框架。
-
-SDK 输出的运行记录需要提取工具调用、工具结果、最终输出及可用的模型用量。固定解题器的模型、提示词和预算由实验配置确定，各轮保持一致。
-
-### 5.2 原版架构复用
-
-以原版 AgentEvolver 的环境交互、探索、任务总结和过滤分工为基础，选择性复用适用的提示词和环境交互代码。Agent 运行采用标准 SDK，环境适配和研究方法保留在独立模块中。
-
-本机实验入口独立于原版训练数据集、PPO 配置、模型权重加载和训练 tokenizer。远程环境管理参考 EnvService 的创建、交互与释放职责，Docker 实例与工具协议按各环境实际需要适配。
-
-### 5.3 运行方式
-
-远程服务器启动环境管理服务，并提供已准备的环境镜像与初始数据。本机实验入口读取配置，选择方法与环境，申请实例、运行实验、保存结果并释放资源。
-
-首版通过一个实验入口串联主方法。结果汇总读取已保存产物，不重复启动环境或调用模型。
+五份模块计划分别限定文件归属。先提交公共结构和包配置，再并行实现各模块；通过固定样例和替代调用验证接口后，执行完整闭环集成。实现阶段使用独立 worktree；共享结构变更须同步所有引用方。
