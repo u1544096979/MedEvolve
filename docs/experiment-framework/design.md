@@ -123,7 +123,7 @@ MedEvolve/
   docs/experiment-framework/
   configs/
   environments/              环境配置、本机工具与各环境适配
-  runtime/                   模型客户端及通用 Agent 工具调用循环
+  runtime/                   OpenAI Agents SDK 配置、角色创建与运行记录
   methods/medevolve/          探索、生成、指导更新和配比更新
   evaluation/                任务核验、质量评测与固定解题器
   experiments/               实验入口和结果汇总
@@ -133,9 +133,15 @@ MedEvolve/
 
 目录按职责划分，模块以普通函数和明确的数据结构连接。对比方法在实际接入时各自增加目录。
 
+Agent 采用 OpenAI Agents SDK 的 `Agent` 与 `Runner`，环境操作通过 `function_tool` 提供。SDK 负责模型与工具的多轮调用；实验入口通过普通 Python 函数组织探索、生成、评测和策略更新。不同角色使用不同提示词、工具和输出结构，角色之间由主流程传递结果。
+
+探索 Agent 获得环境工具；生成 Agent 接收探索记录和出题指导；核验与解题 Agent 各自获得独立环境；策略更新 Agent 接收本轮反馈。角色划分不要求使用 SDK 的 handoff 或额外工作流框架。
+
+SDK 输出的运行记录需要提取工具调用、工具结果、最终输出及可用的模型用量。固定解题器的模型、提示词和预算由实验配置确定，各轮保持一致。
+
 ### 5.2 原版架构复用
 
-以原版 AgentEvolver 的环境交互、探索、任务总结和过滤分工为基础，选择性复用适用的客户端、提示词和交互代码。
+以原版 AgentEvolver 的环境交互、探索、任务总结和过滤分工为基础，选择性复用适用的提示词和环境交互代码。Agent 运行采用标准 SDK，环境适配和研究方法保留在独立模块中。
 
 本机实验入口独立于原版训练数据集、PPO 配置、模型权重加载和训练 tokenizer。远程环境管理参考 EnvService 的创建、交互与释放职责，Docker 实例与工具协议按各环境实际需要适配。
 
