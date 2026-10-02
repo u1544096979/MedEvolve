@@ -170,6 +170,14 @@ async def test_native_reads_writes_state_and_instance_isolation(native_fhir):
     }
     first = await read_state(instance(), task())
     second = await read_state(instance("instance-two"), task())
+    assert first["patient_id"] == "a"
+    assert first["environment"] == "PhysicianBench"
+    assert {r["resourceType"] for r in first["resources"]} <= {
+        "Communication",
+        "ServiceRequest",
+        "MedicationRequest",
+        "Appointment",
+    }
     assert any(r.get("id") == created["id"] for r in first["resources"])
     assert not any(
         r["resourceType"] == "MedicationRequest" for r in second["resources"]
@@ -272,6 +280,10 @@ async def test_trajectory_retains_raw_sources_and_orders_by_actual_time(native_f
         "Observation/lab"
     )
     assert "original note" in trajectory.text
+    assert "[2025-01-01T20:00:00Z] Observation/lab" in trajectory.text
+    assert "[undated] Patient/a" in trajectory.text
+    assert "\"subject\"" not in trajectory.text
+    assert "\"resourceType\"" not in trajectory.text
     evidence = next(
         e for e in trajectory.sources if e.source_id == "DocumentReference/note"
     )

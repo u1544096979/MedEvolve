@@ -21,6 +21,103 @@ from environments.errors import EnvironmentUnavailable, UnsupportedDecisionPoint
 from environments.fhir import FHIRClient, decode_document_notes
 from environments.physicianbench import NATIVE_FUNCTIONS
 
+_WRITABLE_RESOURCE_TYPES = {
+    "Communication",
+    "ServiceRequest",
+    "MedicationRequest",
+    "Appointment",
+}
+
+
+def _short_system(system: str) -> str:
+    known = {
+        "http://loinc.org": "LOINC",
+        "http://snomed.info/sct": "SNOMED",
+        "http://www.nlm.nih.gov/research/umls/rxnorm": "RxNorm",
+        "http://hl7.org/fhir/sid/icd-10-cm": "ICD-10-CM",
+        "http://hl7.org/fhir/sid/icd-10": "ICD-10",
+        "http://hl7.org/fhir/sid/cvx": "CVX",
+    }
+    return known.get(system, system)
+
+
+def _compact_value(value):
+    """Keep clinical values while making common FHIR datatypes concise."""
+    if isinstance(value, list):
+        return [_compact_value(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    if "coding" in value and isinstance(value["coding"], list):
+        parts = []
+        for coding in value["coding"]:
+            system = _short_system(coding.get("system", ""))
+            code = coding.get("code", "")
+            display = coding.get("display", "")
+            parts.append("|".join(part for part in (system, code, display) if part))
+        if value.get("text"):
+            parts.append(value["text"])
+        extras = {
+            key: _compact_value(item)
+            for key, item in value.items()
+            if key not in {"coding", "text"}
+        }
+        return {"concept": parts, **extras} if extras else {"concept": parts}
+
+    if "system" in value and "code" in value and set(value) <= {
+        "system", "code", "display", "userSelected"
+    }:
+        return "|".join(
+            part
+            for part in (
+                _short_system(value.get("system", "")),
+                value.get("code", ""),
+                value.get("display", ""),
+            )
+            if part
+        )
+
+    if "value" in value and ("unit" in value or "system" in value):
+        extras = {
+            key: _compact_value(item)
+            for key, item in value.items()
+            if key not in {"value", "unit", "system", "code"}
+        }
+        quantity = " ".join(
+            str(part)
+            for part in (value.get("value"), value.get("unit") or value.get("code"))
+            if part is not None
+        )
+        return {"quantity": quantity, **extras} if extras else quantity
+
+    if "reference" in value and set(value) <= {
+        "reference", "display", "type", "identifier", "extension", "id"
+    }:
+        reference = value.get("reference", "")
+        if value.get("display"):
+            reference += f" ({value['display']})"
+        extras = {
+            key: _compact_value(item)
+            for key, item in value.items()
+            if key not in {"reference", "display"}
+        }
+        return {"reference": reference, **extras} if extras else reference
+
+    return {
+        key: _compact_value(item)
+        for key, item in value.items()
+        if key != "meta"
+    }
+
+
+def _trajectory_resource(resource: dict) -> dict:
+    compact = {
+        key: value
+        for key, value in decode_document_notes(resource).items()
+        if key not in {"meta", "id", "resourceType", "subject"}
+    }
+    return _compact_value(compact)
+
 
 def _check_environment(name: str) -> None:
     if name != "PhysicianBench":
@@ -88,7 +185,11 @@ async def read_state(instance: EnvironmentInstance, task: Task) -> JsonObject:
     return {
         "patient_id": task.patient_id,
         "environment": instance.environment,
-        "resources": resources,
+        "resources": [
+            resource
+            for resource in resources
+            if resource.get("resourceType") in _WRITABLE_RESOURCE_TYPES
+        ],
     }
 
 
@@ -165,7 +266,8 @@ async def prepare_trajectory(
         text.append(
             f"[{_record_time(resource) or 'undated'}] {source_id}\n"
             + json.dumps(
-                decode_document_notes(resource), ensure_ascii=False, sort_keys=True
+                _trajectory_resource(resource), ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
             )
         )
     return PatientTrajectory(
