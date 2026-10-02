@@ -2,7 +2,7 @@
 
 ## 实验目标
 
-比较 MedEvolve、TaskCraft、Workflow、SingleShot、SelfGen、EnvExplore 在相同医疗环境中的任务生成质量、任务难度表现及生成成本。方法来源按作者源码、论文、明确的方向定义依次确定。尚未确认论文对应关系，不等同于没有公开源码。
+比较 MedEvolve、TaskCraft、Workflow、SingleShot、SelfGen、EnvExplore 在相同医疗环境中的任务生成质量、任务难度表现及生成成本。TaskCraft 以作者源码作为算法依据；Workflow、SingleShot、SelfGen、EnvExplore 按明确的方向定义实现。具有论文来源的方法优先作者源码，其次论文。
 
 ## 公共边界
 
@@ -27,6 +27,8 @@ async def generate_tasks(
 
 directions 对应两个目标任务。成功输出 TaskBatch，最多两题；允许证据不足时少出题。算法内部候选、扩展与失败尝试记入运行记录和用量，不能通过只统计最终成功题隐去成本。Task 的患者、环境、轮次、方法和编号由实验入口附加。
 
+五个方法内部生成及筛选统一使用 runtime.models["generator"]。预算取 runtime.budgets["generator"]，model_turns 对多阶段方法指本批累计模型调用数；工具调用单独累计。公共实验 section 提供公共输出约束和轻量运行结果汇总函数，各方法调用而不另写一份。usage 统一保存 model_turns、tool_calls、input_tokens、output_tokens、total_tokens；单次接口的 prompt_tokens、completion_tokens 映射为输入、输出 token。trace 按阶段附加原始运行记录，保留失败信息。
+
 环境复用 create_environment、prepare_trajectory、get_tools、read_evidence、read_state、release_environment。模型复用 call_llm 与 run_agent。评测复用 evaluate_task，禁止对方法名称设置不同判定规则。
 
 ## 对比口径
@@ -43,4 +45,4 @@ directions 对应两个目标任务。成功输出 TaskBatch，最多两题；�
 
 ## 方法来源状态
 
-TaskCraft 已确认作者仓库与论文。Workflow、SingleShot、SelfGen、EnvExplore 的旧文档只有方向定义，论文对应关系待确认；不得自行替换成名称相似的论文方法。
+TaskCraft 为作者源码的医疗适配；Workflow、SingleShot、SelfGen、EnvExplore 为方法方向对比，分别对应固定阶段生成、单次生成、自生成与自答一致性、环境探索生成。后四项按本项目 SPEC 定义报告。
