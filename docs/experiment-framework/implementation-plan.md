@@ -1,39 +1,36 @@
-# MedEvolve Implementation Plan
+# MedEvolve 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+## 模块职责
 
-**Goal:** 通过五个模块构成可运行的医疗任务自进化实验。
+公共环境提供远程实例、工具与患者轨迹；模型运行提供 LLM 与标准 Agent；主方法完成探索和自进化；公共评测判断任务质量与完成情况；实验入口管理患者、轮次及产物。
 
-**Architecture:** 共用主 specification 中的数据结构与函数签名。公共结构先落地，各模块在独立 worktree 实现，最终由实验入口完成集成。
+## 接口
 
-**Tech Stack:** Python、Pydantic、OpenAI Agents SDK、OpenAI Python 客户端、httpx、FastAPI、Docker、pytest。
+共享结构及函数签名见[主 specification](design.md)第 5 节。公共结构先建立，各模块引用同一份 contracts.py。
 
-## Global Constraints
-
-[主 specification](design.md) 是患者分组、方法流程、模块接口和失败状态的唯一约定。出题、反馈分析、策略更新各一次调用。代码实施使用独立 worktree；真实模型调用使用已确认的模型与成本配置。
-
-## 模块计划与文件归属
-
-| 计划 | 可编辑范围 | 交付接口 |
+| 模块 | 文件归属 | 计划 |
 | --- | --- | --- |
-| [环境](plans/environment.md) | environments/、server/、tests/environment/ | 创建、工具、状态、释放、轨迹 |
-| [模型运行](plans/runtime.md) | contracts.py、pyproject.toml、runtime/、tests/runtime/、tests/fixtures/ | 公共结构、单次调用、Agent 运行 |
-| [主方法](plans/method.md) | methods/medevolve/、tests/method/ | 两种探索、出题、反馈、更新 |
-| [评测](plans/evaluation.md) | evaluation/、tests/evaluation/ | evaluate_task |
-| [实验](plans/experiment.md) | experiments/、configs/、tests/experiment/ | 实验运行与汇总 |
+| 公共环境 | environments/、server/ | [环境](plans/environment.md) |
+| 模型运行 | contracts.py、pyproject.toml、runtime/ | [模型运行](plans/runtime.md) |
+| 主方法 | methods/medevolve/ | [主方法](plans/method.md) |
+| 公共评测 | evaluation/ | [评测](plans/evaluation.md) |
+| 实验入口 | experiments/、configs/ | [实验](plans/experiment.md) |
 
-其他模块所需依赖在模型运行模块的公共基础任务统一加入 pyproject.toml。各模块不自行修改共享结构或其他模块文件，不接入五个对比算法。
+## 实施任务
 
-## 实施顺序
+1. 建立共享结构与项目依赖。
+2. 实现公共环境与模型运行。
+3. 实现主方法、公共评测与实验入口。
+4. 使用可控模型和环境跑两轮完整闭环。
+5. 在镜像、数据与模型配置明确后执行真实实验。
 
-- [ ] 模型运行模块首先定义 contracts.py，按 specification 构造覆盖成功与失败结果的 JSON 样例，并建立 pyproject.toml；提交 `chore(core): 建立公共接口与项目依赖`。
-- [ ] 五个模块使用同一份公共结构提交开始各自 worktree。环境与模型运行提供接口实现；主方法、评测与实验使用替代函数开发，不等待真实服务或收费模型。
-- [ ] 各模块完成其计划中的验证，交付变更提交、测试结果和原生服务依赖；公共契约有变动时同步后再集成。
-- [ ] 集成各模块，完成两轮无收费模型的闭环：两个进化患者、一个评测患者，每患者尝试 2 题；检查患者边界、策略传递、产物和实例释放。
-- [ ] 在环境镜像、数据和模型配置就绪后运行一轮真实实验，随后固定策略运行评测组；汇总必须只读取文件。
+实施使用独立 worktree。真实模型调用使用已确认的配置。对比方法通过公共环境与公共评测接口单独接入。
 
-## 集成验收
+## 关键验收
 
-初始探索只能访问进化患者；生成输入为单患者缓存轨迹；出题无工具调用；反馈分析与更新分开；评测不向解题器泄露答案与完整轨迹；写入实例隔离；决策点不支持时明确拒绝；各轮记录有效产量、质量、有效任务完成率、故障和模型用量。
+- 环境隔离：实例写入互不影响，结束后释放。
+- 数据边界：评测患者不参与进化，解题 Agent 看不到参考答案。
+- 闭环运行：初始探索、出题、评测、反馈、更新串联，下一轮使用更新策略。
+- 结果可信：写入读取实际状态，运行故障单独记录，结果可保存与汇总。
 
-最终交付为能按配置运行的主方法与公共实验层。对比方法按公共任务和评测接口单独接入。
+测试集中在上述关键路径，不要求每个小函数、每个字段或重复模拟场景单独建立测试。
