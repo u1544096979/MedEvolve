@@ -99,7 +99,7 @@ async def test_data_exploration_reads_only_supplied_cache(method, runtime, monke
             payload = json.loads(raw)
             assert payload["patient_id"] == item.patient_id
             assert payload["text"] == item.text
-            assert payload["sources"] == [{"source_id": source.source_id} for source in item.sources]
+            assert payload["sources"] == [source.model_dump(mode="json") for source in item.sources]
         with pytest.raises(ValueError, match="outside"):
             await invoke("read_trajectory", json.dumps({"patient_id": held_out.patient_id}))
         return completed(DataExploration(guidance="关注时间变化与证据来源"))
@@ -195,6 +195,9 @@ async def test_generation_feedback_update_and_next_generation(method, runtime, m
     payloads = [json.loads(entry["input_text"]) for entry in calls]
     assert payloads[0]["trajectory"]["patient_id"] == patient.patient_id
     assert len(payloads[0]["directions"]) == 2
+    assert payloads[0]["trajectory"]["sources"] == [s.model_dump(mode="json") for s in patient.sources]
+    assert payloads[0]["strategy"] == {"generation_guidance": strategy.generation_guidance}
+    assert "药物处方" not in calls[0]["instructions"].split("题型与难度方向：")[-1]
     assert payloads[1]["evaluations"][0]["failure_category"] == "tool_error"
     assert payloads[1]["evaluations"][0]["solver_run"]["trace"] == [{"tool_error": "offline"}]
     assert payloads[1]["evaluations"][0]["observed_state"] == {"write_applied": False}
@@ -237,4 +240,4 @@ async def test_generation_accepts_only_requested_task_types_and_allows_short_bat
         patient, guidance, strategy, [allowed, skipped], runtime
     )
     assert result.status == "failed"
-    assert "outside the requested directions" in result.error
+    assert "exceed requested directions" in result.error

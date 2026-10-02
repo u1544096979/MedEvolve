@@ -21,6 +21,7 @@ from contracts import (
 )
 from environments import create_environment, get_tools, release_environment
 from runtime import call_llm, run_agent
+from methods.common import output_constraints, validate_task_batch
 
 from .prompts import (
     DATA_EXPLORATION,
@@ -44,7 +45,7 @@ def _trajectory_input(trajectory: PatientTrajectory) -> dict:
         "patient_id": trajectory.patient_id,
         "environment": trajectory.environment,
         "text": trajectory.text,
-        "sources": [{"source_id": source.source_id} for source in trajectory.sources],
+        "sources": [source.model_dump(mode="json") for source in trajectory.sources],
     }
 
 
@@ -117,12 +118,12 @@ async def generate_tasks(
     if len(directions) != 2:
         raise ValueError("directions must contain exactly two generation positions")
     result = await call_llm(
-        instructions=GENERATION,
+        instructions=GENERATION + "\n" + output_constraints(directions),
         input_text=json.dumps(
             {
                 "trajectory": _trajectory_input(trajectory),
                 "guidance": guidance.model_dump(mode="json"),
-                "strategy": strategy.model_dump(mode="json"),
+                "strategy": {"generation_guidance": strategy.generation_guidance},
                 "directions": [direction.model_dump(mode="json") for direction in directions],
             },
             ensure_ascii=False,
@@ -130,28 +131,7 @@ async def generate_tasks(
         output_type=TaskBatch,
         model=runtime.models["generator"],
     )
-    if result.status == "completed" and result.output is not None:
-        questions = TaskBatch.model_validate(result.output).questions
-        allowed_types = {direction.task_type for direction in directions}
-        if len(questions) > 2:
-            return result.model_copy(
-                update={
-                    "output": None,
-                    "status": "failed",
-                    "error": "TaskBatch exceeds the two generation positions",
-                    "trace": [*result.trace, {"rejected_output": result.output}],
-                }
-            )
-        if any(question.task_type not in allowed_types for question in questions):
-            return result.model_copy(
-                update={
-                    "output": None,
-                    "status": "failed",
-                    "error": "TaskBatch contains a task type outside the requested directions",
-                    "trace": [*result.trace, {"rejected_output": result.output}],
-                }
-            )
-    return result
+    return validate_task_batch(result, directions)
 
 
 async def analyze_feedback(
