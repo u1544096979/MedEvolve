@@ -14,7 +14,8 @@ from runtime import execution
 
 
 @pytest.mark.asyncio
-async def test_actual_modules_two_rounds(tmp_path, monkeypatch):
+@pytest.mark.parametrize("instructions_role", ["system", "user"])
+async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_role):
     config = json.loads((Path(__file__).parents[2] / 'configs/experiment.json').read_text())
     config.update(run_id='pipeline', output_dir=str(tmp_path / 'pipeline'),
                   evolution_patients=['e1', 'e2'], evaluation_patients=['h1'],
@@ -23,7 +24,8 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch):
                              'seed_data': 'local-test-image'}
     for runtime in (config['runtime'], config['evaluation']['runtime']):
         for role, model in runtime['models'].items():
-            model.update(model=role, base_url='http://model.test/v1', api_key_env='PIPELINE_TEST_KEY')
+            model.update(model=role, base_url='http://model.test/v1', api_key_env='PIPELINE_TEST_KEY',
+                         instructions_role=instructions_role)
     monkeypatch.setenv('PIPELINE_TEST_KEY', 'local-test-key')
     model_calls, queries = Counter(), Counter()
     active, created = set(), []
@@ -41,7 +43,7 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch):
         role = body['model']
         model_calls[role] += 1
         messages = body['messages']
-        user = next(m['content'] for m in messages if m['role'] == 'user')
+        user = next(m['content'] for m in reversed(messages) if m['role'] == 'user')
         tools = [m for m in messages if m['role'] == 'tool']
         call = None
         if role == 'data_explorer':

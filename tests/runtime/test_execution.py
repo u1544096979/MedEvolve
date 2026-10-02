@@ -45,11 +45,12 @@ FINAL_MESSAGE = {"role": "assistant", "content": '{"answer":"patient found"}'}
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("instructions_role", ["system", "user"])
 @pytest.mark.parametrize("output_type,output", [
     (SolverAnswer, {"answer": "patient found"}),
     (QualityReview, {"dimensions": {"correctness": {"judgment": "supported", "reason": "patient found"}}}),
 ])
-async def test_sdk_tool_loop(monkeypatch, output_type, output):
+async def test_sdk_tool_loop(monkeypatch, output_type, output, instructions_role):
     requests = install_transport(monkeypatch, [TOOL_MESSAGE,
         {"role": "assistant", "content": json.dumps(output)}])
     calls = []
@@ -61,7 +62,8 @@ async def test_sdk_tool_loop(monkeypatch, output_type, output):
         return "patient found"
 
     result = await run_agent(instructions="Read and answer", input_text="patient",
-        tools=[lookup], output_type=output_type, model=MODEL,
+        tools=[lookup], output_type=output_type,
+        model=MODEL.model_copy(update={"instructions_role": instructions_role}),
         budget=Budget(max_model_turns=2, max_tool_calls=1))
     assert result.status == "completed", result.error
     assert result.output == output
@@ -72,6 +74,23 @@ async def test_sdk_tool_loop(monkeypatch, output_type, output):
     assert result.usage["model_turns"] == 2
     assert result.usage["tool_calls"] == 1
     assert any(item["type"] == "tool_output" for item in result.trace)
+    for request in requests:
+        assert request["messages"][0]["role"] == instructions_role
+        assert request["messages"][0]["content"].startswith("Read and answer")
+        if instructions_role == "user":
+            assert not any(m["role"] in ("system", "developer") for m in request["messages"])
+            assert "Return only a JSON object" in request["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_user_instructions_single_call(monkeypatch):
+    requests = install_transport(monkeypatch, [FINAL_MESSAGE])
+    result = await call_llm(instructions="Read and answer", input_text="patient",
+        output_type=SolverAnswer,
+        model=MODEL.model_copy(update={"instructions_role": "user"}))
+    assert result.status == "completed", result.error
+    assert [m["role"] for m in requests[0]["messages"]] == ["user", "user"]
+    assert requests[0]["messages"][0]["content"].startswith("Read and answer")
 
 
 @pytest.mark.asyncio

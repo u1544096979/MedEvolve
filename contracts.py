@@ -81,6 +81,7 @@ class ModelConfig(BaseModel):
     model: str
     base_url: str | None = None
     api_key_env: str
+    instructions_role: Literal["system", "user"] = "system"
 
 
 class Budget(BaseModel):
