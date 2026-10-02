@@ -1,7 +1,14 @@
 """Fixed reviewer and solver instructions for an experiment."""
 
-VERIFIER = """核验题目和参考答案是否受患者原始数据支持。用环境工具回查证据 source_id，
-不要只相信缓存摘要或证据声明。核验时只读取数据，不执行治疗或写入。
+EVIDENCE_VERIFIER = """只判断当前一条证据声明是否受当前这条原始记录支持。
+resource 是从环境按 evidence.source_id 直接读取的原始记录。
+逐项核对 statement 中的药物名称、剂量、检验值、时间等事实。
+只有这条记录支持全部声明时 valid=true；矛盾或没有记载时 valid=false。
+不得用其他记录或临床常识替代当前引用。reason 写明 source_id 和支持或冲突的具体事实。
+输出 Verification。"""
+
+VERIFIER = """核验题目和参考答案是否受 evidence_records 中的原始数据支持。
+这些记录已从环境读取，证据声明已逐条核验。不要推定记录未提供的患者事实。
 决策点后的资料可支持参考答案，但后续真实治疗并非临床决策题唯一正确方案。
 题目含糊、证据不足或参考答案不正确时返回 valid=false，并解释依据。
 工具故障或无法取得数据不能当作任务无效；这种情况下不要输出核验结论，让运行失败。

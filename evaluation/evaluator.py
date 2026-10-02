@@ -106,13 +106,30 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
         instance = await env.create_environment(environment)
         try:
             # Verification may inspect the full timeline, including future evidence.
-            tools = await env.get_tools(instance, [task.patient_id])
-            phase = "model_error"
-            run = await model_run(
-                runtime.run_agent, role="verifier", schema=Verification,
-                instructions=prompts.VERIFIER, payload=material, tools=tools,
-            )
-            result.verification = _output(run, Verification)
+            evidence_records = []
+            for evidence in task.evidence:
+                phase = "environment_error"
+                resource = await env.read_evidence(
+                    instance, task.patient_id, evidence.source_id
+                )
+                evidence_records.append({"source_id": evidence.source_id, "resource": resource})
+                phase = "model_error"
+                run = await model_run(
+                    runtime.call_llm, role="verifier", schema=Verification,
+                    instructions=prompts.EVIDENCE_VERIFIER,
+                    payload={"evidence": evidence.model_dump(), "resource": resource},
+                )
+                checked = _output(run, Verification)
+                if not checked.valid:
+                    result.verification = checked
+                    break
+            else:
+                run = await model_run(
+                    runtime.call_llm, role="verifier", schema=Verification,
+                    instructions=prompts.VERIFIER,
+                    payload={"task": material["task"], "evidence_records": evidence_records},
+                )
+                result.verification = _output(run, Verification)
         finally:
             phase_before_release = phase
             phase = "environment_error"

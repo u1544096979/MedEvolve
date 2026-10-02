@@ -62,6 +62,11 @@ def harness(monkeypatch):
             raise RuntimeError("state unavailable")
         return h.state
 
+    async def read_evidence(instance, patient_id, source_id):
+        if h.fail == "evidence":
+            raise RuntimeError("evidence unavailable")
+        return {"resourceType": "Observation", "id": source_id, "valueString": "original"}
+
     async def run(**kwargs):
         h.model_calls.append(kwargs)
         role = kwargs["model"].model
@@ -99,6 +104,7 @@ def harness(monkeypatch):
     monkeypatch.setitem(sys.modules, "environments", SimpleNamespace(
         create_environment=create_environment, get_tools=get_tools,
         read_state=read_state, release_environment=release_environment,
+        read_evidence=read_evidence,
     ))
     monkeypatch.setitem(sys.modules, "runtime", SimpleNamespace(run_agent=run, call_llm=run))
     return h
@@ -118,10 +124,9 @@ def test_solver_receives_only_patient_question_and_decision_point(harness):
     }
     for call in h.model_calls:
         assert "private-method" not in call["input_text"]
-    assert h.tool_calls[0][2] is None
-    assert h.tool_calls[1][1:] == ([h.task.patient_id], h.task.decision_point)
+    assert h.tool_calls[0][1:] == ([h.task.patient_id], h.task.decision_point)
     assert h.created[0] != h.created[1]
-    assert len(result.runs) == 4
+    assert len(result.runs) == 5
 
 
 @pytest.mark.parametrize("state, completed", [
@@ -148,15 +153,15 @@ def test_write_completion_uses_observed_state(harness, state, completed):
 
 
 @pytest.mark.parametrize("failure, category, instances, runs", [
-    ("tools", "environment_error", 1, 0),
+    ("evidence", "environment_error", 1, 0),
     ("verifier", "model_error", 1, 1),
     ("verifier_budget", "model_error", 1, 1),
-    ("quality", "model_error", 1, 2),
-    ("solver", "model_error", 2, 3),
-    ("solver_tool_error", "tool_error", 2, 3),
-    ("solver_budget", "model_error", 2, 3),
-    ("state", "environment_error", 2, 3),
-    ("completion", "model_error", 2, 4),
+    ("quality", "model_error", 1, 3),
+    ("solver", "model_error", 2, 4),
+    ("solver_tool_error", "tool_error", 2, 4),
+    ("solver_budget", "model_error", 2, 4),
+    ("state", "environment_error", 2, 4),
+    ("completion", "model_error", 2, 5),
 ])
 def test_faults_release_instances_without_clinical_conclusions(
     harness, failure, category, instances, runs
@@ -187,6 +192,10 @@ def test_invalid_task_stops_before_solver_and_releases_instance(harness):
     assert len(h.created) == 1
     assert h.released == h.created
     assert [c["output_type"] for c in h.model_calls] == [Verification]
+    payload = json.loads(h.model_calls[0]["input_text"])
+    assert set(payload) == {"evidence", "resource"}
+    assert payload["evidence"] == h.task.evidence[0].model_dump()
+    assert "private-reference" not in h.model_calls[0]["input_text"]
 
 
 @pytest.mark.parametrize("evidence, expected_reason", [

@@ -57,8 +57,6 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_rol
                 call = ('fhir_patient_search_demographics', {})
             output = {'guidance': '可查询患者信息'}
         elif role == 'verifier':
-            if not tools:
-                call = ('fhir_patient_search_demographics', {})
             output = {'valid': True, 'reason': '原始数据支持'}
         elif role == 'solver':
             payload = json.loads(user)
@@ -124,6 +122,9 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_rol
             ids = request.url.params['_id'].split(',')
             queries['tool_queries'] += 1
             return httpx.Response(200, json=bundle([patient(pid) for pid in ids]))
+        if path.startswith('/fhir/Patient/'):
+            queries['evidence_reads'] += 1
+            return httpx.Response(200, json=patient(path.rsplit('/', 1)[1]))
         raise AssertionError(f'Unexpected HTTP request: {request.method} {request.url}')
 
     transport = httpx.MockTransport(handle)
