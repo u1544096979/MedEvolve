@@ -51,6 +51,25 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
                 or task.environment != trajectory.environment
                 or task.environment != environment.name):
             raise ValueError("task, trajectory and environment must match")
+        source_ids = {source.source_id for source in trajectory.sources}
+        if not task.evidence:
+            result.verification = Verification(
+                valid=False, reason="Task has no evidence references"
+            )
+            result.status = "invalid"
+            result.failure_category = "insufficient_evidence"
+            return result
+        missing_sources = sorted(
+            {evidence.source_id for evidence in task.evidence} - source_ids
+        )
+        if missing_sources:
+            result.verification = Verification(
+                valid=False,
+                reason=f"Evidence sources are absent from trajectory: {', '.join(missing_sources)}",
+            )
+            result.status = "invalid"
+            result.failure_category = "insufficient_evidence"
+            return result
         env = import_module("environments")
         phase = "model_error"
         runtime = import_module("runtime")
@@ -140,7 +159,9 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
         phase = "model_error"
         answer = _output(result.solver_run, SolverAnswer)
         material.update(
-            solver_answer=answer.model_dump(), observed_state=result.observed_state
+            solver_answer=answer.model_dump(),
+            solver_trace=result.solver_run.trace,
+            observed_state=result.observed_state,
         )
         run = await model_run(
             runtime.call_llm, role="completion", schema=CompletionReview,
@@ -153,7 +174,17 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
         return result
     except Exception as exc:
         result.status = "failed"
-        result.failure_category = phase
+        failed_run = result.runs[-1] if result.runs else None
+        run_error = next(
+            (item for item in reversed(failed_run.trace)
+             if item.get("type") == "run_error"),
+            None,
+        ) if failed_run is not None else None
+        result.failure_category = (
+            run_error.get("failure_category")
+            if run_error and run_error.get("failure_category") == "tool_error"
+            else phase
+        )
         # Preserve environment/configuration errors alongside model run records.
         result.observed_state = {
             **result.observed_state, "evaluation_error": str(exc)

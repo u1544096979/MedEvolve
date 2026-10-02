@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts import (
-    Budget, CompletionReview, EnvironmentConfig, EnvironmentInstance,
+    Budget, CompletionReview, EnvironmentConfig, EnvironmentInstance, Evidence,
     EvaluationConfig, ModelConfig, PatientTrajectory, QualityReview, RunResult,
     RuntimeConfig, SolverAnswer, Task, Verification,
 )
@@ -20,12 +20,13 @@ def harness(monkeypatch):
     task = Task(
         id="task-1", patient_id="patient-1", environment="fixture", round_index=0,
         source_method="private-method", instruction="为患者开具指定处方",
-        task_type="药物处方", reference_answer="private-reference", evidence=[],
+        task_type="药物处方", reference_answer="private-reference",
+        evidence=[{"source_id": "source-1", "statement": "支持该任务的证据"}],
         decision_point="2026-01-01T00:00:00+08:00",
     )
     trajectory = PatientTrajectory(
         patient_id=task.patient_id, environment=task.environment,
-        text="private-trajectory", sources=[],
+        text="private-trajectory", sources=[{"source_id": "source-1", "statement": "轨迹证据"}],
     )
     roles = ["verifier", "quality", "solver", "completion"]
     config = EvaluationConfig(runtime=RuntimeConfig(
@@ -68,6 +69,11 @@ def harness(monkeypatch):
             raise RuntimeError("model unavailable")
         if h.fail == role + "_budget":
             return RunResult(trace=[{"role": role}], usage={}, status="budget_exhausted")
+        if h.fail == role + "_tool_error":
+            return RunResult(
+                trace=[{"type": "run_error", "failure_category": "tool_error"}],
+                usage={}, status="failed", error="opaque runtime error",
+            )
         if role == "verifier":
             output = {"valid": h.valid, "reason": "checked original records"}
         elif role == "quality":
@@ -125,6 +131,7 @@ def test_write_completion_uses_observed_state(harness, state, completed):
     assert result.failure_category == (None if completed else "clinical")
     call = next(c for c in h.model_calls if c["output_type"] is CompletionReview)
     assert json.loads(call["input_text"])["observed_state"] == state
+    assert json.loads(call["input_text"])["solver_trace"] == [{"role": "solver"}]
     assert h.state_reads == [h.created[1]]
     assert h.released == h.created
 
@@ -135,6 +142,7 @@ def test_write_completion_uses_observed_state(harness, state, completed):
     ("verifier_budget", "model_error", 1, 1),
     ("quality", "model_error", 1, 2),
     ("solver", "model_error", 2, 3),
+    ("solver_tool_error", "tool_error", 2, 3),
     ("solver_budget", "model_error", 2, 3),
     ("state", "environment_error", 2, 3),
     ("completion", "model_error", 2, 4),
@@ -168,6 +176,21 @@ def test_invalid_task_stops_before_solver_and_releases_instance(harness):
     assert len(h.created) == 1
     assert h.released == h.created
     assert [c["output_type"] for c in h.model_calls] == [Verification]
+
+
+@pytest.mark.parametrize("evidence, expected_reason", [
+    ([], "no evidence"),
+    ([Evidence(source_id="missing", statement="unsupported")], "absent from trajectory"),
+])
+def test_unverifiable_evidence_stops_before_models(harness, evidence, expected_reason):
+    h = harness
+    h.task = h.task.model_copy(update={"evidence": evidence})
+    result = evaluate(h)
+    assert result.status == "invalid"
+    assert result.failure_category == "insufficient_evidence"
+    assert expected_reason in result.verification.reason
+    assert h.model_calls == []
+    assert h.created == []
 
 
 def test_cancellation_releases_solver_instance(harness, monkeypatch):
