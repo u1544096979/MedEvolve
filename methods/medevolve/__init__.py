@@ -111,12 +111,23 @@ async def generate_tasks(
         model=runtime.models["generator"],
     )
     if result.status == "completed" and result.output is not None:
-        if len(TaskBatch.model_validate(result.output).questions) > 2:
+        questions = TaskBatch.model_validate(result.output).questions
+        allowed_types = {direction.task_type for direction in directions}
+        if len(questions) > 2:
             return result.model_copy(
                 update={
                     "output": None,
                     "status": "failed",
                     "error": "TaskBatch exceeds the two generation positions",
+                    "trace": [*result.trace, {"rejected_output": result.output}],
+                }
+            )
+        if any(question.task_type not in allowed_types for question in questions):
+            return result.model_copy(
+                update={
+                    "output": None,
+                    "status": "failed",
+                    "error": "TaskBatch contains a task type outside the requested directions",
                     "trace": [*result.trace, {"rejected_output": result.output}],
                 }
             )
@@ -157,5 +168,5 @@ async def update_strategy(
             ensure_ascii=False,
         ),
         output_type=Strategy,
-        model=runtime.models["strategy"],
+        model=runtime.models["updater"],
     )

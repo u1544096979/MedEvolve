@@ -55,7 +55,7 @@ def method(monkeypatch):
 
 @pytest.fixture
 def runtime():
-    roles = ("data_explorer", "environment_explorer", "generator", "feedback", "strategy")
+    roles = ("data_explorer", "environment_explorer", "generator", "feedback", "updater")
     return RuntimeConfig(
         models={role: ModelConfig(model=role, api_key_env="TEST_UNUSED_KEY") for role in roles},
         budgets={role: Budget(max_model_turns=5, max_tool_calls=8) for role in roles[:2]},
@@ -204,3 +204,34 @@ async def test_generation_feedback_update_and_next_generation(method, runtime, m
     with pytest.raises(ValueError, match="exactly two"):
         await method.generate_tasks(patient, guidance, strategy, [direction], runtime)
     assert call.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_generation_accepts_only_requested_task_types_and_allows_short_batch(
+    method, runtime, monkeypatch
+):
+    patient = trajectory("evolution-1")
+    guidance = ExplorationGuidance(data_guidance="数据", environment_guidance="环境")
+    allowed = GenerationDirection(task_type="诊断与解释", difficulty="基础", weight=1)
+    skipped = GenerationDirection(task_type="治疗规划", difficulty="基础", weight=1)
+    strategy = Strategy(generation_guidance="指导", allocation=[allowed])
+    good = GeneratedQuestion(
+        instruction="诊断", task_type=allowed.task_type, reference_answer="答案",
+        evidence=patient.sources,
+    )
+    call = AsyncMock(return_value=completed(TaskBatch(questions=[good])))
+    monkeypatch.setattr(method, "call_llm", call)
+
+    result = await method.generate_tasks(
+        patient, guidance, strategy, [allowed, skipped], runtime
+    )
+    assert result.status == "completed"
+    assert len(TaskBatch.model_validate(result.output).questions) == 1
+
+    unsupported = good.model_copy(update={"task_type": "药物处方"})
+    call.return_value = completed(TaskBatch(questions=[unsupported]))
+    result = await method.generate_tasks(
+        patient, guidance, strategy, [allowed, skipped], runtime
+    )
+    assert result.status == "failed"
+    assert "outside the requested directions" in result.error
