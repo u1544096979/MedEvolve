@@ -24,7 +24,12 @@ def _review_material(task: Task, trajectory: PatientTrajectory) -> dict:
             "instruction", "task_type", "reference_answer", "evidence",
             "decision_point", "patient_id", "environment",
         }),
-        "trajectory": trajectory.model_dump(),
+        "trajectory": {
+            "patient_id": trajectory.patient_id,
+            "environment": trajectory.environment,
+            "text": trajectory.text,
+            "sources": [{"source_id": source.source_id} for source in trajectory.sources],
+        },
     }
 
 

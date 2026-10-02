@@ -96,7 +96,10 @@ async def test_data_exploration_reads_only_supplied_cache(method, runtime, monke
         assert patients == [item.patient_id for item in supplied]
         for item in supplied:
             raw = await invoke("read_trajectory", json.dumps({"patient_id": item.patient_id}))
-            assert json.loads(raw) == item.model_dump(mode="json")
+            payload = json.loads(raw)
+            assert payload["patient_id"] == item.patient_id
+            assert payload["text"] == item.text
+            assert payload["sources"] == [{"source_id": source.source_id} for source in item.sources]
         with pytest.raises(ValueError, match="outside"):
             await invoke("read_trajectory", json.dumps({"patient_id": held_out.patient_id}))
         return completed(DataExploration(guidance="关注时间变化与证据来源"))

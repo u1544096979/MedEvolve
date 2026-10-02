@@ -39,6 +39,26 @@ __all__ = [
 ]
 
 
+def _trajectory_input(trajectory: PatientTrajectory) -> dict:
+    return {
+        "patient_id": trajectory.patient_id,
+        "environment": trajectory.environment,
+        "text": trajectory.text,
+        "sources": [{"source_id": source.source_id} for source in trajectory.sources],
+    }
+
+
+def _evaluation_input(evaluation: EvaluationResult) -> dict:
+    payload = evaluation.model_dump(mode="json", exclude={"runs", "solver_run"})
+    if evaluation.solver_run is not None:
+        payload["solver_run"] = evaluation.solver_run.model_dump(mode="json", exclude={"trace"})
+        payload["solver_run"]["trace"] = [
+            item for item in evaluation.solver_run.trace
+            if item.get("type") not in {"model_request", "model_response"}
+        ]
+    return payload
+
+
 async def explore_data(
     trajectories: list[PatientTrajectory], runtime: RuntimeConfig
 ) -> RunResult:
@@ -54,7 +74,7 @@ async def explore_data(
         """读取本次开放患者的完整缓存轨迹与原始证据引用。"""
         if patient_id not in cache:
             raise ValueError("patient_id is outside the supplied trajectory cache")
-        return cache[patient_id].model_dump_json()
+        return json.dumps(_trajectory_input(cache[patient_id]), ensure_ascii=False)
 
     return await run_agent(
         instructions=DATA_EXPLORATION,
@@ -100,7 +120,7 @@ async def generate_tasks(
         instructions=GENERATION,
         input_text=json.dumps(
             {
-                "trajectory": trajectory.model_dump(mode="json"),
+                "trajectory": _trajectory_input(trajectory),
                 "guidance": guidance.model_dump(mode="json"),
                 "strategy": strategy.model_dump(mode="json"),
                 "directions": [direction.model_dump(mode="json") for direction in directions],
@@ -145,8 +165,8 @@ async def analyze_feedback(
         input_text=json.dumps(
             {
                 "tasks": [task.model_dump(mode="json") for task in tasks],
-                "trajectories": [trajectory.model_dump(mode="json") for trajectory in trajectories],
-                "evaluations": [evaluation.model_dump(mode="json") for evaluation in evaluations],
+                "trajectories": [_trajectory_input(trajectory) for trajectory in trajectories],
+                "evaluations": [_evaluation_input(evaluation) for evaluation in evaluations],
             },
             ensure_ascii=False,
         ),
