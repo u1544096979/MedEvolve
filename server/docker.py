@@ -117,6 +117,10 @@ class DockerManager:
             )
         instance_id = str(uuid.uuid4())
         name = self._name(instance_id)
+        # H2 2.3.232 compaction can invalidate index pages during startup.
+        java_options = "-Dh2.autoCompactFillRate=0"
+        if os.environ.get("MEDEVOLVE_CONTAINER_MEMORY"):
+            java_options += " -XX:MaxRAMPercentage=60.0"
         try:
             await docker_command(
                 "run",
@@ -130,8 +134,9 @@ class DockerManager:
                 "medevolve.environment=PhysicianBench",
                 "--publish",
                 f"{self.bind_host}::8080",
-                *(["--memory", os.environ["MEDEVOLVE_CONTAINER_MEMORY"],
-                   "--env", "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0"]
+                "--env",
+                f"JAVA_TOOL_OPTIONS={java_options}",
+                *(["--memory", os.environ["MEDEVOLVE_CONTAINER_MEMORY"]]
                   if os.environ.get("MEDEVOLVE_CONTAINER_MEMORY") else []),
                 image_id,
             )
