@@ -1,0 +1,132 @@
+"""Shared generation constraints, cumulative budgets and run accounting."""
+
+import importlib
+import json
+from collections import Counter
+from typing import Literal
+
+from pydantic import BaseModel
+
+from contracts import Budget, GenerationDirection, RunResult, RuntimeConfig, TaskBatch
+
+RunStatus = Literal["completed", "budget_exhausted", "failed"]
+
+USAGE_FIELDS = ("model_turns", "tool_calls", "input_tokens", "output_tokens", "total_tokens")
+
+
+def normalize_usage(usage: dict) -> dict:
+    result = {"model_turns": usage.get("model_turns", 0),
+              "tool_calls": usage.get("tool_calls", 0),
+              "input_tokens": usage.get("input_tokens", usage.get("prompt_tokens")),
+              "output_tokens": usage.get("output_tokens", usage.get("completion_tokens")),
+              "total_tokens": usage.get("total_tokens")}
+    if result["total_tokens"] is None and all(result[k] is not None for k in ("input_tokens", "output_tokens")):
+        result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
+    if "runs_without_known_tokens" in usage:
+        result["runs_without_known_tokens"] = usage["runs_without_known_tokens"]
+    return result
+
+
+def output_constraints(directions: list[GenerationDirection]) -> str:
+    if len(directions) != 2:
+        raise ValueError("directions must contain exactly two generation positions")
+    return (
+        "返回 TaskBatch JSON，questions 最多两题；证据不足可少出题或返回空列表。"
+        "每题包含 instruction、task_type、reference_answer、evidence、decision_point。"
+        "instruction 和 reference_answer 非空；evidence 逐条包含可定位的 source_id 和事实 statement。"
+        "decision_point 必须为 null。不要附加患者、环境、轮次、方法或任务编号。"
+        "题型数量不能超过指定方向中该题型的数量；题型与难度方向："
+        + json.dumps([d.model_dump(mode="json") for d in directions], ensure_ascii=False)
+    )
+
+
+def validate_task_batch(result: RunResult, directions: list[GenerationDirection]) -> RunResult:
+    output_constraints(directions)
+    result = result.model_copy(update={"usage": normalize_usage(result.usage)})
+    if result.status != "completed":
+        return result.model_copy(update={"output": None})
+    try:
+        batch = TaskBatch.model_validate(result.output)
+        if len(batch.questions) > 2:
+            raise ValueError("TaskBatch exceeds the two generation positions")
+        allowed = Counter(d.task_type for d in directions)
+        actual = Counter(q.task_type for q in batch.questions)
+        if actual - allowed:
+            raise ValueError("TaskBatch task types exceed requested directions")
+        for question in batch.questions:
+            if question.decision_point is not None:
+                raise ValueError("decision_point must be null until time filtering is supported")
+            if not question.instruction.strip() or not question.reference_answer.strip():
+                raise ValueError("instruction and reference_answer must not be empty")
+            if any(not e.source_id.strip() or not e.statement.strip() for e in question.evidence):
+                raise ValueError("evidence source_id and statement must not be empty")
+        return result.model_copy(update={"output": batch.model_dump(mode="json")})
+    except Exception as exc:
+        return result.model_copy(update={"output": None, "status": "failed", "error": str(exc),
+                                         "trace": [*result.trace, {"type": "output_rejected",
+                                                                   "output": result.output, "error": str(exc)}]})
+
+
+def summarize_results(records: list[tuple[str, RunResult]], *, output: TaskBatch | None = None,
+                      status: RunStatus | None = None, error: str | None = None) -> RunResult:
+    usages = [normalize_usage(run.usage) for _, run in records]
+    usage = {field: (sum(u[field] for u in usages if u[field] is not None)
+                     if any(u[field] is not None for u in usages) else None)
+             for field in USAGE_FIELDS}
+    usage["model_turns"] = usage["model_turns"] or 0
+    usage["tool_calls"] = usage["tool_calls"] or 0
+    usage["runs_without_known_tokens"] = sum(u.get("runs_without_known_tokens", int(u["total_tokens"] is None)) for u in usages)
+    final = records[-1][1] if records else None
+    final_status = status or (final.status if final else "completed")
+    return RunResult(output=(output.model_dump(mode="json") if output is not None else
+                             final.output if final else None) if final_status == "completed" else None,
+                     trace=[{"stage": stage, "result": run.model_dump(mode="json")}
+                            for stage, run in records], usage=usage, status=final_status,
+                     error=error or (final.error if final else None))
+
+
+class GenerationBudget:
+    """One instance per patient batch; execute sequential stages through this object."""
+
+    def __init__(self, runtime: RuntimeConfig):
+        self.model = runtime.models["generator"]
+        self.limit = runtime.budgets["generator"]
+        self.records: list[tuple[str, RunResult]] = []
+
+    def remaining(self) -> Budget:
+        used = summarize_results(self.records).usage
+        return Budget(max_model_turns=max(0, self.limit.max_model_turns - used["model_turns"]),
+                      max_tool_calls=max(0, self.limit.max_tool_calls - used["tool_calls"]))
+
+    async def _execute(self, stage, function, kwargs, *, agent):
+        remaining = self.remaining()
+        if remaining.max_model_turns == 0:
+            result = RunResult(trace=[], usage={}, status="budget_exhausted",
+                               error="Cumulative generator model budget exhausted")
+        else:
+            try:
+                if agent:
+                    kwargs["budget"] = remaining
+                result = await function(model=self.model, **kwargs)
+            except Exception as exc:
+                result = RunResult(trace=[], usage={"model_turns": 1, "tool_calls": 0},
+                                   status="failed", error=f"{type(exc).__name__}: {exc}")
+        result = result.model_copy(update={"usage": normalize_usage(result.usage)})
+        self.records.append((stage, result))
+        return result
+
+    async def call_llm(self, stage: str, *, instructions: str, input_text: str, output_type: type[BaseModel]) -> RunResult:
+        return await self._execute(stage, importlib.import_module("runtime").call_llm,
+                                   dict(instructions=instructions, input_text=input_text, output_type=output_type),
+                                   agent=False)
+
+    async def run_agent(self, stage: str, *, instructions: str, input_text: str,
+                        tools: list, output_type: type[BaseModel]) -> RunResult:
+        return await self._execute(stage, importlib.import_module("runtime").run_agent,
+                                   dict(instructions=instructions, input_text=input_text,
+                                        tools=tools, output_type=output_type), agent=True)
+
+    def finish(self, directions: list[GenerationDirection], *, output: TaskBatch | None = None,
+               status: RunStatus | None = None, error: str | None = None) -> RunResult:
+        return validate_task_batch(summarize_results(self.records, output=output,
+                                                     status=status, error=error), directions)

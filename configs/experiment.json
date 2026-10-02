@@ -52,6 +52,10 @@
       "environment_explorer": {
         "max_model_turns": 30,
         "max_tool_calls": 200
+      },
+      "generator": {
+        "max_model_turns": 8,
+        "max_tool_calls": 40
       }
     }
   },
