@@ -1,0 +1,153 @@
+{
+  "run_id": "<RUN_ID>",
+  "method": "medevolve",
+  "environment": {
+    "name": "<ENVIRONMENT_NAME>",
+    "manager_url": "<MANAGER_URL>",
+    "seed_data": "<SEED_DATA>"
+  },
+  "runtime": {
+    "models": {
+      "explore_data": {
+        "model": "<MODEL_NAME>",
+        "base_url": "<MODEL_BASE_URL>",
+        "api_key_env": "<API_KEY_ENV>"
+      },
+      "explore_environment": {
+        "model": "<MODEL_NAME>",
+        "base_url": "<MODEL_BASE_URL>",
+        "api_key_env": "<API_KEY_ENV>"
+      },
+      "generate_tasks": {
+        "model": "<MODEL_NAME>",
+        "base_url": "<MODEL_BASE_URL>",
+        "api_key_env": "<API_KEY_ENV>"
+      },
+      "analyze_feedback": {
+        "model": "<MODEL_NAME>",
+        "base_url": "<MODEL_BASE_URL>",
+        "api_key_env": "<API_KEY_ENV>"
+      },
+      "update_strategy": {
+        "model": "<MODEL_NAME>",
+        "base_url": "<MODEL_BASE_URL>",
+        "api_key_env": "<API_KEY_ENV>"
+      }
+    },
+    "budgets": {
+      "explore_data": {
+        "max_model_turns": 10,
+        "max_tool_calls": 20
+      },
+      "explore_environment": {
+        "max_model_turns": 10,
+        "max_tool_calls": 20
+      },
+      "generate_tasks": {
+        "max_model_turns": 10,
+        "max_tool_calls": 20
+      },
+      "analyze_feedback": {
+        "max_model_turns": 10,
+        "max_tool_calls": 20
+      },
+      "update_strategy": {
+        "max_model_turns": 10,
+        "max_tool_calls": 20
+      }
+    }
+  },
+  "evaluation": {
+    "runtime": {
+      "models": {
+        "verifier": {
+          "model": "<MODEL_NAME>",
+          "base_url": "<MODEL_BASE_URL>",
+          "api_key_env": "<API_KEY_ENV>"
+        },
+        "quality": {
+          "model": "<MODEL_NAME>",
+          "base_url": "<MODEL_BASE_URL>",
+          "api_key_env": "<API_KEY_ENV>"
+        },
+        "solver": {
+          "model": "<MODEL_NAME>",
+          "base_url": "<MODEL_BASE_URL>",
+          "api_key_env": "<API_KEY_ENV>"
+        },
+        "completion": {
+          "model": "<MODEL_NAME>",
+          "base_url": "<MODEL_BASE_URL>",
+          "api_key_env": "<API_KEY_ENV>"
+        }
+      },
+      "budgets": {
+        "verifier": {
+          "max_model_turns": 10,
+          "max_tool_calls": 20
+        },
+        "quality": {
+          "max_model_turns": 10,
+          "max_tool_calls": 20
+        },
+        "solver": {
+          "max_model_turns": 10,
+          "max_tool_calls": 20
+        },
+        "completion": {
+          "max_model_turns": 10,
+          "max_tool_calls": 20
+        }
+      }
+    }
+  },
+  "evolution_patients": [
+    "<EVOLUTION_PATIENT_1>",
+    "<EVOLUTION_PATIENT_2>"
+  ],
+  "evaluation_patients": [
+    "<EVALUATION_PATIENT_1>"
+  ],
+  "round_patients": [
+    [
+      "<EVOLUTION_PATIENT_1>",
+      "<EVOLUTION_PATIENT_2>"
+    ],
+    [
+      "<EVOLUTION_PATIENT_1>",
+      "<EVOLUTION_PATIENT_2>"
+    ]
+  ],
+  "initial_strategy": {
+    "generation_guidance": "<INITIAL_GENERATION_GUIDANCE>",
+    "allocation": [
+      {
+        "task_type": "诊断与解释",
+        "difficulty": "<DIFFICULTY_DIRECTION>",
+        "weight": 1
+      },
+      {
+        "task_type": "检查与风险分层",
+        "difficulty": "<DIFFICULTY_DIRECTION>",
+        "weight": 1
+      },
+      {
+        "task_type": "治疗规划",
+        "difficulty": "<DIFFICULTY_DIRECTION>",
+        "weight": 1
+      },
+      {
+        "task_type": "药物处方",
+        "difficulty": "<DIFFICULTY_DIRECTION>",
+        "weight": 1
+      },
+      {
+        "task_type": "治疗重规划",
+        "difficulty": "<DIFFICULTY_DIRECTION>",
+        "weight": 1
+      }
+    ]
+  },
+  "random_seed": 42,
+  "output_dir": "outputs/<RUN_ID>"
+}
