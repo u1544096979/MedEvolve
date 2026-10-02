@@ -9,31 +9,31 @@
   "runtime": {
     "models": {
       "data_explorer": {
-        "model": "deepseek-v4.1-flash",
+        "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
         "instructions_role": "user"
       },
       "environment_explorer": {
-        "model": "deepseek-v4.1-flash",
+        "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
         "instructions_role": "user"
       },
       "generator": {
-        "model": "deepseek-v4.1-flash",
+        "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
         "instructions_role": "user"
       },
       "feedback": {
-        "model": "deepseek-v4.1-flash",
+        "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
         "instructions_role": "user"
       },
       "updater": {
-        "model": "deepseek-v4.1-flash",
+        "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
         "instructions_role": "user"
@@ -54,25 +54,25 @@
     "runtime": {
       "models": {
         "verifier": {
-          "model": "deepseek-v4.1-flash",
+          "model": "gpt-4o-mini",
           "base_url": "https://api.openlux.ai/v1",
           "api_key_env": "OPENLUX_API_KEY",
           "instructions_role": "user"
         },
         "quality": {
-          "model": "deepseek-v4.1-flash",
+          "model": "gpt-4o-mini",
           "base_url": "https://api.openlux.ai/v1",
           "api_key_env": "OPENLUX_API_KEY",
           "instructions_role": "user"
         },
         "solver": {
-          "model": "deepseek-v4.1-flash",
+          "model": "gpt-4o-mini",
           "base_url": "https://api.openlux.ai/v1",
           "api_key_env": "OPENLUX_API_KEY",
           "instructions_role": "user"
         },
         "completion": {
-          "model": "deepseek-v4.1-flash",
+          "model": "gpt-4o-mini",
           "base_url": "https://api.openlux.ai/v1",
           "api_key_env": "OPENLUX_API_KEY",
           "instructions_role": "user"
