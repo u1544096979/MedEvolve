@@ -116,7 +116,25 @@ async def test_failure_preserves_tool_trace_and_usage(monkeypatch):
     assert len(requests) == 2
     assert result.usage["total_tokens"] == 15
     assert any(item["type"] == "tool_output" for item in result.trace)
+    assert result.trace[-1]["failure_category"] == "model_error"
     assert "test-secret" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_tool_exception_has_stable_tool_error_marker(monkeypatch):
+    install_transport(monkeypatch, [TOOL_MESSAGE])
+
+    @function_tool(failure_error_function=None)
+    async def lookup() -> str:
+        """Read patient facts."""
+        raise RuntimeError("tool offline")
+
+    result = await run_agent(instructions="Read", input_text="patient", tools=[lookup],
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=2, max_tool_calls=1))
+    assert result.status == "failed"
+    assert result.trace[-1]["type"] == "run_error"
+    assert result.trace[-1]["failure_category"] == "tool_error"
 
 
 @pytest.mark.asyncio

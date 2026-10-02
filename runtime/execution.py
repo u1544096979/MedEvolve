@@ -140,7 +140,20 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
         return _result(model=model, output=output, trace=records.trace,
                        usage=records.usage(), status="completed")
     except Exception as exc:
-        records.trace.append({"type": "run_error", "error": f"{type(exc).__name__}: {exc}"})
         status = "budget_exhausted" if isinstance(exc, (MaxTurnsExceeded, _ToolBudgetExceeded)) else "failed"
+        completed_tools = {
+            item.get("call_id") for item in records.trace if item.get("type") == "tool_output"
+        }
+        pending_tool = next(
+            (item for item in reversed(records.trace)
+             if item.get("type") == "tool_start"
+             and item.get("call_id") not in completed_tools),
+            None,
+        )
+        failure_category = (
+            "tool_error" if pending_tool is not None else "model_error"
+        )
+        records.trace.append({"type": "run_error", "failure_category": failure_category,
+                              "error": f"{type(exc).__name__}: {exc}"})
         return _result(model=model, trace=records.trace, usage=records.usage(),
                        status=status, error=f"{type(exc).__name__}: {exc}")
