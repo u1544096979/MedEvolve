@@ -206,6 +206,16 @@ class FHIRClient:
             result["entries"] = [decode_document_notes(r) for r in result["entries"]]
         return result
 
+    async def read(self, source_id: str) -> JsonObject:
+        parts = source_id.split("/")
+        if len(parts) != 2 or not parts[0].isalnum() or not FHIR_ID.fullmatch(parts[1]):
+            raise PatientAccessError("Evidence must be a local ResourceType/id reference")
+        resource = await self._request("GET", source_id)
+        if resource.get("resourceType") != parts[0] or resource.get("id") != parts[1]:
+            raise PatientAccessError("FHIR server returned a different evidence resource")
+        self._check_resource(resource, set(self.patient_ids))
+        return decode_document_notes(resource)
+
     async def _collect(
         self,
         path: str,

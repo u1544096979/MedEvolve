@@ -9,7 +9,7 @@ import pytest
 from agents.tool_context import ToolContext
 
 from contracts import EnvironmentInstance, Task
-from environments import get_tools, prepare_trajectory, read_state
+from environments import get_tools, prepare_trajectory, read_evidence, read_state
 from environments.errors import PatientAccessError, UnsupportedDecisionPoint
 
 
@@ -144,6 +144,14 @@ def task(**extra):
         evidence=[],
         **extra,
     )
+
+
+@pytest.mark.asyncio
+async def test_evidence_read_returns_exact_record_and_rejects_other_patient(native_fhir):
+    record = await read_evidence(instance(), "a", "Observation/lab")
+    assert record["valueString"] == "original lab"
+    with pytest.raises(PatientAccessError):
+        await read_evidence(instance(), "a", "Encounter/eb")
 
 
 @pytest.mark.asyncio

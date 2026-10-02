@@ -203,6 +203,13 @@ async def read_state(instance: EnvironmentInstance, task: Task) -> JsonObject:
     }
 
 
+async def read_evidence(
+    instance: EnvironmentInstance, patient_id: str, source_id: str
+) -> JsonObject:
+    _check_environment(instance.environment)
+    return await FHIRClient(instance.endpoint, [patient_id]).read(source_id)
+
+
 async def release_environment(
     config: EnvironmentConfig, instance: EnvironmentInstance
 ) -> None:
