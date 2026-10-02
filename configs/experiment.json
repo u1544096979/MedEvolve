@@ -8,50 +8,38 @@
   },
   "runtime": {
     "models": {
-      "explore_data": {
+      "data_explorer": {
         "model": "<MODEL_NAME>",
         "base_url": "<MODEL_BASE_URL>",
         "api_key_env": "<API_KEY_ENV>"
       },
-      "explore_environment": {
+      "environment_explorer": {
         "model": "<MODEL_NAME>",
         "base_url": "<MODEL_BASE_URL>",
         "api_key_env": "<API_KEY_ENV>"
       },
-      "generate_tasks": {
+      "generator": {
         "model": "<MODEL_NAME>",
         "base_url": "<MODEL_BASE_URL>",
         "api_key_env": "<API_KEY_ENV>"
       },
-      "analyze_feedback": {
+      "feedback": {
         "model": "<MODEL_NAME>",
         "base_url": "<MODEL_BASE_URL>",
         "api_key_env": "<API_KEY_ENV>"
       },
-      "update_strategy": {
+      "updater": {
         "model": "<MODEL_NAME>",
         "base_url": "<MODEL_BASE_URL>",
         "api_key_env": "<API_KEY_ENV>"
       }
     },
     "budgets": {
-      "explore_data": {
+      "data_explorer": {
         "max_model_turns": 10,
         "max_tool_calls": 20
       },
-      "explore_environment": {
-        "max_model_turns": 10,
-        "max_tool_calls": 20
-      },
-      "generate_tasks": {
-        "max_model_turns": 10,
-        "max_tool_calls": 20
-      },
-      "analyze_feedback": {
-        "max_model_turns": 10,
-        "max_tool_calls": 20
-      },
-      "update_strategy": {
+      "environment_explorer": {
         "max_model_turns": 10,
         "max_tool_calls": 20
       }
