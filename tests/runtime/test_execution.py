@@ -165,3 +165,16 @@ async def test_single_request_parse_failure_is_not_repaired(monkeypatch):
     assert len(requests) == 1
     assert result.trace[-1]["response"]["choices"][0]["message"]["content"] == "invalid JSON"
     assert result.usage["total_tokens"] == 15
+
+
+def test_opencode_client_identifies_session(monkeypatch):
+    from runtime.execution import _client
+    from contracts import ModelConfig
+    monkeypatch.setenv("TEST_OPENCODE_KEY", "test-key")
+    model = ModelConfig(model="deepseek-v4.1-flash", base_url="https://opencode.ai/zen/go/v1",
+                        api_key_env="TEST_OPENCODE_KEY")
+    first, second = _client(model), _client(model)
+    assert first.default_headers["x-opencode-session"] == second.default_headers["x-opencode-session"]
+    assert first.default_headers["User-Agent"] == "MedEvolve/0.1"
+    other = _client(model.model_copy(update={"base_url": "https://example.com/v1"}))
+    assert "x-opencode-session" not in other.default_headers

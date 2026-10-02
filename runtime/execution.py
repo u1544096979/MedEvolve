@@ -2,6 +2,8 @@
 
 import json
 import os
+from urllib.parse import urlparse
+from uuid import uuid4
 
 from agents import (
     Agent, AgentOutputSchema, FunctionTool, ModelSettings, OpenAIChatCompletionsModel,
@@ -15,6 +17,9 @@ from pydantic_core import to_jsonable_python
 from contracts import Budget, ModelConfig, RunResult
 
 
+_OPENCODE_SESSION = str(uuid4())
+
+
 class _ToolBudgetExceeded(AgentsException):
     pass
 
@@ -23,7 +28,11 @@ def _client(model: ModelConfig) -> AsyncOpenAI:
     key = os.environ.get(model.api_key_env)
     if not key:
         raise ValueError(f"Missing API key environment variable: {model.api_key_env}")
-    return AsyncOpenAI(api_key=key, base_url=model.base_url, max_retries=0)
+    headers = {}
+    if urlparse(model.base_url or "").hostname == "opencode.ai":
+        headers = {"x-opencode-session": _OPENCODE_SESSION, "User-Agent": "MedEvolve/0.1"}
+    return AsyncOpenAI(api_key=key, base_url=model.base_url, max_retries=0,
+                       default_headers=headers)
 
 
 def _result(*, model: ModelConfig, **fields) -> RunResult:
