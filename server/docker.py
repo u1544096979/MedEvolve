@@ -7,6 +7,7 @@ from that image for every instance. No host or named data volumes are mounted.
 
 import asyncio
 import json
+import os
 import uuid
 
 import httpx
@@ -129,6 +130,9 @@ class DockerManager:
                 "medevolve.environment=PhysicianBench",
                 "--publish",
                 f"{self.bind_host}::8080",
+                *(["--memory", os.environ["MEDEVOLVE_CONTAINER_MEMORY"],
+                   "--env", "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0"]
+                  if os.environ.get("MEDEVOLVE_CONTAINER_MEMORY") else []),
                 image_id,
             )
             container = await self._inspect(name)

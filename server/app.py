@@ -2,6 +2,7 @@
 
 Start with: uvicorn server.app:create_app --factory --host 0.0.0.0 --port 8000
 MEDEVOLVE_BIND_HOST defaults to 0.0.0.0 for dynamically published FHIR ports.
+MEDEVOLVE_CONTAINER_MEMORY optionally limits each container and its JVM heap.
 Only images already loaded on the Docker host are accepted; no images are pulled.
 """
 
