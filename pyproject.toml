@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medevolve"
+version = "0.1.0"
+description = "医疗任务自进化实验框架"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.10,<3",
+    "openai>=2,<3",
+    "openai-agents>=0.6,<1",
+    "httpx>=0.27,<1",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2"]
+
+[tool.setuptools]
+py-modules = ["contracts"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["runtime*", "environments*", "server*", "methods*", "evaluation*", "experiments*"]
