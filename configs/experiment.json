@@ -9,29 +9,29 @@
   "runtime": {
     "models": {
       "data_explorer": {
-        "model": "<MODEL_NAME>",
-        "base_url": "<MODEL_BASE_URL>",
-        "api_key_env": "<API_KEY_ENV>"
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY"
       },
       "environment_explorer": {
-        "model": "<MODEL_NAME>",
-        "base_url": "<MODEL_BASE_URL>",
-        "api_key_env": "<API_KEY_ENV>"
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY"
       },
       "generator": {
-        "model": "<MODEL_NAME>",
-        "base_url": "<MODEL_BASE_URL>",
-        "api_key_env": "<API_KEY_ENV>"
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY"
       },
       "feedback": {
-        "model": "<MODEL_NAME>",
-        "base_url": "<MODEL_BASE_URL>",
-        "api_key_env": "<API_KEY_ENV>"
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY"
       },
       "updater": {
-        "model": "<MODEL_NAME>",
-        "base_url": "<MODEL_BASE_URL>",
-        "api_key_env": "<API_KEY_ENV>"
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY"
       }
     },
     "budgets": {
@@ -49,24 +49,24 @@
     "runtime": {
       "models": {
         "verifier": {
-          "model": "<MODEL_NAME>",
-          "base_url": "<MODEL_BASE_URL>",
-          "api_key_env": "<API_KEY_ENV>"
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY"
         },
         "quality": {
-          "model": "<MODEL_NAME>",
-          "base_url": "<MODEL_BASE_URL>",
-          "api_key_env": "<API_KEY_ENV>"
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY"
         },
         "solver": {
-          "model": "<MODEL_NAME>",
-          "base_url": "<MODEL_BASE_URL>",
-          "api_key_env": "<API_KEY_ENV>"
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY"
         },
         "completion": {
-          "model": "<MODEL_NAME>",
-          "base_url": "<MODEL_BASE_URL>",
-          "api_key_env": "<API_KEY_ENV>"
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY"
         }
       },
       "budgets": {
