@@ -147,6 +147,21 @@ def task(**extra):
 
 
 @pytest.mark.asyncio
+async def test_malformed_native_arguments_return_error_then_allow_retry(native_fhir):
+    tools = await get_tools(instance(), ["a"])
+    tool = next(t for t in tools if t.name == "fhir_observation_search_labs")
+    arguments = '{"patient": a}'
+    context = ToolContext(
+        context=None, tool_name=tool.name, tool_call_id="malformed", tool_arguments=arguments
+    )
+    result = json.loads(await tool.on_invoke_tool(context, arguments))
+    assert "error" in result
+    assert not native_fhir[1]
+    corrected = await invoke(tools, tool.name, patient="a")
+    assert corrected["entries"][0]["id"] == "lab"
+
+
+@pytest.mark.asyncio
 async def test_native_reads_writes_state_and_instance_isolation(native_fhir):
     tools = await get_tools(instance(), ["a"])
     assert len(tools) == 13

@@ -17,9 +17,9 @@ from contracts import (
     PatientTrajectory,
     Task,
 )
-from environments.errors import EnvironmentUnavailable, UnsupportedDecisionPoint
+from environments.errors import EnvironmentUnavailable, PatientAccessError, UnsupportedDecisionPoint
 from environments.fhir import FHIRClient, decode_document_notes
-from environments.physicianbench import NATIVE_FUNCTIONS
+from environments.physicianbench import FHIR_TOOL_SCHEMAS, NATIVE_FUNCTIONS
 
 _WRITABLE_RESOURCE_TYPES = {
     "Communication",
@@ -154,11 +154,17 @@ async def get_tools(
     _check_environment(instance.environment)
     _check_decision_point(decision_point)
     client = FHIRClient(instance.endpoint, patient_ids)
+    schemas = {schema["name"]: schema for schema in FHIR_TOOL_SCHEMAS}
+
+    def tool_error(context, error):
+        if isinstance(error, (PatientAccessError, EnvironmentUnavailable, UnsupportedDecisionPoint)):
+            raise error
+        return json.dumps({"error": f"{type(error).__name__}: {error}. Please retry with valid arguments."})
 
     def bind(native):
         @wraps(native)
         async def invoke(*args, **kwargs):
-            return await native(client, *args, **kwargs)
+            return json.dumps(await native(client, *args, **kwargs), default=str)
 
         signature = inspect.signature(native)
         invoke.__signature__ = signature.replace(
@@ -169,7 +175,11 @@ async def get_tools(
             for key, value in get_type_hints(native).items()
             if key != "client"
         }
-        return function_tool(invoke, failure_error_function=None)
+        schema = schemas[native.__name__]
+        tool = function_tool(invoke, strict_mode=False, failure_error_function=tool_error)
+        tool.description = schema["description"]
+        tool.params_json_schema = schema["parameters"]
+        return tool
 
     return [bind(native) for native in NATIVE_FUNCTIONS]
 
