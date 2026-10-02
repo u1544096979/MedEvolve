@@ -158,14 +158,23 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
             phase = phase_before_release
         phase = "model_error"
         answer = _output(result.solver_run, SolverAnswer)
-        material.update(
-            solver_answer=answer.model_dump(),
-            solver_trace=result.solver_run.trace,
-            observed_state=result.observed_state,
-        )
+        # Review execution evidence without replaying the solver's prompts and model requests.
+        completion_material = {
+            "task": material["task"],
+            "evidence_records": [
+                source.model_dump() for source in trajectory.sources
+                if source.source_id in {evidence.source_id for evidence in task.evidence}
+            ],
+            "solver_answer": answer.model_dump(),
+            "solver_trace": [
+                item for item in result.solver_run.trace
+                if item.get("type") in {"tool_start", "tool_output", "run_error", "tool_budget"}
+            ],
+            "observed_state": result.observed_state,
+        }
         run = await model_run(
             runtime.call_llm, role="completion", schema=CompletionReview,
-            instructions=prompts.COMPLETION, payload=material,
+            instructions=prompts.COMPLETION, payload=completion_material,
         )
         result.completion = _output(run, CompletionReview)
         result.status = "completed"

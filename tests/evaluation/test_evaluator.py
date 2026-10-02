@@ -87,7 +87,14 @@ def harness(monkeypatch):
                 "completed": bool(payload["observed_state"].get("prescriptions")),
                 "reason": "checked actual prescriptions",
             }
-        return RunResult(output=output, trace=[{"role": role}], usage={}, status="completed")
+        trace = [{"role": role}]
+        if role == "solver":
+            trace = [
+                {"type": "model_request", "instructions": "历史提示词"},
+                {"type": "tool_start", "name": "create_prescription", "call_id": "write-1", "arguments": "{}"},
+                {"type": "tool_output", "name": "create_prescription", "call_id": "write-1", "output": h.state},
+            ]
+        return RunResult(output=output, trace=trace, usage={}, status="completed")
 
     monkeypatch.setitem(sys.modules, "environments", SimpleNamespace(
         create_environment=create_environment, get_tools=get_tools,
@@ -131,7 +138,11 @@ def test_write_completion_uses_observed_state(harness, state, completed):
     assert result.failure_category == (None if completed else "clinical")
     call = next(c for c in h.model_calls if c["output_type"] is CompletionReview)
     assert json.loads(call["input_text"])["observed_state"] == state
-    assert json.loads(call["input_text"])["solver_trace"] == [{"role": "solver"}]
+    payload = json.loads(call["input_text"])
+    assert [item["type"] for item in payload["solver_trace"]] == ["tool_start", "tool_output"]
+    assert "历史提示词" not in call["input_text"]
+    assert payload["evidence_records"] == [{"source_id": "source-1", "statement": "轨迹证据"}]
+    assert result.solver_run.trace[0]["instructions"] == "历史提示词"
     assert h.state_reads == [h.created[1]]
     assert h.released == h.created
 
