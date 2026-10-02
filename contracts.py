@@ -82,6 +82,7 @@ class ModelConfig(BaseModel):
     base_url: str | None = None
     api_key_env: str
     instructions_role: Literal["system", "user"] = "system"
+    parallel_tool_calls: bool = True
 
 
 class Budget(BaseModel):

@@ -12,41 +12,46 @@
         "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
-        "instructions_role": "user"
+        "instructions_role": "system",
+        "parallel_tool_calls": true
       },
       "environment_explorer": {
         "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
-        "instructions_role": "user"
+        "instructions_role": "system",
+        "parallel_tool_calls": true
       },
       "generator": {
         "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
-        "instructions_role": "user"
+        "instructions_role": "system",
+        "parallel_tool_calls": true
       },
       "feedback": {
         "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
-        "instructions_role": "user"
+        "instructions_role": "system",
+        "parallel_tool_calls": true
       },
       "updater": {
         "model": "gpt-4o-mini",
         "base_url": "https://api.openlux.ai/v1",
         "api_key_env": "OPENLUX_API_KEY",
-        "instructions_role": "user"
+        "instructions_role": "system",
+        "parallel_tool_calls": true
       }
     },
     "budgets": {
       "data_explorer": {
-        "max_model_turns": 10,
-        "max_tool_calls": 20
+        "max_model_turns": 30,
+        "max_tool_calls": 200
       },
       "environment_explorer": {
-        "max_model_turns": 10,
-        "max_tool_calls": 20
+        "max_model_turns": 30,
+        "max_tool_calls": 200
       }
     }
   },
@@ -57,43 +62,47 @@
           "model": "gpt-4o-mini",
           "base_url": "https://api.openlux.ai/v1",
           "api_key_env": "OPENLUX_API_KEY",
-          "instructions_role": "user"
+          "instructions_role": "system",
+          "parallel_tool_calls": true
         },
         "quality": {
           "model": "gpt-4o-mini",
           "base_url": "https://api.openlux.ai/v1",
           "api_key_env": "OPENLUX_API_KEY",
-          "instructions_role": "user"
+          "instructions_role": "system",
+          "parallel_tool_calls": true
         },
         "solver": {
           "model": "gpt-4o-mini",
           "base_url": "https://api.openlux.ai/v1",
           "api_key_env": "OPENLUX_API_KEY",
-          "instructions_role": "user"
+          "instructions_role": "system",
+          "parallel_tool_calls": true
         },
         "completion": {
           "model": "gpt-4o-mini",
           "base_url": "https://api.openlux.ai/v1",
           "api_key_env": "OPENLUX_API_KEY",
-          "instructions_role": "user"
+          "instructions_role": "system",
+          "parallel_tool_calls": true
         }
       },
       "budgets": {
         "verifier": {
-          "max_model_turns": 10,
-          "max_tool_calls": 20
+          "max_model_turns": 30,
+          "max_tool_calls": 200
         },
         "quality": {
-          "max_model_turns": 10,
-          "max_tool_calls": 20
+          "max_model_turns": 30,
+          "max_tool_calls": 200
         },
         "solver": {
-          "max_model_turns": 10,
-          "max_tool_calls": 20
+          "max_model_turns": 30,
+          "max_tool_calls": 200
         },
         "completion": {
-          "max_model_turns": 10,
-          "max_tool_calls": 20
+          "max_model_turns": 30,
+          "max_tool_calls": 200
         }
       }
     }

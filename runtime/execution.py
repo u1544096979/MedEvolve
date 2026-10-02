@@ -140,7 +140,7 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                 # Shared contracts include open dictionaries, which strict schemas reject.
                 output_type=AgentOutputSchema(output_type, strict_json_schema=False),
                 model=OpenAIChatCompletionsModel(model=model.model, openai_client=client),
-                model_settings=ModelSettings(parallel_tool_calls=False),
+                model_settings=ModelSettings(parallel_tool_calls=model.parallel_tool_calls),
             )
             result = await Runner.run(
                 agent, agent_input, hooks=records, max_turns=budget.max_model_turns,
