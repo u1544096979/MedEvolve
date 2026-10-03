@@ -178,3 +178,24 @@ def test_opencode_client_identifies_session(monkeypatch):
     assert first.default_headers["User-Agent"] == "MedEvolve/0.1"
     other = _client(model.model_copy(update={"base_url": "https://example.com/v1"}))
     assert "x-opencode-session" not in other.default_headers
+
+
+@pytest.mark.asyncio
+async def test_opencode_sdk_tool_loop_uses_json_object(monkeypatch):
+    requests = install_transport(monkeypatch, [TOOL_MESSAGE, FINAL_MESSAGE])
+
+    @function_tool
+    async def lookup() -> str:
+        """Read patient facts."""
+        return "patient found"
+
+    result = await run_agent(instructions="Read and answer", input_text="patient",
+        tools=[lookup], output_type=SolverAnswer,
+        model=MODEL.model_copy(update={"base_url": "https://opencode.ai/zen/go/v1"}),
+        budget=Budget(max_model_turns=2, max_tool_calls=1))
+    assert result.status == "completed", result.error
+    assert result.output == {"answer": "patient found"}
+    for request in requests:
+        assert request["response_format"] == {"type": "json_object"}
+        assert '"answer"' in request["messages"][0]["content"]
+        assert "Return only a JSON object" in request["messages"][0]["content"]
