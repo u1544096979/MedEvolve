@@ -135,6 +135,77 @@ async def test_get_preserves_explicit_scope_query_and_returns_official_http_erro
 
 
 @pytest.mark.asyncio
+async def test_model_can_follow_scoped_official_root_pagination_link(monkeypatch):
+    seen = []
+    next_url = (
+        "http://fixture/fhir?_getpages=opaque%2Ftoken&_getpagesoffset=20&_count=20"
+    )
+
+    def handler(request):
+        seen.append(request)
+        if request.url.path == "/fhir/Observation":
+            return httpx.Response(200, json={
+                "resourceType": "Bundle", "entry": [],
+                "link": [{"relation": "next", "url": next_url}],
+            })
+        return httpx.Response(200, json={
+            "resourceType": "Bundle", "entry": [{"resource": {
+                "resourceType": "Observation", "id": "o2",
+                "subject": {"reference": "Patient/p1"},
+            }}],
+        })
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(
+        transport=httpx.MockTransport(handler), **kwargs))
+    tools = NativeTools("http://fixture/fhir/", ["p1"], load_functions())
+
+    first = await tools.execute(
+        "GET " + tools.endpoint + "Observation?patient=Patient%2Fp1"
+    )
+    assert first["data"]["link"][0]["url"] == next_url
+    assert len(seen) == 1
+
+    second = await tools.execute("GET " + next_url)
+    assert second["data"]["entry"][0]["resource"]["id"] == "o2"
+    assert len(seen) == 2
+    assert seen[1].url.path == "/fhir"
+    assert "_getpages=opaque%2Ftoken&_getpagesoffset=20&_count=20" in seen[1].url.query.decode()
+    assert "patient=" not in seen[1].url.query.decode()
+
+
+@pytest.mark.asyncio
+async def test_root_pagination_checks_patient_scope_and_instance(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={
+            "resourceType": "Bundle", "entry": [{"resource": {
+                "resourceType": "Observation", "id": "leak",
+                "subject": {"reference": "Patient/p2"},
+            }}],
+        })
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(
+        transport=httpx.MockTransport(handler), **kwargs))
+    tools = NativeTools("http://fixture/fhir/", ["p1"], load_functions())
+    with pytest.raises(PatientAccessError):
+        await tools.execute(
+            "GET http://fixture/fhir?_getpages=token&_getpagesoffset=20"
+        )
+    assert len(seen) == 1
+    with pytest.raises(PatientAccessError):
+        await tools.execute(
+            "GET http://other/fhir?_getpages=token&_getpagesoffset=20"
+        )
+    with pytest.raises(PatientAccessError):
+        await tools.execute("GET http://fixture/fhir")
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
 async def test_patient_search_filters_results_and_trajectory_keeps_raw_resources(fhir):
     requests, resources = fhir
     tools = await get_tools(instance(), ["p1"])

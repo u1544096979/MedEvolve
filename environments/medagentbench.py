@@ -48,9 +48,12 @@ class NativeTools(list[Tool]):
                 raise PatientAccessError("FHIR request leaves this instance")
             relative = target.path[len(base.path):]
             resource_type = relative.split("/", 1)[0]
-            if not resource_type or "/" in relative:
-                raise PatientAccessError("Only FHIR search URLs are supported")
             query_params = parse_qsl(target.query, keep_blank_values=True)
+            root_pagination = not relative.strip("/") and any(
+                key == "_getpages" and value for key, value in query_params
+            )
+            if (not resource_type and not root_pagination) or "/" in relative:
+                raise PatientAccessError("Only FHIR search URLs are supported")
             selected = set()
             for key in ("patient", "subject"):
                 for _, value in (pair for pair in query_params if pair[0] == key):
@@ -61,16 +64,24 @@ class NativeTools(list[Tool]):
                 raise PatientAccessError(
                     "FHIR request selects a patient outside the allowed scope"
                 )
-            if resource_type == "Patient" and not selected:
+            if root_pagination:
+                pagination_query = target.query + (
+                    "&" if target.query else ""
+                ) + "_format=json"
+                request_url = urlunsplit(
+                    (base.scheme, base.netloc, target.path, pagination_query, "")
+                )
+            elif resource_type == "Patient" and not selected:
                 query_params.append(("_id", ",".join(self.patient_ids)))
             elif resource_type != "Patient" and not selected:
                 query_params.append(
                     ("patient", ",".join(self.patient_ids))
                 )
-            query_params.append(("_format", "json"))
-            request_url = urlunsplit(
-                (base.scheme, base.netloc, target.path, urlencode(query_params), "")
-            )
+            if not root_pagination:
+                query_params.append(("_format", "json"))
+                request_url = urlunsplit(
+                    (base.scheme, base.netloc, target.path, urlencode(query_params), "")
+                )
             request = {"action": original, "url": request_url, "payload": None}
             try:
                 async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
