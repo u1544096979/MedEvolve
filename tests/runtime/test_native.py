@@ -133,4 +133,6 @@ async def test_native_environment_error_is_returned_as_feedback_and_not_clinical
     assert any(item.get("failure_category") == "environment_error"
                for item in result.trace)
     assert "test-secret" not in result.model_dump_json()
+    assert "test-secret" not in json.dumps(requests[1]["messages"])
     assert requests[1]["messages"][-1]["content"].startswith("Error: ConnectError")
+    assert "[REDACTED]" in requests[1]["messages"][-1]["content"]

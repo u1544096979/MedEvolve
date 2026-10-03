@@ -1,6 +1,7 @@
 """Text action loop for environments with native GET/POST/FINISH protocols."""
 
 import json
+import os
 from typing import Callable
 
 from pydantic import BaseModel
@@ -42,6 +43,11 @@ def _finish_output(answers: list, output_type: type[BaseModel]) -> dict:
 def _is_finish(action: str) -> bool:
     normalized = action.replace("```tool_code", "").replace("```", "").strip()
     return normalized.startswith("FINISH(") and normalized.endswith(")")
+
+
+def _redact_secret(text: str, model: ModelConfig) -> str:
+    key = os.environ.get(model.api_key_env)
+    return text.replace(key, "[REDACTED]") if key else text
 
 
 async def run_native_agent(*, instructions: str, input_text: str, tools: NativeTools,
@@ -119,7 +125,7 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                     reply = result.get("reply", "")
                 except Exception as exc:
                     env_failed = True
-                    reply = f"Error: {type(exc).__name__}: {exc}"
+                    reply = _redact_secret(f"Error: {type(exc).__name__}: {exc}", model)
                     trace.append({"type": "run_error", "failure_category": "environment_error",
                                   "error": reply})
                     result = {"kind": "error", "request": {"action": action}, "reply": reply}
