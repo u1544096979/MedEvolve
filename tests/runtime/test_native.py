@@ -39,7 +39,7 @@ def install_transport(monkeypatch, responses):
 
 def native_tools():
     return NativeTools("http://fhir.test/fhir/", ["p1"],
-                       [{"name": "Observation"}])
+                       [{"name": "GET {api_base}/Observation"}])
 
 
 @pytest.mark.asyncio
@@ -75,6 +75,13 @@ async def test_native_text_loop_and_finish_mapping(monkeypatch):
     assert [item["type"] for item in result.trace].count("tool_output") == 2
     for request in requests:
         assert "tools" not in request and "response_format" not in request
+    prompt = requests[0]["messages"][1]["content"]
+    assert "Use http://fhir.test/fhir as the api_base" in prompt
+    assert '"name": "GET http://fhir.test/fhir/Observation"' in prompt
+    assert "{api_base}" not in prompt
+    assert "one function/action each time" in prompt
+    assert "FINISH([answer1, answer2, ...])" in prompt
+    assert "Task material:\npatient data" in prompt
     assert requests[1]["messages"][-1] == {"role": "user", "content": "feedback-1"}
     assert requests[2]["messages"][-1] == {"role": "user", "content": "feedback-2"}
     assert all("Return only a JSON object" not in m["content"]
@@ -136,3 +143,66 @@ async def test_native_environment_error_is_returned_as_feedback_and_not_clinical
     assert "test-secret" not in json.dumps(requests[1]["messages"])
     assert requests[1]["messages"][-1]["content"].startswith("Error: ConnectError")
     assert "[REDACTED]" in requests[1]["messages"][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_native_invalid_action_fails_without_another_model_call(monkeypatch):
+    requests = install_transport(monkeypatch, [
+        {"role": "assistant", "content": "I will now retrieve the chart."},
+        {"role": "assistant", "content": 'FINISH(["should not be requested"])'},
+    ])
+    result = await run_agent(instructions="Solve", input_text="patient", tools=native_tools(),
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=24, max_tool_calls=200))
+    assert result.status == "failed"
+    assert len(requests) == 1
+    assert result.usage["model_turns"] == 1
+    assert result.trace[-1]["type"] == "run_error"
+    assert result.trace[-1]["failure_category"] == "model_error"
+    assert "Invalid native action" in result.error
+
+
+@pytest.mark.asyncio
+async def test_native_invalid_finish_keeps_request_reply_error_and_usage(monkeypatch):
+    requests = install_transport(monkeypatch, [
+        {"role": "assistant", "content": "FINISH(not-json)"},
+        {"role": "assistant", "content": 'FINISH(["should not be requested"])'},
+    ])
+    result = await run_agent(instructions="Solve", input_text="patient", tools=native_tools(),
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=24, max_tool_calls=200))
+    assert result.status == "failed"
+    assert len(requests) == 1
+    assert result.usage["model_turns"] == 1
+    finish_error = next(item for item in result.trace if item["type"] == "finish_error")
+    assert finish_error["request"]["action"] == "FINISH(not-json)"
+    assert finish_error["reply"] == "Invalid FINISH request"
+    assert "Invalid FINISH action" in finish_error["error"]
+    assert result.trace[-1]["failure_category"] == "model_error"
+
+
+@pytest.mark.asyncio
+async def test_invalid_finish_does_not_replace_prior_environment_failure(monkeypatch):
+    requests = install_transport(monkeypatch, [
+        {"role": "assistant", "content": "GET Observation?patient=p1"},
+        {"role": "assistant", "content": "FINISH(not-json)"},
+    ])
+    tools = native_tools()
+    native_execute = tools.execute
+
+    async def execute(action):
+        if action.startswith("GET"):
+            raise httpx.ConnectError("FHIR unavailable")
+        return await native_execute(action)
+
+    monkeypatch.setattr(tools, "execute", execute)
+    result = await run_agent(instructions="Solve", input_text="patient", tools=tools,
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=24, max_tool_calls=200))
+    assert result.status == "failed"
+    assert len(requests) == 2
+    assert any(item["type"] == "finish_error" for item in result.trace)
+    assert result.trace[-1]["type"] == "run_error"
+    assert result.trace[-1]["failure_category"] == "environment_error"
+    assert result.usage["model_turns"] == 2
+    assert result.usage["tool_calls"] == 1

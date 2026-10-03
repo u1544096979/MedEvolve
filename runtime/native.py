@@ -61,15 +61,28 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
         "max_model_turns": budget.max_model_turns,
         "max_tool_calls": budget.max_tool_calls,
     }
+    api_base = tools.endpoint.rstrip("/")
+    function_declarations = json.dumps(tools.functions, ensure_ascii=False).replace(
+        "{api_base}", api_base
+    )
+    native_prompt = (
+        "You are an expert in using FHIR functions to assist medical professionals. "
+        "Based on the task and available functions, make one or more function calls to achieve it.\n\n"
+        "1. If you decide to invoke a GET function, you MUST put it in the format of\n"
+        "GET url?param_name1=param_value1&param_name2=param_value2...\n\n"
+        "2. If you decide to invoke a POST function, you MUST put it in the format of\n"
+        "POST url\n[your payload data in JSON format]\n\n"
+        "3. When all questions are answered and all requested tasks are finished, you MUST call FINISH "
+        "in this format (the list must be JSON loadable):\nFINISH([answer1, answer2, ...])\n\n"
+        "Your response must be exactly one of these three cases. You can call only one function/action "
+        "each time and SHOULD NOT include any other text in the response.\n\n"
+        f"Here is a list of functions in JSON format that you can invoke. Use {api_base} as the api_base.\n"
+        f"{function_declarations}\n\n"
+        f"Task material:\n{input_text}"
+    )
     messages = [
         {"role": model.instructions_role, "content": instructions},
-        {"role": "user", "content": (
-            "Interact using one plain-text action per response. Use GET URL, POST URL followed by JSON, "
-            "or terminate with FINISH([answer, ...]). FINISH is the only terminal action. "
-            "Available native interface declarations:\n"
-            + json.dumps(tools.functions, ensure_ascii=False)
-            + "\n\nTask material:\n" + input_text
-        )},
+        {"role": "user", "content": native_prompt},
     ]
     env_failed = False
     try:
@@ -102,7 +115,26 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                 action = message.content or ""
                 if _is_finish(action):
                     result = await tools.execute(action)
-                    output = _finish_output(result["answers"], output_type)
+                    if result.get("kind") != "FINISH":
+                        error = f"Invalid FINISH action: {result.get('reply', 'invalid response')}"
+                        failure_category = "environment_error" if env_failed else "model_error"
+                        trace.append({"type": "finish_error", "request": result.get("request"),
+                                      "reply": result.get("reply"), "error": error})
+                        trace.append({"type": "run_error", "failure_category": failure_category,
+                                      "error": error})
+                        return result_factory(model=model, trace=trace, usage=usage,
+                                              status="failed", error=error)
+                    try:
+                        output = _finish_output(result["answers"], output_type)
+                    except Exception as exc:
+                        error = f"Invalid FINISH output: {type(exc).__name__}: {exc}"
+                        failure_category = "environment_error" if env_failed else "model_error"
+                        trace.append({"type": "finish_error", "request": result.get("request"),
+                                      "reply": result.get("reply"), "error": error})
+                        trace.append({"type": "run_error", "failure_category": failure_category,
+                                      "error": error})
+                        return result_factory(model=model, trace=trace, usage=usage,
+                                              status="failed", error=error)
                     if env_failed:
                         trace.append({"type": "run_error", "failure_category": "environment_error",
                                       "error": "FHIR access failed during this run"})
@@ -120,10 +152,12 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                 usage["tool_calls"] += 1
                 trace.append({"type": "tool_start", "name": "native_action",
                               "arguments": action})
+                tool_exception = False
                 try:
                     result = await tools.execute(action)
                     reply = result.get("reply", "")
                 except Exception as exc:
+                    tool_exception = True
                     env_failed = True
                     reply = _redact_secret(f"Error: {type(exc).__name__}: {exc}", model)
                     trace.append({"type": "run_error", "failure_category": "environment_error",
@@ -131,6 +165,13 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                     result = {"kind": "error", "request": {"action": action}, "reply": reply}
                 trace.append({"type": "tool_output", "name": "native_action",
                               "output": result})
+                if result.get("kind") == "error" and not tool_exception:
+                    error = f"Invalid native action: {result.get('reply', 'invalid action')}"
+                    failure_category = "environment_error" if env_failed else "model_error"
+                    trace.append({"type": "run_error", "failure_category": failure_category,
+                                  "error": error})
+                    return result_factory(model=model, trace=trace, usage=usage,
+                                          status="failed", error=error)
                 messages.append({"role": "assistant", "content": action})
                 messages.append({"role": "user", "content": reply})
         trace.append({"type": "run_error", "failure_category": "model_error",
