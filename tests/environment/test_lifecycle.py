@@ -102,10 +102,30 @@ async def test_startup_failure_releases_partial_container(docker_backend, monkey
 
 
 @pytest.mark.asyncio
+async def test_medagentbench_manager_uses_requested_environment_and_pinned_image(
+    docker_backend,
+):
+    containers, commands = docker_backend
+    manager = DockerManager("127.0.0.1", "127.0.0.1")
+    config = EnvironmentConfig(
+        name="MedAgentBench", manager_url="http://manager",
+        seed_data="medagentbench@sha256:seed",
+    )
+    instance = await manager.create(config)
+    assert instance.environment == "MedAgentBench"
+    run_command = next(c for c in commands if c[0] == "run")
+    assert "medevolve.environment=MedAgentBench" in run_command
+    assert "sha256:seed" in run_command
+    assert "--pull=never" in run_command
+    await manager.release(instance.instance_id)
+    assert not containers
+
+
+@pytest.mark.asyncio
 async def test_unavailable_adapter_and_foreign_container_not_modified(docker_backend):
     manager = DockerManager("host")
     config = EnvironmentConfig(
-        name="MedAgentBench", manager_url="http://manager", seed_data="image"
+        name="FHIR-AgentBench", manager_url="http://manager", seed_data="image"
     )
     with pytest.raises(EnvironmentUnavailable):
         await manager.create(config)

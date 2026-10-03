@@ -1,4 +1,4 @@
-"""PhysicianBench lifecycle using the installed Docker CLI.
+"""Docker lifecycle for supported benchmark environments.
 
 seed_data is a locally loaded, pre-populated image (upstream: fhir-full:v1).
 Docker creates an independent writable layer and independent anonymous volumes
@@ -14,6 +14,8 @@ import httpx
 
 from contracts import EnvironmentConfig, EnvironmentInstance
 from environments.errors import EnvironmentUnavailable
+
+SUPPORTED_DOCKER_ENVIRONMENTS = {"PhysicianBench", "MedAgentBench"}
 
 
 class DockerCommandError(EnvironmentUnavailable):
@@ -92,13 +94,13 @@ class DockerManager:
             await asyncio.wait_for(poll(), timeout=self.startup_timeout)
 
     async def create(self, config: EnvironmentConfig) -> EnvironmentInstance:
-        if config.name != "PhysicianBench":
+        if config.name not in SUPPORTED_DOCKER_ENVIRONMENTS:
             raise EnvironmentUnavailable(
-                f"{config.name} is unavailable: original implementation is not integrated"
+                f"{config.name} is unavailable"
             )
         if not config.seed_data or config.seed_data.startswith("-"):
             raise ValueError(
-                "seed_data must identify a locally loaded PhysicianBench image"
+                "seed_data must identify a locally loaded environment image"
             )
         image = json.loads(await docker_command("image", "inspect", config.seed_data))[
             0
@@ -131,7 +133,7 @@ class DockerManager:
                 "--label",
                 "medevolve.managed=true",
                 "--label",
-                "medevolve.environment=PhysicianBench",
+                f"medevolve.environment={config.name}",
                 "--publish",
                 f"{self.bind_host}::8080",
                 "--env",

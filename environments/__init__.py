@@ -134,7 +134,8 @@ def _check_decision_point(decision_point: str | None) -> None:
 
 
 async def create_environment(config: EnvironmentConfig) -> EnvironmentInstance:
-    _check_environment(config.name)
+    if config.name not in {"PhysicianBench", "MedAgentBench"}:
+        raise EnvironmentUnavailable(f"{config.name} is unavailable")
     async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
         response = await client.post(
             config.manager_url.rstrip("/") + "/instances", json=config.model_dump()
