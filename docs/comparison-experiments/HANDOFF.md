@@ -12,19 +12,19 @@
 
 ## 已实现状态
 
-截至提交 39de17e，环境、模型运行、主方法、公共评测和实验入口已集成。核验按引用直接读取原始记录，逐条比较证据声明，全部通过后核验题目与候选答案。52 项本地测试通过，1 项跳过；正确与错误引用已在正式环境分别复测。
+环境、模型运行、主方法、公共评测和实验入口已集成。主方法按原始来源记录组织生成输入，单次生成时使用本批题型及数量约束；引用逐条核验后，再判断题目与候选答案。64 项本地检查通过，1 项跳过；正确与错误引用、合理等价答案已通过真实模型复核。
 
-正式运行输出：/Users/guagua/code/MedEvolve/outputs/physicianbench-evidence-review-20261003-040214。
+正式运行输出：/Users/guagua/code/MedEvolve/outputs/physicianbench-flash-closed-loop-20261003-145454。详细结果见 main/GENERATION.md。
 
-两轮进化计划 8 题，生成 6 题；5 题证据无效，1 题进入完整评测但解题未通过。两轮反馈与策略更新完成。第二轮一组出题和独立患者出题因题型超出指定范围失败，因此尚无有效的独立评测结果，不能宣称进化效果成立。环境探索该次返回指导但没有调用工具。
+两轮进化生成 8/8 题，核验通过 8/8，解题完成 7/8；1 题因质量评价缺少 dimensions 字段记为 model_error。两轮反馈与策略更新均完成，运行故障未当作难度提升。独立患者生成 2/2 题，核验通过且解题完成 1/2；另一题答案包含未列入 evidence 的真实轨迹记录，被公共核验拒绝。不能据单名独立评测患者宣称进化收益成立。
 
 ## 正式环境和模型
 
-PhysicianBench 管理服务 http://10.7.0.15:18084，SSH 别名 szu-hosp-nuc；种子 fhir-full:v1。容器内数据库自动整理已关闭，以处理既有启动故障。
+PhysicianBench 本机管理服务 http://127.0.0.1:18084；种子 fhir-full:v1。镜像归档 /Users/guagua/data/physical_benchmark_data/physicianbench-fhir-v1.tar.gz，来源为 szu-hosp-4090 的 /gpfs/flash/home/gwh/data/physical_benchmark_data。Docker 服务已启动，单容器内存上限 4 GB，实验逐次创建、使用和释放环境，同时最多一个实例。容器内数据库自动整理关闭。
 
-实验使用 OpenLux 中转 gpt-4o-mini，system 指令，允许并行工具调用。认证只从环境变量读取；配置模板有环境和患者占位符，不能直接当成正式配置运行。上述真实运行目录的 config.json 是实际患者和环境配置依据。
+实验使用 PI 中 OpenCode Go provider 的 https://opencode.ai/zen/go/v1 和 deepseek-v4.1-flash，全部模型角色一致，认证从 OPENCODE_API_KEY 读取。运行时携带会话请求头，工具 Agent 使用 JSON object 与明确的最终 schema，兼容字符串中的原始换行并保留响应 trace。配置为 configs/physicianbench-flash.json。
 
-gpt-4o-mini 和 DeepSeek-v4.1-Flash 已授权用于实验，其他旗舰或高价模型须先确认。DeepSeek 在既有中转链路出现 system 指令不遵守和无效工具参数，目前正式实验使用 gpt-4o-mini。
+gpt-4o-mini 和 DeepSeek V4.1 Flash 已授权用于实验，其他旗舰或高价模型须先确认。当前模型仍可能产生 schema 字段缺失，须计为模型故障；不得自动改写候选答案或放宽公共核验。
 
 ## section 启动指令
 
@@ -32,4 +32,4 @@ gpt-4o-mini 和 DeepSeek-v4.1-Flash 已授权用于实验，其他旗舰或高�
 
 ## 当前优先任务
 
-主方法：对齐候选答案与核验口径，修正生成时的证据引用与题型遵守。公共层：冻结方法入口并接入对比运行。TaskCraft：按作者源码制定医疗适配。Workflow、SingleShot、SelfGen、EnvExplore：按各自方向 SPEC 和 PRD 实现。公共生成入口、预算与结果汇总约定冻结后，五个方法可分配独立 session 并行实现。
+主方法：依据已对齐口径检查答案全部事实的引用覆盖，保留公共核验拒绝与模型格式故障的真实记录。公共层：冻结方法入口并接入对比运行。TaskCraft：按作者源码制定医疗适配。Workflow、SingleShot、SelfGen、EnvExplore：按各自方向 SPEC 和 PRD 实现。公共生成入口、预算与结果汇总约定冻结后，五个方法可分配独立 session 并行实现。
