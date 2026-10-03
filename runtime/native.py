@@ -1,5 +1,6 @@
 """Text action loop for environments with native GET/POST/FINISH protocols."""
 
+import copy
 import json
 import os
 from typing import Callable
@@ -92,7 +93,7 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
         async with client_factory(model) as client:
             for _ in range(budget.max_model_turns):
                 request = {"model": model.model, "messages": messages}
-                trace.append({"type": "model_request", **request})
+                trace.append({"type": "model_request", **copy.deepcopy(request)})
                 usage["model_turns"] += 1
                 response = await client.chat.completions.create(**request)
                 response_dump = response.model_dump(mode="json")

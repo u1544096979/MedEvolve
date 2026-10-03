@@ -73,6 +73,15 @@ async def test_native_text_loop_and_finish_mapping(monkeypatch):
     assert result.usage["total_tokens"] == 45
     assert result.trace[1]["response"]["usage"]["prompt_tokens_details"]["cached_tokens"] == 3
     assert [item["type"] for item in result.trace].count("tool_output") == 2
+    model_requests = [item for item in result.trace if item["type"] == "model_request"]
+    assert len(model_requests[0]["messages"]) == 2
+    assert all("GET Observation" not in message["content"]
+               and "feedback-" not in message["content"]
+               for message in model_requests[0]["messages"])
+    assert model_requests[1]["messages"][-2:] == [
+        {"role": "assistant", "content": "GET Observation?patient=p1"},
+        {"role": "user", "content": "feedback-1"},
+    ]
     for request in requests:
         assert "tools" not in request and "response_format" not in request
     prompt = requests[0]["messages"][1]["content"]
