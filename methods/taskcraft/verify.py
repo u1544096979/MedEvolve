@@ -8,7 +8,7 @@
 from dataclasses import dataclass, field
 
 from .ledger import Ledger
-from .prompts import AUGMENTED_QUERY, LLM_ONLY_INSTRUCTIONS, MEDICAL_RECORD_AGENT, verify_prompts
+from .prompts import AUGMENTED_QUERY, LLM_ONLY_INSTRUCTIONS, verify_prompts
 from .schemas import AnswerList, AnswerScore
 
 __all__ = ["VerifyOutcome", "score_recall", "verify_query"]
@@ -77,7 +77,7 @@ def _trajectory(run) -> list[dict]:
 
 
 async def verify_query(ledger: Ledger, query: str, golden_answer, tools: list, *,
-                       samples: int, stage: str) -> VerifyOutcome:
+                       samples: int, stage: str, instructions: str) -> VerifyOutcome:
     outcome = VerifyOutcome(query=query, golden_answer=golden_answer)
     augmented = AUGMENTED_QUERY + query
 
@@ -97,7 +97,7 @@ async def verify_query(ledger: Ledger, query: str, golden_answer, tools: list, *
         outcome.error = "LLM can solve this task"
         return outcome
 
-    agent_run = await ledger.agent(f"{stage}/agent", instructions=MEDICAL_RECORD_AGENT,
+    agent_run = await ledger.agent(f"{stage}/agent", instructions=instructions,
                                   input_text=augmented, tools=tools, output_type=AnswerList)
     if agent_run is None or agent_run.status != "completed":
         outcome.error = _failure(agent_run)

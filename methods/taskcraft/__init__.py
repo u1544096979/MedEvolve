@@ -88,12 +88,12 @@ async def generate_tasks(
                                    error=pipeline.failure or "TaskCraft produced no task")
         else:
             selected = pipeline.select()
-            result = budget.finish(directions, output=TaskBatch(
+            # 阶段失败已在 trace 中记录；有候选即按公共约束校验后返回，末次调用失败不改写整批状态。
+            result = budget.finish(directions, status="completed", output=TaskBatch(
                 questions=[candidate.question for candidate in selected]))
-            if result.status != "completed":
-                result = budget.finish(directions, status="failed",
-                                       error=result.error or pipeline.failure or
-                                       "TaskCraft output failed the shared constraints")
+            if result.status == "completed":
+                # 完成批次的失败调用保留在 trace，不在运行结果上重复报错。
+                result = result.model_copy(update={"error": None})
     except Exception as exc:
         result = budget.finish(directions, status="failed", error=f"{type(exc).__name__}: {exc}")
     finally:

@@ -132,6 +132,15 @@ class Pipeline:
         self.records.append(entry)
         return entry
 
+    def agent_instructions(self) -> str:
+        """病历工具只开放当前患者；正文里的资源引用中可能出现其他标识。"""
+        return (
+            f"{prompts.MEDICAL_RECORD_AGENT}\n"
+            f"本次开放的患者标识是 {self.trajectory.patient_id}；"
+            "所有病历工具的 patient 或 subject 参数都必须使用该标识，"
+            "不要使用正文中出现的其他患者号或资源引用。"
+        )
+
     def locator(self, source_ids: list[str]) -> str:
         labels = []
         for source_id in source_ids:
@@ -199,6 +208,7 @@ class Pipeline:
             outcome = await verify_query(
                 self.ledger, item["question"], item["answer"], self.tools,
                 samples=self.parameters.judge_samples, stage="atomic/verify",
+                instructions=self.agent_instructions(),
             )
             self.record("atomic/verify", question=item["question"], **outcome.record())
             if outcome.error is not None:
@@ -450,7 +460,8 @@ class Pipeline:
                 continue
             now_query = backward["query"]
             verify = await verify_query(self.ledger, now_query, last_identifier, self.tools,
-                                       samples=self.parameters.judge_samples, stage="depth/verify")
+                                        samples=self.parameters.judge_samples, stage="depth/verify",
+                                        instructions=self.agent_instructions())
             self.record("depth/verify", attempt=attempt, question=now_query, **verify.record())
             if verify.error is not None or not verify.agent_score:
                 continue
@@ -490,7 +501,7 @@ class Pipeline:
     async def _backward(self, prompts_depth: dict, element: str) -> dict | None:
         """DepthExtend.backward：找 superset、校验关系、生成新问题。"""
         payload = prompts_depth["backward_task_prompt"].replace("{element}", element)
-        run = await self.ledger.agent("depth/backward", instructions=prompts.MEDICAL_RECORD_AGENT,
+        run = await self.ledger.agent("depth/backward", instructions=self.agent_instructions(),
                                      input_text=payload, tools=self.tools, output_type=BackwardContext)
         if run is None or run.status != "completed":
             self.record("depth/backward", status=_status(run), error=_error(run), element=element)

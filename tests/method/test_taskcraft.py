@@ -80,7 +80,7 @@ class FakeRuntime:
     def __init__(self, *, task_types=("诊断与解释", "治疗规划"), conclusions=None,
                  llm_answer="无工具无法确定", agent_answer="5.9 mmol/L",
                  superset_state="valid", off_type=None, merge_valid=True,
-                 decompose_states=None, width_answer="无法确定"):
+                 decompose_states=None, width_answer="无法确定", backward_failure=False):
         self.task_types = list(task_types)
         self.conclusions = conclusions if conclusions is not None else [
             {"conclusion": "2024-03-05 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
@@ -95,8 +95,10 @@ class FakeRuntime:
         self.merge_valid = merge_valid
         self.decompose_states = decompose_states or {}
         self.width_answer = width_answer
+        self.backward_failure = backward_failure
         self.llm_calls = []
         self.agent_calls = []
+        self.agent_instructions = []
         self.log = []
         self.question_index = 0
 
@@ -148,6 +150,7 @@ class FakeRuntime:
     async def run_agent(self, *, model, instructions, input_text, tools, output_type, budget):
         names = [tool.name for tool in tools]
         assert names and all(name in READ_ONLY_TOOLS for name in names), names
+        self.agent_instructions.append(instructions)
         self.agent_calls.append(output_type.__name__)
         self.log.append(("agent", output_type.__name__, input_text))
         trace = [{"type": "tool_start", "name": "fhir_observation_search_labs",
@@ -159,6 +162,10 @@ class FakeRuntime:
                              usage={"model_turns": 2, "tool_calls": 1, "input_tokens": 30,
                                     "output_tokens": 10, "total_tokens": 40},
                              status="completed")
+        if output_type is BackwardContext and self.backward_failure:
+            return RunResult(trace=[{"type": "run_error", "error": "UserError: mis-scoped patient"}],
+                             usage={"model_turns": 1, "tool_calls": 1}, status="failed",
+                             error="UserError: mis-scoped patient")
         if output_type is BackwardContext:
             return RunResult(output={"identifier": BLOCK_B, "relation": "该问题条目下的检验结果",
                                      "source_ids": [BLOCK_B]}, trace=trace,
@@ -358,6 +365,22 @@ async def test_width_extension_rejects_question_the_model_answers_without_record
     assert not [candidate for candidate in pool if candidate["origin"] == "width"]
     scores = stage_records(result, "width/answer_score")
     assert scores and scores[0]["llm_score"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_failed_extension_stage_does_not_discard_produced_candidates(patched, environment):
+    fake = FakeRuntime(backward_failure=True)
+    patched(fake)
+    result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
+
+    assert result.status == "completed", result.error
+    batch = TaskBatch.model_validate(result.output)
+    assert batch.questions, "深度阶段失败时仍应返回已通过核验的候选"
+    failures = [entry for entry in result.trace
+                if entry.get("stage", "").startswith("depth/") and
+                entry["result"]["status"] == "failed"]
+    assert failures, "失败记录必须保留在 trace 中"
+    assert not [candidate for candidate in pipeline_pool(result) if candidate["origin"] == "depth"]
 
 
 @pytest.mark.asyncio
