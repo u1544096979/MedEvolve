@@ -15,7 +15,7 @@ from agents import Tool
 
 from contracts import JsonObject
 from environments.errors import PatientAccessError
-from environments.fhir import FHIRClient, owners, patient_id
+from environments.fhir import FHIRClient, owners, patient_id, references
 
 
 class NativeTools(list[Tool]):
@@ -58,26 +58,39 @@ class NativeTools(list[Tool]):
                         patient_id(part.strip()) for part in value.split(",")
                     )
             if selected and not selected.issubset(self.patient_ids):
-                raise PatientAccessError("FHIR request selects a patient outside the allowed scope")
-            if resource_type != "Patient":
-                query_params = [
-                    pair for pair in query_params if pair[0] not in {"patient", "subject"}
-                ]
+                raise PatientAccessError(
+                    "FHIR request selects a patient outside the allowed scope"
+                )
+            if resource_type == "Patient" and not selected:
+                query_params.append(("_id", ",".join(self.patient_ids)))
+            elif resource_type != "Patient" and not selected:
                 query_params.append(
-                    ("patient", ",".join(sorted(selected or set(self.patient_ids))))
+                    ("patient", ",".join(self.patient_ids))
                 )
             query_params.append(("_format", "json"))
             request_url = urlunsplit(
                 (base.scheme, base.netloc, target.path, urlencode(query_params), "")
             )
             request = {"action": original, "url": request_url, "payload": None}
-            async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
-                response = await client.get(
-                    request_url, headers={"Accept": "application/fhir+json"}
-                )
-                response.raise_for_status()
-                result = response.json()
-            if result.get("resourceType") == "Bundle":
+            try:
+                async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+                    response = await client.get(
+                        request_url, headers={"Accept": "application/fhir+json"}
+                    )
+                    response.raise_for_status()
+                    result = (
+                        response.json()
+                        if response.headers.get("Content-Type") == "application/json"
+                        else response.text
+                    )
+            except Exception as exc:
+                return {
+                    "kind": "GET",
+                    "request": request,
+                    "reply": f"Error in sending the GET request: {exc}",
+                    "failure_category": "environment_error",
+                }
+            if isinstance(result, dict) and result.get("resourceType") == "Bundle":
                 entries = result.get("entry", [])
                 if resource_type == "Patient":
                     result["entry"] = [
@@ -88,11 +101,18 @@ class NativeTools(list[Tool]):
                 else:
                     for entry in entries:
                         resource = entry.get("resource", {})
-                        self._client._check_resource(resource, selected or set(self.patient_ids))
+                        self._client._check_resource(
+                            resource, selected or set(self.patient_ids)
+                        )
             return {
                 "kind": "GET",
                 "request": request,
-                "reply": json.dumps(result, ensure_ascii=False),
+                "reply": (
+                    "Here is the response from the GET request:\n"
+                    f"{result}. Please call FINISH if you have got answers for all "
+                    "the questions and finished all the requested tasks"
+                ),
+                "data": result,
             }
 
         if action.startswith("POST"):
@@ -121,13 +141,24 @@ class NativeTools(list[Tool]):
             except (json.JSONDecodeError, TypeError):
                 return {"kind": "POST", "request": request, "reply": "Invalid POST request"}
             request["payload"] = payload
-            target_patients = owners(payload) if isinstance(payload, dict) else set()
-            if len(target_patients) != 1 or not target_patients.issubset(self.patient_ids):
-                raise PatientAccessError("POST must target exactly one allowed patient")
-            self._client._check_resource(payload, target_patients)
-            if payload.get("resourceType") != resource_type:
-                return {"kind": "POST", "request": request, "reply": "Invalid POST request"}
-            return {"kind": "POST", "request": request, "reply": "POST request accepted and executed successfully. Please call FINISH if you have got answers for all the questions and finished all the requested tasks"}
+            if isinstance(payload, dict):
+                target_patients = owners(payload)
+                if not target_patients.issubset(self.patient_ids):
+                    raise PatientAccessError("POST targets a patient outside the allowed scope")
+                for ref in references(payload):
+                    if ref.startswith("Patient/") and patient_id(ref) not in self.patient_ids:
+                        raise PatientAccessError(
+                            "POST references a patient outside the allowed scope"
+                        )
+            return {
+                "kind": "POST",
+                "request": request,
+                "reply": (
+                    "POST request accepted and executed successfully. Please call "
+                    "FINISH if you have got answers for all the questions and finished "
+                    "all the requested tasks"
+                ),
+            }
 
         if action.startswith("FINISH(") and action.endswith(")"):
             raw_answers = action[len("FINISH("):-1]

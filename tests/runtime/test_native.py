@@ -146,6 +146,34 @@ async def test_native_environment_error_is_returned_as_feedback_and_not_clinical
 
 
 @pytest.mark.asyncio
+async def test_get_http_feedback_continues_but_finish_is_environment_failure(monkeypatch):
+    requests = install_transport(monkeypatch, [
+        {"role": "assistant", "content": "GET Observation?patient=p1"},
+        {"role": "assistant", "content": 'FINISH(["result"])'},
+    ])
+    tools = native_tools()
+
+    async def execute(action):
+        if action.startswith("FINISH("):
+            return {"kind": "FINISH", "request": {"action": action},
+                    "reply": "FINISH", "answers": ["result"]}
+        return {"kind": "GET", "request": {"action": action},
+                "reply": "Error in sending the GET request: HTTPStatusError",
+                "failure_category": "environment_error"}
+
+    monkeypatch.setattr(tools, "execute", execute)
+    result = await run_agent(instructions="Solve", input_text="patient", tools=tools,
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=2, max_tool_calls=1))
+    assert result.status == "failed"
+    assert result.output == {"answer": '["result"]'}
+    assert len(requests) == 2
+    assert requests[1]["messages"][-1]["content"].startswith(
+        "Error in sending the GET request: HTTPStatusError")
+    assert result.trace[-1]["failure_category"] == "environment_error"
+
+
+@pytest.mark.asyncio
 async def test_native_invalid_action_fails_without_another_model_call(monkeypatch):
     requests = install_transport(monkeypatch, [
         {"role": "assistant", "content": "I will now retrieve the chart."},

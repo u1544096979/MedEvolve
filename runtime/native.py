@@ -156,6 +156,10 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                 try:
                     result = await tools.execute(action)
                     reply = result.get("reply", "")
+                    if result.get("failure_category") == "environment_error":
+                        env_failed = True
+                        trace.append({"type": "run_error", "failure_category": "environment_error",
+                                      "error": _redact_secret(str(reply), model)})
                 except Exception as exc:
                     tool_exception = True
                     env_failed = True
