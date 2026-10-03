@@ -380,7 +380,8 @@ async def test_failed_extension_stage_does_not_discard_produced_candidates(patch
                 if entry.get("stage", "").startswith("depth/") and
                 entry["result"]["status"] == "failed"]
     assert failures, "失败记录必须保留在 trace 中"
-    assert not [candidate for candidate in pipeline_pool(result) if candidate["origin"] == "depth"]
+    pool = pipeline_pool(result)
+    assert not [candidate for candidate in pool if candidate["origin"] == "depth"]
 
 
 @pytest.mark.asyncio
@@ -403,13 +404,47 @@ async def test_cumulative_budget_exhaustion_keeps_usage_and_full_batch_cost(patc
     fake = FakeRuntime()
     patched(fake)
     result = await generate_tasks(trajectory(), environment, directions(),
-                                  runtime_config(max_model_turns=3))
+                                  runtime_config(max_model_turns=2),
+                                  parameters=TaskCraftParameters(atomic_budget_share=1.0))
 
     assert result.status == "budget_exhausted" and result.output is None
-    assert result.usage["model_turns"] == 3
-    assert len(fake.llm_calls) + len(fake.agent_calls) == 3
+    assert result.usage["model_turns"] == 2
+    assert len(fake.llm_calls) + len(fake.agent_calls) == 2
     assert result.trace[-1]["stage"] == "taskcraft/pipeline"
     assert result.trace[-1]["records"]
+
+
+@pytest.mark.asyncio
+async def test_atomic_stage_stops_at_its_budget_share(patched, environment):
+    conclusions = [{"conclusion": f"2024-03-0{index} 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
+                    "source_ids": [BLOCK_A]} for index in range(1, 5)]
+    fake = FakeRuntime(conclusions=conclusions)
+    patched(fake)
+    result = await generate_tasks(trajectory(), environment, directions(),
+                                  runtime_config(max_model_turns=60))
+
+    assert result.status == "completed", result.error
+    skipped = [entry for entry in stage_records(result, "atomic/verify")
+               if entry.get("status") == "skipped"]
+    assert skipped and skipped[0]["share_limit"] == 30
+    accepted = [entry for entry in stage_records(result, "atomic/result")][0]
+    assert 0 < accepted["accepted"] < accepted["generated"]
+    assert len(fake.llm_calls) + len(fake.agent_calls) < 60
+
+
+@pytest.mark.asyncio
+async def test_extension_stage_keeps_a_guard_so_the_batch_completes(patched, environment):
+    fake = FakeRuntime(backward_failure=False)
+    patched(fake)
+    result = await generate_tasks(trajectory(), environment, directions(),
+                                  runtime_config(max_model_turns=45, max_tool_calls=40))
+
+    assert result.status == "completed", result.error
+    assert TaskBatch.model_validate(result.output).questions
+    guards = [entry for entry in stage_records(result, "depth/extension")
+              if entry.get("status") == "skipped"]
+    assert guards and guards[0]["reason"] == "剩余预算不足以完成一跳"
+    assert result.usage["model_turns"] <= 45
 
 
 @pytest.mark.asyncio

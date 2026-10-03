@@ -25,6 +25,15 @@ class Ledger:
             stage, instructions=instructions, input_text=input_text, tools=tools,
             output_type=output_type))
 
+    def limit_turns(self) -> int:
+        return self.budget.limit.max_model_turns
+
+    def used_turns(self) -> int:
+        return self.limit_turns() - self.budget.remaining().max_model_turns
+
+    def remaining_turns(self) -> int:
+        return self.budget.remaining().max_model_turns
+
     def _track(self, run):
         if run.status == "budget_exhausted":
             self.exhausted = True

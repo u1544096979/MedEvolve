@@ -40,6 +40,10 @@ class TaskCraftParameters(BaseModel):
     chunk_size: int = 16384               # gen_atomic_tasks(chunk_size=16384)
     max_candidate_conclusions: int = 20   # gen_atomic_tasks(max_candiated_conclusions=20)
     max_candidate_atomic: int = 10        # gen_atomic_tasks(max_candidate_atomic=10)
+    # 源码循环与内置核验的预算边界：原子阶段最多使用该比例的生成预算。
+    atomic_budget_share: float = 0.5
+    # 剩余模型轮数低于该值时不启动新的扩展跳，保证阶段在有界预算内结束。
+    extension_guard_turns: int = 25
     judge_samples: int = 3                # VerifyAgent.recall_score(num_parallel_predictions=3)
     question_attempts: int = 3            # gen_atomic_task 各检索/生成步骤的重试次数
     query_attempts: int = 3               # DepthExtend.backward: for _ in range(3)
@@ -188,9 +192,12 @@ class Pipeline:
         if not conclusions:
             self.failure = self.failure or "原子阶段没有抽取到候选结论"
 
+        share_limit = int(self.ledger.limit_turns() * self.parameters.atomic_budget_share)
         generated = []
         for conclusion in conclusions:
-            if self.ledger.exhausted:
+            if self.ledger.exhausted or self.ledger.used_turns() >= share_limit:
+                self.record("atomic/question", status="skipped", reason="原子阶段预算份额已用尽",
+                            share_limit=share_limit, used=self.ledger.used_turns())
                 break
             question = await self._initial_question(conclusion)
             if question is None:
@@ -203,8 +210,11 @@ class Pipeline:
 
         accepted = []
         for item in generated:
-            if self.ledger.exhausted:
-                break
+            if self.ledger.exhausted or self.ledger.used_turns() >= share_limit:
+                self.record("atomic/verify", question=item["question"], status="skipped",
+                            reason="原子阶段预算份额已用尽", share_limit=share_limit,
+                            used=self.ledger.used_turns())
+                continue
             outcome = await verify_query(
                 self.ledger, item["question"], item["answer"], self.tools,
                 samples=self.parameters.judge_samples, stage="atomic/verify",
@@ -435,6 +445,11 @@ class Pipeline:
         for parent in atomic:
             if self.ledger.exhausted:
                 break
+            if self.ledger.remaining_turns() < self.parameters.extension_guard_turns:
+                self.record("depth/extension", status="skipped", reason="剩余预算不足以完成一跳",
+                            remaining=self.ledger.remaining_turns(),
+                            guard=self.parameters.extension_guard_turns)
+                break
             extended = await self._extend_depth(parent)
             if extended is not None:
                 results.append(extended)
@@ -454,6 +469,10 @@ class Pipeline:
         superset_sources: list[str] = []
         for attempt in range(self.parameters.extended_attempts):
             if self.ledger.exhausted:
+                break
+            if self.ledger.remaining_turns() < self.parameters.extension_guard_turns:
+                self.record("depth/extension", status="skipped", attempt=attempt,
+                            reason="剩余预算不足以完成一跳", remaining=self.ledger.remaining_turns())
                 break
             backward = await self._backward(prompts_depth, last_identifier)
             if backward is None:
