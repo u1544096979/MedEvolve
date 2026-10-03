@@ -134,22 +134,28 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
         if budget.max_model_turns == 0:
             raise MaxTurnsExceeded("Model turn budget exhausted")
         async with _client(model) as client:
-            agent_instructions = instructions
+            agent_instructions = instructions + (
+                "\n完成工具查询后，最终输出只返回符合以下 schema 的 JSON 对象，不加 Markdown 或正文。"
+                "\nReturn only a JSON object matching this schema:\n"
+                + json.dumps(output_type.model_json_schema(), ensure_ascii=False)
+            )
             agent_input = input_text
             if model.instructions_role == "user":
-                agent_instructions = None
                 agent_input = [
-                    {"role": "user", "content": instructions +
-                     "\nReturn only a JSON object matching this schema:\n" +
-                     json.dumps(output_type.model_json_schema(), ensure_ascii=False)},
+                    {"role": "user", "content": agent_instructions},
                     {"role": "user", "content": input_text},
                 ]
+                agent_instructions = None
             agent = Agent(
                 name="MedEvolve", instructions=agent_instructions, tools=tools,
                 # Shared contracts include open dictionaries, which strict schemas reject.
                 output_type=AgentOutputSchema(output_type, strict_json_schema=False),
                 model=OpenAIChatCompletionsModel(model=model.model, openai_client=client),
-                model_settings=ModelSettings(parallel_tool_calls=model.parallel_tool_calls),
+                model_settings=ModelSettings(
+                    parallel_tool_calls=model.parallel_tool_calls,
+                    extra_body={"response_format": {"type": "json_object"}}
+                    if urlparse(model.base_url or "").hostname == "opencode.ai" else None,
+                ),
             )
             result = await Runner.run(
                 agent, agent_input, hooks=records, max_turns=budget.max_model_turns,
