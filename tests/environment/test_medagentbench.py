@@ -90,6 +90,27 @@ async def test_native_get_post_finish_and_instance_boundary(fhir):
         await tools.execute("GET " + tools.endpoint + "Observation?patient=p2")
     with pytest.raises(PatientAccessError):
         await tools.execute("POST " + tools.endpoint + "MedicationRequest\n" + json.dumps({"resourceType": "MedicationRequest", "subject": {"reference": "Patient/p2"}}))
+    with pytest.raises(PatientAccessError):
+        await tools.execute("POST " + tools.endpoint + "Observation\n" + json.dumps({"resourceType": "Observation", "valueString": "no owner"}))
+    with pytest.raises(PatientAccessError):
+        await tools.execute("POST " + tools.endpoint + "Observation\n[1, 2]")
+    with pytest.raises(PatientAccessError):
+        await tools.execute("POST " + tools.endpoint + "Observation\n" + json.dumps({
+            "resourceType": "Observation", "subject": {"reference": "Patient/p1"},
+            "patient": {"reference": "Patient/p2"},
+        }))
+    both_allowed = NativeTools(tools.endpoint, ["p1", "p2"], load_functions())
+    with pytest.raises(PatientAccessError):
+        await both_allowed.execute("POST " + both_allowed.endpoint + "Observation\n" + json.dumps({
+            "resourceType": "Observation", "subject": {"reference": "Patient/p1"},
+            "patient": {"reference": "Patient/p2"},
+        }))
+    with pytest.raises(PatientAccessError):
+        await tools.execute("POST " + tools.endpoint + "Observation\n" + json.dumps({
+            "resourceType": "Observation", "subject": {"reference": "Patient/p1"},
+            "extension": [{"valueReference": {"reference": "Patient/p2"}}],
+        }))
+    assert len(requests) == 1
 
 
 @pytest.mark.asyncio

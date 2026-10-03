@@ -141,15 +141,21 @@ class NativeTools(list[Tool]):
             except (json.JSONDecodeError, TypeError):
                 return {"kind": "POST", "request": request, "reply": "Invalid POST request"}
             request["payload"] = payload
-            if isinstance(payload, dict):
+            if not isinstance(payload, dict):
+                raise PatientAccessError("POST payload must identify exactly one allowed patient")
+            try:
                 target_patients = owners(payload)
-                if not target_patients.issubset(self.patient_ids):
-                    raise PatientAccessError("POST targets a patient outside the allowed scope")
-                for ref in references(payload):
-                    if ref.startswith("Patient/") and patient_id(ref) not in self.patient_ids:
-                        raise PatientAccessError(
-                            "POST references a patient outside the allowed scope"
-                        )
+            except (KeyError, TypeError, AttributeError) as exc:
+                raise PatientAccessError(
+                    "POST payload must identify exactly one allowed patient"
+                ) from exc
+            if len(target_patients) != 1 or not target_patients.issubset(self.patient_ids):
+                raise PatientAccessError("POST must target exactly one allowed patient")
+            for ref in references(payload):
+                if ref.startswith("Patient/") and patient_id(ref) not in self.patient_ids:
+                    raise PatientAccessError(
+                        "POST references a patient outside the allowed scope"
+                    )
             return {
                 "kind": "POST",
                 "request": request,
