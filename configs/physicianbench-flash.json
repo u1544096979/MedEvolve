@@ -3,7 +3,7 @@
   "method": "medevolve",
   "environment": {
     "name": "PhysicianBench",
-    "manager_url": "http://10.7.0.15:18084",
+    "manager_url": "http://127.0.0.1:18084",
     "seed_data": "fhir-full:v1"
   },
   "runtime": {
