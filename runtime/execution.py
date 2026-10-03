@@ -137,6 +137,17 @@ class _Records(RunHooks):
 async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                     output_type: type[BaseModel], model: ModelConfig,
                     budget: Budget) -> RunResult:
+    from environments.medagentbench import NativeTools
+
+    if isinstance(tools, NativeTools):
+        from .native import run_native_agent
+
+        return await run_native_agent(
+            instructions=instructions, input_text=input_text, tools=tools,
+            output_type=output_type, model=model, budget=budget,
+            client_factory=_client, result_factory=_result,
+        )
+
     records = _Records(budget)
     try:
         if any(not isinstance(tool, FunctionTool) for tool in tools):
