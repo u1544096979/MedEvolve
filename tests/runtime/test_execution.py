@@ -199,3 +199,33 @@ async def test_opencode_sdk_tool_loop_uses_json_object(monkeypatch):
         assert request["response_format"] == {"type": "json_object"}
         assert '"answer"' in request["messages"][0]["content"]
         assert "Return only a JSON object" in request["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_opencode_preserves_literal_newlines_in_answer(monkeypatch):
+    requests = install_transport(monkeypatch, [TOOL_MESSAGE,
+        {"role": "assistant", "content": '{"answer":"patient found\nfollow-up required"}'}])
+
+    @function_tool
+    async def lookup() -> str:
+        """Read patient facts."""
+        return "patient found"
+
+    result = await run_agent(instructions="Read and answer", input_text="patient",
+        tools=[lookup], output_type=SolverAnswer,
+        model=MODEL.model_copy(update={"base_url": "https://opencode.ai/zen/go/v1"}),
+        budget=Budget(max_model_turns=2, max_tool_calls=1))
+    assert result.status == "completed", result.error
+    assert result.output == {"answer": "patient found\nfollow-up required"}
+    assert len(requests) == 2
+    assert result.usage["tool_calls"] == 1
+    message = next(o for o in result.trace[-1]["output"] if o["type"] == "message")
+    assert message["content"][0]["text"] == '{"answer":"patient found\nfollow-up required"}'
+
+
+def test_opencode_still_rejects_wrong_schema_and_invalid_structure():
+    from agents.exceptions import ModelBehaviorError
+    schema = execution._OpenCodeOutputSchema(SolverAnswer, strict_json_schema=False)
+    for raw in ['{"answer":', '{"wrong":"field"}']:
+        with pytest.raises(ModelBehaviorError):
+            schema.validate_json(raw)

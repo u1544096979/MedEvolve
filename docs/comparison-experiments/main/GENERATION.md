@@ -16,7 +16,7 @@
 
 实验逐次创建、使用并释放环境，前一个环境释放后才启动下一个；环境测试与实验不并行运行。每个环境使用独立可写层及数据卷。
 
-OpenCode 工具 Agent 使用 JSON object 请求格式，角色指令包含最终输出 schema；SDK 在本地校验返回对象。工具探索和解题保留标准 Agents SDK 执行，不增加答案修复调用。
+OpenCode 工具 Agent 使用 JSON object 请求格式，角色指令包含最终输出 schema；SDK 在本地校验返回对象；OpenCode 的 JSON 字符串允许保留未转义换行等控制字符，解析后仍按同一 schema 校验，原始响应留在 trace 中。工具探索和解题保留标准 Agents SDK 执行，不增加答案修复调用。
 
 ## 小样本验证
 
