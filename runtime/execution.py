@@ -20,6 +20,16 @@ from contracts import Budget, ModelConfig, RunResult
 _OPENCODE_SESSION = str(uuid4())
 
 
+class _OpenCodeOutputSchema(AgentOutputSchema):
+    def validate_json(self, json_str):
+        # OpenCode can return literal newlines inside quoted answer strings.
+        try:
+            parsed = json.loads(json_str, strict=False)
+        except ValueError:
+            return super().validate_json(json_str)
+        return super().validate_json(json.dumps(parsed, ensure_ascii=False))
+
+
 class _ToolBudgetExceeded(AgentsException):
     pass
 
@@ -149,7 +159,10 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
             agent = Agent(
                 name="MedEvolve", instructions=agent_instructions, tools=tools,
                 # Shared contracts include open dictionaries, which strict schemas reject.
-                output_type=AgentOutputSchema(output_type, strict_json_schema=False),
+                output_type=(
+                    _OpenCodeOutputSchema if urlparse(model.base_url or "").hostname == "opencode.ai"
+                    else AgentOutputSchema
+                )(output_type, strict_json_schema=False),
                 model=OpenAIChatCompletionsModel(model=model.model, openai_client=client),
                 model_settings=ModelSettings(
                     parallel_tool_calls=model.parallel_tool_calls,
