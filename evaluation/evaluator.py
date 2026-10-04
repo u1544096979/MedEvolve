@@ -127,7 +127,8 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
                 run = await model_run(
                     runtime.call_llm, role="verifier", schema=Verification,
                     instructions=prompts.VERIFIER,
-                    payload={"task": material["task"], "evidence_records": evidence_records},
+                    payload={"task": material["task"], "evidence_records": evidence_records,
+                             "trajectory": material["trajectory"]},
                 )
                 result.verification = _output(run, Verification)
         finally:

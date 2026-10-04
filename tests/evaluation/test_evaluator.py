@@ -216,6 +216,38 @@ def test_invalid_task_stops_before_solver_and_releases_instance(harness):
     assert "private-reference" not in h.model_calls[0]["input_text"]
 
 
+def test_full_trajectory_contradiction_stops_after_citation_check(harness, monkeypatch):
+    h = harness
+    h.task = h.task.model_copy(update={"reference_answer": "没有肾功能记录"})
+    h.trajectory = h.trajectory.model_copy(update={
+        "text": "source-1：医嘱；uncited-egfr：eGFR 51 mL/min/1.73 m2，LOW",
+        "sources": h.trajectory.sources + [Evidence(
+            source_id="uncited-egfr", statement="eGFR 51 mL/min/1.73 m2，LOW"
+        )],
+    })
+    original = sys.modules["runtime"].call_llm
+
+    async def review(**kwargs):
+        payload = json.loads(kwargs["input_text"])
+        if "evidence_records" in payload:
+            assert payload["trajectory"]["text"] == h.trajectory.text
+            assert payload["trajectory"]["sources"][-1] == {"source_id": "uncited-egfr"}
+            assert payload["evidence_records"][0]["source_id"] == "source-1"
+            assert "private-method" not in kwargs["input_text"]
+            h.model_calls.append(kwargs)
+            return RunResult(output={"valid": False, "reason": "uncited-egfr 与答案矛盾"},
+                             trace=[], usage={}, status="completed")
+        return await original(**kwargs)
+
+    monkeypatch.setattr(sys.modules["runtime"], "call_llm", review)
+    result = evaluate(h)
+    assert result.status == "invalid"
+    assert result.verification.reason == "uncited-egfr 与答案矛盾"
+    assert result.solver_run is None
+    assert len(h.model_calls) == 2
+    assert h.released == h.created
+
+
 @pytest.mark.parametrize("evidence, expected_reason", [
     ([], "no evidence"),
     ([Evidence(source_id="missing", statement="unsupported")], "absent from trajectory"),
