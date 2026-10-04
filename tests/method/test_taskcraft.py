@@ -9,8 +9,10 @@ import pytest
 
 from contracts import (
     Budget, EnvironmentConfig, EnvironmentInstance, Evidence, GenerationDirection,
-    ModelConfig, PatientTrajectory, RunResult, RuntimeConfig, TaskBatch,
+    ModelConfig, PatientTrajectory, RunResult, RuntimeConfig, SolverAnswer, TaskBatch,
 )
+from environments.medagentbench import NativeTools
+from methods.taskcraft.environment import is_native
 from methods.taskcraft import READ_ONLY_TOOLS, TaskCraftParameters, generate_tasks
 from methods.taskcraft.schemas import (
     AnswerList, AnswerScore, BackwardContext, CleanedQuestion, ConclusionList,
@@ -99,6 +101,8 @@ class FakeRuntime:
         self.llm_calls = []
         self.agent_calls = []
         self.agent_instructions = []
+        self.agent_inputs = []
+        self.agent_output_types = []
         self.log = []
         self.question_index = 0
 
@@ -148,15 +152,26 @@ class FakeRuntime:
         raise AssertionError(f"unexpected output type: {output_type}")
 
     async def run_agent(self, *, model, instructions, input_text, tools, output_type, budget):
-        names = [tool.name for tool in tools]
-        assert names and all(name in READ_ONLY_TOOLS for name in names), names
+        if is_native(tools):
+            assert instructions
+        else:
+            names = [tool.name for tool in tools]
+            assert names and all(name in READ_ONLY_TOOLS for name in names), names
         self.agent_instructions.append(instructions)
+        self.agent_inputs.append(input_text)
+        self.agent_output_types.append(output_type.__name__)
         self.agent_calls.append(output_type.__name__)
         self.log.append(("agent", output_type.__name__, input_text))
         trace = [{"type": "tool_start", "name": "fhir_observation_search_labs",
                   "call_id": "call-1", "arguments": "{}"},
                  {"type": "tool_output", "name": "fhir_observation_search_labs",
                   "call_id": "call-1", "output": "{}"}]
+        if output_type is SolverAnswer:
+            return RunResult(output={"answer": json.dumps([self.agent_answer], ensure_ascii=False)},
+                             trace=trace,
+                             usage={"model_turns": 2, "tool_calls": 1, "input_tokens": 30,
+                                    "output_tokens": 10, "total_tokens": 40},
+                             status="completed")
         if output_type is AnswerList:
             return RunResult(output={"answer_list": [self.agent_answer]}, trace=trace,
                              usage={"model_turns": 2, "tool_calls": 1, "input_tokens": 30,
@@ -185,10 +200,12 @@ def environment():
 def patched(monkeypatch):
     """接入替身运行层与环境，返回 (fake, 记录表)。"""
 
-    def install(fake, *, tools_fail=False):
+    def install(fake, *, tools_fail=False, native=False):
         state = {"created": 0, "released": 0, "patients": None}
         tools = [SimpleNamespace(name=name) for name in READ_ONLY_TOOLS]
         tools.append(SimpleNamespace(name="fhir_medication_request_create"))
+        if native:
+            tools = NativeTools("http://unused/fhir/", [PATIENT], [])
 
         async def create(config):
             state["created"] += 1
@@ -199,7 +216,7 @@ def patched(monkeypatch):
             if tools_fail:
                 raise RuntimeError("tools unavailable")
             state["patients"] = patient_ids
-            return list(tools)
+            return tools
 
         async def release(config, instance):
             state["released"] += 1
@@ -240,6 +257,37 @@ async def test_atomic_stage_filters_scores_and_binds_patient_evidence(patched, e
         assert question.evidence
         assert {item.source_id for item in question.evidence} <= {BLOCK_A, BLOCK_B}
         assert question.decision_point is None
+
+
+@pytest.mark.asyncio
+async def test_native_environment_keeps_native_actions_and_parses_finish_answers(patched, environment):
+    fake = FakeRuntime()
+    patched(fake, native=True)
+    result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
+
+    assert result.status == "completed", result.error
+    assert TaskBatch.model_validate(result.output).questions
+    # 原生协议：整份工具对象透传，Agent 用 FINISH 答案列表返回，说明里禁止 POST。
+    assert fake.agent_output_types.count("SolverAnswer") >= 1
+    assert "AnswerList" not in fake.agent_output_types
+    assert all("只发送 GET" in text for text in fake.agent_instructions)
+    assert any("FINISH([{" in text for text in fake.agent_inputs)
+    # FINISH 的答案列表进入评分提示词，说明答案已从原生协议解析出来。
+    scored = [text for kind, _, text in fake.log if kind == "llm" and "Other Answer:" in text]
+    assert any("Other Answer: ['5.9 mmol/L']" in text for text in scored)
+    verifications = stage_records(result, "atomic/verify")
+    assert [entry["agent_score"] for entry in verifications] == [2.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_function_tool_environment_keeps_physicianbench_answers(patched, environment):
+    fake = FakeRuntime()
+    patched(fake)
+    result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
+
+    assert result.status == "completed"
+    assert "AnswerList" in fake.agent_output_types
+    assert all("只发送 GET" not in text for text in fake.agent_instructions)
 
 
 @pytest.mark.asyncio
