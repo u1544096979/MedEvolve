@@ -18,6 +18,7 @@ from contracts import Evidence, GeneratedQuestion, PatientTrajectory
 from pydantic import BaseModel
 
 from . import prompts
+from .environment import NATIVE_FINISH_OBJECT, NATIVE_RULES, is_native
 from .ledger import Ledger
 from .schemas import (
     AnswerList, BackwardContext, CleanedQuestion, ConclusionList, DecompositionReport,
@@ -123,6 +124,7 @@ class Pipeline:
         self.directions = directions
         self.parameters = parameters
         self.ledger = ledger
+        self.native = is_native(tools)
         self.allowed_types = list(dict.fromkeys(direction.task_type for direction in directions))
         self.records: list[dict] = []
         self.pool: list[Candidate] = []
@@ -138,12 +140,13 @@ class Pipeline:
 
     def agent_instructions(self) -> str:
         """病历工具只开放当前患者；正文里的资源引用中可能出现其他标识。"""
-        return (
+        text = (
             f"{prompts.MEDICAL_RECORD_AGENT}\n"
             f"本次开放的患者标识是 {self.trajectory.patient_id}；"
             "所有病历工具的 patient 或 subject 参数都必须使用该标识，"
             "不要使用正文中出现的其他患者号或资源引用。"
         )
+        return f"{text}\n{NATIVE_RULES}" if self.native else text
 
     def locator(self, source_ids: list[str]) -> str:
         labels = []
@@ -520,6 +523,8 @@ class Pipeline:
     async def _backward(self, prompts_depth: dict, element: str) -> dict | None:
         """DepthExtend.backward：找 superset、校验关系、生成新问题。"""
         payload = prompts_depth["backward_task_prompt"].replace("{element}", element)
+        if self.native:
+            payload += f"\n{NATIVE_FINISH_OBJECT}"
         run = await self.ledger.agent("depth/backward", instructions=self.agent_instructions(),
                                      input_text=payload, tools=self.tools, output_type=BackwardContext)
         if run is None or run.status != "completed":

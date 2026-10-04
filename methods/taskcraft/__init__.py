@@ -9,37 +9,14 @@ from contracts import (
     TaskBatch,
 )
 from environments import create_environment, get_tools, release_environment
-from environments.errors import EnvironmentUnavailable
 from methods.common import GenerationBudget
 
+from .environment import READ_ONLY_TOOLS, bind_generation_tools, read_only_tools
 from .ledger import Ledger
 from .prompts import AUTHOR_COMMIT
 from .stages import Pipeline, TaskCraftParameters
 
 __all__ = ["READ_ONLY_TOOLS", "TaskCraftParameters", "generate_tasks", "read_only_tools"]
-
-# 生成阶段的检索与核验只使用只读工具；写工具留给评测阶段的解题 Agent。
-READ_ONLY_TOOLS = (
-    "fhir_condition_search_problems",
-    "fhir_observation_search_labs",
-    "fhir_observation_search_vitals",
-    "fhir_patient_search_demographics",
-    "fhir_procedure_search_orders",
-    "fhir_medication_request_search_orders",
-    "fhir_document_reference_search_clinical_notes",
-    "fhir_service_request_search",
-    "fhir_observation_search_social_history",
-)
-
-
-def read_only_tools(tools: list) -> list:
-    selected = [tool for tool in tools if tool.name in READ_ONLY_TOOLS]
-    missing = sorted(set(READ_ONLY_TOOLS) - {tool.name for tool in selected})
-    if missing:
-        raise EnvironmentUnavailable(
-            f"TaskCraft requires the read-only medical tools, missing: {missing}"
-        )
-    return selected
 
 
 def _with_pipeline(result: RunResult, pipeline: Pipeline, parameters: TaskCraftParameters,
@@ -77,7 +54,7 @@ async def generate_tasks(
     pipeline = Pipeline(trajectory, [], directions, settings, ledger)
     try:
         instance = await create_environment(environment)
-        tools = read_only_tools(await get_tools(instance, [trajectory.patient_id]))
+        tools = bind_generation_tools(await get_tools(instance, [trajectory.patient_id]))
         pipeline = Pipeline(trajectory, tools, directions, settings, ledger)
         await pipeline.run()
         if ledger.exhausted:

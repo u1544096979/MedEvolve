@@ -5,8 +5,12 @@
 再交给病历工具 Agent 回答并打分。两个分数都保留。
 """
 
+import json
 from dataclasses import dataclass, field
 
+from contracts import SolverAnswer
+
+from .environment import NATIVE_FINISH_ANSWERS, is_native
 from .ledger import Ledger
 from .prompts import AUGMENTED_QUERY, LLM_ONLY_INSTRUCTIONS, verify_prompts
 from .schemas import AnswerList, AnswerScore
@@ -76,10 +80,21 @@ def _trajectory(run) -> list[dict]:
     return steps
 
 
+def _native_answer_list(output: dict) -> list[str]:
+    """原生协议把 FINISH 的答案列表序列化到 SolverAnswer.answer。"""
+    value = json.loads(SolverAnswer.model_validate(output).answer)
+    if not isinstance(value, list):
+        raise ValueError("FINISH must carry a JSON list of answers")
+    return [str(item) for item in value]
+
+
 async def verify_query(ledger: Ledger, query: str, golden_answer, tools: list, *,
                        samples: int, stage: str, instructions: str) -> VerifyOutcome:
     outcome = VerifyOutcome(query=query, golden_answer=golden_answer)
+    native = is_native(tools)
     augmented = AUGMENTED_QUERY + query
+    if native:
+        augmented += f"\n{NATIVE_FINISH_ANSWERS}"
 
     llm_run = await ledger.llm(f"{stage}/llm", instructions=LLM_ONLY_INSTRUCTIONS,
                               input_text=augmented, output_type=AnswerList)
@@ -98,11 +113,17 @@ async def verify_query(ledger: Ledger, query: str, golden_answer, tools: list, *
         return outcome
 
     agent_run = await ledger.agent(f"{stage}/agent", instructions=instructions,
-                                  input_text=augmented, tools=tools, output_type=AnswerList)
+                                  input_text=augmented, tools=tools,
+                                  output_type=SolverAnswer if native else AnswerList)
     if agent_run is None or agent_run.status != "completed":
         outcome.error = _failure(agent_run)
         return outcome
-    outcome.agent_answer = AnswerList.model_validate(agent_run.output).answer_list
+    try:
+        outcome.agent_answer = (_native_answer_list(agent_run.output) if native
+                                else AnswerList.model_validate(agent_run.output).answer_list)
+    except Exception as exc:
+        outcome.error = f"invalid agent answer: {type(exc).__name__}: {exc}"
+        return outcome
     outcome.agent_step_number = int(agent_run.usage.get("model_turns") or 0)
     outcome.agent_trajectory = _trajectory(agent_run)
     outcome.agent_score = await score_recall(ledger, golden_answer, outcome.agent_answer,
