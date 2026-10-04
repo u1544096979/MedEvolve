@@ -30,7 +30,8 @@ def patient():
     return PatientTrajectory(
         patient_id="MRN0001",
         environment="test",
-        text="2024-01-01 门诊记录：血压升高。2024-03-01 复诊：加用降压药。",
+        text='[2024-01-01] Observation/o1\n{"resourceType":"Observation","id":"o1","valueString":"158/96"}'
+             '\n\n[2024-03-01] MedicationRequest/m1\n{"resourceType":"MedicationRequest","id":"m1"}',
         sources=[
             Evidence(source_id="Observation/o1", statement="2024-01-01 血压 158/96 mmHg"),
             Evidence(source_id="MedicationRequest/m1", statement="2024-03-01 开始氨氯地平"),
@@ -120,7 +121,11 @@ async def test_stages_consume_previous_products_and_accumulate_cost(monkeypatch)
     assert payloads[0]["trajectory"]["sources"][0]["source_id"] == "Observation/o1"
     assert payloads[1]["focuses"][1]["clinical_focus"] == "降压方案的调整依据"
     assert payloads[1]["directions"][0]["task_type"] == "诊断与解释"
-    assert payloads[2]["candidates"] == [{**question, "decision_point": None} for question in candidates()]
+    assert payloads[2]["candidates"][0]["candidate"] == {**candidates()[0], "decision_point": None}
+    assert payloads[2]["candidates"][0]["evidence_records"] == [
+        {"source_id": "Observation/o1",
+         "record": '{"resourceType":"Observation","id":"o1","valueString":"158/96"}'},
+    ]
 
 
 @pytest.mark.asyncio

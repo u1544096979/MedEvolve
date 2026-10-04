@@ -1,6 +1,7 @@
 """Fixed-stage task generation: locate, generate and internally check."""
 
 import json
+import re
 
 from pydantic import BaseModel, Field
 
@@ -49,6 +50,13 @@ def _trajectory_input(trajectory: PatientTrajectory) -> dict:
         "text": trajectory.text,
         "sources": [{"source_id": source.source_id} for source in trajectory.sources],
     }
+
+
+def _records(trajectory: PatientTrajectory) -> dict[str, str]:
+    """Map source_id to its record body using the trajectory text produced for methods."""
+    parts = re.split(r"(?m)^\[[^\]]*\]\s*(\S+)\s*$", trajectory.text)
+    return {parts[index]: parts[index + 1].strip()
+            for index in range(1, len(parts) - 1, 2)}
 
 
 def _focuses(selection: FocusSelection) -> list[ClinicalFocus]:
@@ -127,14 +135,24 @@ async def generate_tasks(
         return budget.finish(directions, status="failed", error=f"generate: {type(exc).__name__}: {exc}")
     if not candidates:
         return budget.finish(directions, output=TaskBatch(questions=[]))
+    records = _records(trajectory)
 
     checked = await budget.call_llm(
         "check",
         instructions=INTERNAL_CHECK,
         input_text=json.dumps(
             {
-                "candidates": [question.model_dump(mode="json") for question in candidates],
-                "trajectory": _trajectory_input(trajectory),
+                "candidates": [
+                    {
+                        "candidate": question.model_dump(mode="json"),
+                        "evidence_records": [
+                            {"source_id": evidence.source_id,
+                             "record": records.get(evidence.source_id)}
+                            for evidence in question.evidence
+                        ],
+                    }
+                    for question in candidates
+                ]
             },
             ensure_ascii=False,
         ),
