@@ -20,14 +20,6 @@
 - 位置：`environments/__init__.py` 的 `prepare_trajectory` 与生成输入组装。
 - 建议：去除 `meta` 等管理字段、按需裁剪来源，或接入轨迹压缩。
 
-### 5. 工具声明未覆盖参数范围，且单次环境错误否决整轮
-
-- 现象：工具声明只列出部分筛选参数，模型据此补充标准 FHIR 参数后被服务拒绝；一次失败会使该轮整体记为环境错误。
-- 证据：MedAgentBench 解题轮中模型发出 `Condition?patient=...&status=active` 得到 400，去掉 `status` 重试成功并提交答案，但该轮仍记为 `failed / environment_error`，完成判定未产出（`medagentbench-envexplore-smallpatient-solverfix`）。
-- 影响：模型有能力完成任务仍被判失败，完成率被低估。
-- 位置：`environments/medagentbench-functions.json` 的函数声明与 `runtime/native.py` 的运行状态判定。
-- 建议：补全各查询支持的筛选参数，或对未知参数返回明确提示并允许重试后计入成功。
-
 ## 已修复
 
 环境探索既不探测也不停止：探索 Agent 要么重复同一批查询直到耗尽预算，要么完全不调用工具直接写出指导；PhysicianBench 运行 30 轮、66 次调用、仅 2 种不同参数、模型文本 0 条，以 `MaxTurnsExceeded` 结束，累计 1,579,360 input tokens（`physicianbench-envexplore-r5000`），换用 deepseek 后为 1 轮、0 次工具调用（`physicianbench-envexplore-deepseek`）。
@@ -44,3 +36,8 @@
 
 - 修复：`runtime/native.py` 对 `EnvironmentExploration` 与 `SolverAnswer` 分别追加提交说明，解题路径与 PhysicianBench 通道不变。
 - 验证：MedAgentBench 复跑后 2/2 题核验通过，解题提交真实答案，完成判定由 0/2 转为 1/2。
+
+工具声明未覆盖参数范围，且单次环境错误否决整轮：工具声明只列出部分筛选参数，模型据此补充标准 FHIR 参数后被服务拒绝；一次失败会使该轮整体记为环境错误。MedAgentBench 解题轮中模型发出 `Condition?patient=...&status=active` 得到 400，去掉 `status` 重试成功并提交答案，但该轮仍记为 `failed / environment_error`，完成判定未产出（`medagentbench-envexplore-smallpatient-solverfix`）。
+
+- 修复：`environments/medagentbench-functions.json` 只改描述不改参数表：Condition 改称按 patient 与 category 查询、MedicationRequest 改称按 patient 与 category 或 date 查询，Patient 去掉未声明的 `careProvider` 说法，各 GET 声明注明只支持表内参数、服务拒绝参数时修正后重试。`environments/medagentbench.py` 把 GET 的 HTTP 400 记为该轮可恢复的 `tool_error` 并回传状态码与服务原文，其余 HTTP 状态以及连接失败、超时仍为环境错误。`runtime/native.py` 新增 `pending_parameter_error`：可恢复错误只进 `tool_output` 记录，成功 GET 清除、POST 不清除，合法 FINISH 时未修正则记 `failed / tool_error`，真实环境失败与原有预算法则不变。
+- 验证：离线证据为 `tests/environment/test_medagentbench.py` 的分类矩阵（400 三种响应体、401、403、404、503、ConnectError、ReadTimeout）与声明结构测试，以及 `tests/runtime/test_native.py` 的参数错误恢复、400 后直接 FINISH、400 后预算耗尽、400 后 POST 再 FINISH、503 后成功 GET 再 FINISH 五条序列；观察到的失败请求形状为 `Condition?patient=...&status=active` 返回 400。上述序列用模拟传输，恢复后的端到端完成评价与真实服务返回的错误原文仍需一次实跑确认。
