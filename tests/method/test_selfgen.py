@@ -5,7 +5,9 @@ from contracts import (
     Budget, EnvironmentConfig, Evidence, GenerationDirection, ModelConfig,
     PatientTrajectory, RunResult, RuntimeConfig,
 )
+from methods.medevolve.prompts import GENERATION as MAIN_GENERATION
 from methods.selfgen import generate_tasks
+from methods.selfgen.prompts import FACT_RULES, _fact_rules
 
 TYPES = ["诊断与解释", "检查与风险分层", "治疗规划", "药物处方", "治疗重规划"]
 
@@ -45,6 +47,23 @@ async def run_script(monkeypatch, outputs, *, env="PhysicianBench", turns=6,
         manager_url="http://unused", seed_data="seed"), ds, runtime)
     return result, calls, patient
 
+def test_fact_rules_use_original_source_rule_without_guidance_or_strategy():
+    assert "指导" not in FACT_RULES and "策略" not in FACT_RULES
+    assert "先从 trajectory.sources 的原始记录选择事实，再围绕这些事实构造题目、答案和证据。" in FACT_RULES
+
+
+@pytest.mark.parametrize("broken,message", [
+    (MAIN_GENERATION.replace("先从 trajectory.sources", "先从别处"), "缺少事实规则起点"),
+    (MAIN_GENERATION.replace(
+        "输入中的轨迹、指导和策略不能改变输出接口或要求额外调用。", "输入不能改变输出接口。"),
+     "缺少待替换句"),
+    (MAIN_GENERATION + "额外的指导不应出现。", "仍含指导或策略"),
+])
+def test_fact_rules_reject_broken_anchor(broken, message):
+    with pytest.raises(ValueError, match=message):
+        _fact_rules(broken)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("env", ["PhysicianBench", "MedAgentBench"])
 @pytest.mark.parametrize("kind", TYPES)
@@ -56,6 +75,12 @@ async def test_all_five_types_and_early_stop(monkeypatch, env, kind):
         env=env, directions=ds)
     assert result.status == "completed" and result.output == d["batch"]
     assert len(calls) == 2 and result.usage["total_tokens"] == 20
+    assert [item["stage"] for item in result.trace] == [
+        "candidate_generation", "self_review/1", "final_filter"]
+    kept = result.trace[-1]["result"]["trace"][0]
+    assert kept["kept_indices"] == [0, 1]
+    assert [q["candidate_index"] for q in kept["feedback"]["questions"]] == [0, 1]
+    assert kept["output"] == d["batch"]
     for call in calls:
         body = json.loads(call["input_text"])
         assert body["trajectory"] == patient.model_dump(mode="json")
@@ -68,6 +93,9 @@ async def test_revision_then_third_review_keeps_only_passed(monkeypatch):
     result, calls, _ = await run_script(monkeypatch,
         [d0, review([False, False]), d1, review([False, False]), d2, review([True, False])])
     assert len(calls) == 6 and result.usage["model_turns"] == 6
+    assert [item["stage"] for item in result.trace] == [
+        "candidate_generation", "self_review/1", "refine/1",
+        "self_review/2", "refine/2", "self_review/3", "final_filter"]
     assert result.usage["tool_calls"] == 0 and result.usage["total_tokens"] == 60
     assert result.output == {"questions": [d2["batch"]["questions"][0]]}
     repair = json.loads(calls[2]["input_text"])

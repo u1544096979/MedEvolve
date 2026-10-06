@@ -31,22 +31,24 @@ def test_config_keeps_sampling_environment_and_model(source, target):
     assert config.runtime.budgets["generator"].model_dump() == BUDGET
     assert resolve_generator("selfgen") is generate_tasks
 
-def draft(kinds=KINDS):
+def draft(version="初稿", kinds=KINDS):
     return {"batch": {"questions": [dict(
-        instruction=f"{kind}-初稿", task_type=kind, reference_answer="答案-初稿",
+        instruction=f"{kind}-{version}", task_type=kind, reference_answer=f"答案-{version}",
         decision_point=None,
         evidence=[dict(source_id="Observation/1", statement="原始记录事实")],
     ) for kind in kinds]}, "direction_indices": list(range(len(kinds)))}
 
-def review(size):
-    return {"questions": [dict(candidate_index=index, passed=True, issues=[])
+def review(size, passed=True):
+    return {"questions": [dict(candidate_index=index, passed=passed,
+                               issues=[] if passed else [f"第{index}题证据不足"])
                            for index in range(size)]}
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("target", ["physicianbench-selfgen.json", "medagentbench-selfgen.json"])
-async def test_declared_generator_budget_completes_shortest_loop(monkeypatch, target):
+def declared_config(target):
     root = Path(__file__).parents[1] / "configs"
-    config = ExperimentConfig.model_validate(json.loads((root / target).read_text()))
+    return ExperimentConfig.model_validate(json.loads((root / target).read_text()))
+
+async def run_declared_loop(monkeypatch, target, script):
+    config = declared_config(target)
     assert config.runtime.budgets["generator"].model_dump() == BUDGET
     trajectory = PatientTrajectory(
         patient_id="p1", environment=config.environment.name, text="患者原始轨迹",
@@ -54,7 +56,6 @@ async def test_declared_generator_budget_completes_shortest_loop(monkeypatch, ta
                           statement='{"resourceType":"Observation","id":"1"}')])
     directions = [GenerationDirection(task_type=kind, difficulty="基础", weight=1)
                   for kind in KINDS]
-    script = [draft(), review(len(KINDS))]
     calls = []
 
     async def call(**kwargs):
@@ -64,5 +65,24 @@ async def test_declared_generator_budget_completes_shortest_loop(monkeypatch, ta
 
     monkeypatch.setattr("runtime.call_llm", call)
     result = await generate_tasks(trajectory, config.environment, directions, config.runtime)
+    return result, calls
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["physicianbench-selfgen.json", "medagentbench-selfgen.json"])
+async def test_declared_generator_budget_completes_shortest_loop(monkeypatch, target):
+    result, calls = await run_declared_loop(monkeypatch, target, [draft(), review(len(KINDS))])
     assert result.status == "completed" and result.output is not None
     assert len(calls) == 2
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["physicianbench-selfgen.json", "medagentbench-selfgen.json"])
+async def test_declared_generator_budget_completes_worst_case_loop(monkeypatch, target):
+    script = [draft(), review(len(KINDS), passed=False),
+              draft("修订一"), review(len(KINDS), passed=False),
+              draft("修订二"), review(len(KINDS))]
+    result, calls = await run_declared_loop(monkeypatch, target, script)
+    assert result.status == "completed" and len(result.output["questions"]) == len(KINDS)
+    assert len(calls) == BUDGET["max_model_turns"] == 6
+    assert [item["stage"] for item in result.trace] == [
+        "candidate_generation", "self_review/1", "refine/1",
+        "self_review/2", "refine/2", "self_review/3", "final_filter"]
