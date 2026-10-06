@@ -7,6 +7,7 @@ import copy
 import gzip
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import httpx
@@ -187,6 +188,8 @@ class FakeBackend:
         self.commands: list[tuple[str, ...]] = []
         self.dump = dump
         self.fail_dump = False
+        self.dump_error: Exception | None = None
+        self.fail_run = False
 
     @property
     def env_values(self) -> list[str]:
@@ -210,6 +213,10 @@ class FakeBackend:
             self.volumes.add(args[-1])
             return args[-1]
         if args[0] == "run":
+            if self.fail_run:
+                raise data.SeedPreparationError(
+                    f"docker {' '.join(args)} 退出码 125：port is already allocated"
+                )
             name = args[args.index("--name") + 1]
             self.containers[name] = {
                 "Config": {"Labels": self._labels(args)},
@@ -237,6 +244,8 @@ class FakeBackend:
 
     async def stream_to_file(self, args, sink, timeout: float | None = None) -> None:
         self.commands.append(tuple(args))
+        if self.dump_error is not None:
+            raise self.dump_error
         if self.fail_dump:
             raise data.SeedPreparationError("pg_dump 退出码 1")
         sink.write(self.dump)
@@ -722,20 +731,208 @@ async def test_prepare_cleans_up_when_service_never_becomes_ready(tmp_path, monk
 @pytest.mark.asyncio
 async def test_prepare_cleans_up_when_dump_fails(tmp_path):
     data_dir = minimal_data_dir(tmp_path)
+    seed_dir = tmp_path / "seed"
     backend = FakeBackend()
     backend.fail_dump = True
     server = FakeFhir(list(MINIMAL_FILES["MimicPatient.ndjson.gz"]) + MINIMAL_FILES["MimicObservation.ndjson.gz"])
     with pytest.raises(data.SeedPreparationError, match="pg_dump"):
         await data.prepare_dataset(
             data_dir,
-            tmp_path / "seed",
+            seed_dir,
             backend=backend,
             client_factory=server.client,
             require_published=False,
             log=lambda message: None,
         )
     assert backend.leftovers == ({}, set(), set())
-    assert not (tmp_path / "seed" / "manifest.json").exists()
+    assert not (seed_dir / "manifest.json").exists()
+    assert not (seed_dir / "database.dump").exists()
+    assert not (seed_dir / "database.dump.tmp").exists()
+    assert list(seed_dir.iterdir()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["nonzero-exit", "timeout", "empty-output"])
+async def test_prepare_removes_dump_artifacts_and_can_rerun(tmp_path, failure):
+    data_dir = minimal_data_dir(tmp_path)
+    seed_dir = tmp_path / "seed"
+    records = list(MINIMAL_FILES["MimicPatient.ndjson.gz"]) + list(
+        MINIMAL_FILES["MimicObservation.ndjson.gz"]
+    )
+    backend = FakeBackend()
+    if failure == "nonzero-exit":
+        backend.dump_error = data.SeedPreparationError("docker exec db pg_dump 退出码 1")
+    elif failure == "timeout":
+        backend.dump_error = data.SeedPreparationError(
+            "docker exec db pg_dump 超过 1800 秒未结束"
+        )
+    else:
+        backend.dump = b""
+
+    with pytest.raises(data.SeedPreparationError, match="pg_dump"):
+        await data.prepare_dataset(
+            data_dir,
+            seed_dir,
+            backend=backend,
+            client_factory=FakeFhir(records).client,
+            require_published=False,
+            log=lambda message: None,
+        )
+
+    assert backend.leftovers == ({}, set(), set())
+    assert list(seed_dir.iterdir()) == []
+
+    retry = FakeBackend(dump=b"RETRY-DUMP")
+    manifest = await data.prepare_dataset(
+        data_dir,
+        seed_dir,
+        backend=retry,
+        client_factory=FakeFhir(records).client,
+        require_published=False,
+        log=lambda message: None,
+    )
+    assert manifest["resource_counts"] == {"Patient": 2, "Observation": 2}
+    assert (
+        json.loads((seed_dir / "manifest.json").read_text(encoding="utf-8")) == manifest
+    )
+    assert (seed_dir / "database.dump").read_bytes() == b"RETRY-DUMP"
+    assert not (seed_dir / "database.dump.tmp").exists()
+    assert retry.leftovers == ({}, set(), set())
+
+
+@pytest.mark.asyncio
+async def test_prepare_removes_incomplete_seed_when_manifest_write_fails(
+    tmp_path, monkeypatch
+):
+    data_dir = minimal_data_dir(tmp_path)
+    seed_dir = tmp_path / "seed"
+    records = list(MINIMAL_FILES["MimicPatient.ndjson.gz"]) + list(
+        MINIMAL_FILES["MimicObservation.ndjson.gz"]
+    )
+
+    def failing_manifest_write(directory, manifest):
+        (Path(directory) / "manifest.json.tmp").write_text("{", encoding="utf-8")
+        raise data.SeedPreparationError("清单写入失败")
+
+    monkeypatch.setattr(data, "write_manifest", failing_manifest_write)
+    backend = FakeBackend()
+    with pytest.raises(data.SeedPreparationError, match="清单写入失败"):
+        await data.prepare_dataset(
+            data_dir,
+            seed_dir,
+            backend=backend,
+            client_factory=FakeFhir(records).client,
+            require_published=False,
+            log=lambda message: None,
+        )
+
+    assert backend.leftovers == ({}, set(), set())
+    assert list(seed_dir.iterdir()) == []
+
+    monkeypatch.undo()
+    retry = FakeBackend(dump=b"RETRY-DUMP")
+    manifest = await data.prepare_dataset(
+        data_dir,
+        seed_dir,
+        backend=retry,
+        client_factory=FakeFhir(records).client,
+        require_published=False,
+        log=lambda message: None,
+    )
+    assert manifest["database_sha256"] == hashlib.sha256(b"RETRY-DUMP").hexdigest()
+    assert retry.leftovers == ({}, set(), set())
+
+
+@pytest.mark.asyncio
+async def test_prepare_docker_run_failure_never_exposes_password(tmp_path):
+    data_dir = minimal_data_dir(tmp_path)
+    backend = FakeBackend()
+    backend.fail_run = True
+
+    with pytest.raises(data.SeedPreparationError) as info:
+        await data.prepare_dataset(
+            data_dir,
+            tmp_path / "seed",
+            backend=backend,
+            require_published=False,
+            log=lambda message: None,
+        )
+
+    secrets_in_use = [
+        value.split("=", 1)[1]
+        for value in backend.env_values
+        if value.startswith("POSTGRES_PASSWORD=")
+    ]
+    assert len(secrets_in_use) == 1
+    password = secrets_in_use[0]
+    assert password
+
+    chain = [str(info.value), repr(info.value)]
+    cause = info.value.__cause__
+    while cause is not None:
+        chain.append(str(cause))
+        chain.append(repr(cause))
+        cause = cause.__cause__
+    assert info.value.__cause__ is None
+    assert all(password not in text for text in chain)
+    assert "docker run" in str(info.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["nonzero-exit", "timeout"])
+async def test_docker_backend_redacts_password_env_values(mode):
+    password = "s3cret-password-value"
+    backend = data.DockerBackend(binary=sys.executable)
+    if mode == "nonzero-exit":
+        args = (
+            "-c",
+            "import sys; sys.stderr.write(' '.join(sys.argv[1:])); sys.exit(3)",
+            "--env",
+            f"POSTGRES_PASSWORD={password}",
+            "--env",
+            "POSTGRES_USER=medevolve",
+        )
+        options: dict = {}
+    else:
+        args = (
+            "-c",
+            "import time; time.sleep(30)",
+            "--env",
+            f"POSTGRES_PASSWORD={password}",
+        )
+        options = {"timeout": 0.2}
+
+    with pytest.raises(data.SeedPreparationError) as info:
+        await backend.run(*args, **options)
+
+    message = str(info.value)
+    assert password not in message
+    assert "POSTGRES_PASSWORD=***" in message
+    if mode == "nonzero-exit":
+        assert "POSTGRES_USER=medevolve" in message
+
+
+@pytest.mark.asyncio
+async def test_docker_backend_stream_error_never_exposes_password(tmp_path):
+    password = "s3cret-password-value"
+    backend = data.DockerBackend(binary=sys.executable)
+    sink = (tmp_path / "dump").open("wb")
+    try:
+        with pytest.raises(data.SeedPreparationError) as info:
+            await backend.stream_to_file(
+                (
+                    "-c",
+                    "import time; time.sleep(30)",
+                    "--env",
+                    f"PGPASSWORD={password}",
+                ),
+                sink,
+                0.2,
+            )
+    finally:
+        sink.close()
+    assert password not in str(info.value)
+    assert "PGPASSWORD=***" in str(info.value)
 
 
 def test_probe_digest_ignores_server_generated_meta():

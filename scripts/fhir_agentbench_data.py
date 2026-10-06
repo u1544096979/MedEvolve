@@ -106,6 +106,33 @@ class InventoryMismatchError(ResourceImportError):
     """服务端资源 ID 集合与源数据不一致。"""
 
 
+SENSITIVE_ENV_HINTS = ("PASSWORD", "SECRET", "TOKEN")
+
+
+def _sensitive_env_values(args: Sequence[str]) -> tuple[str, ...]:
+    """取出 docker 参数里 --env 携带的敏感取值。
+
+    这些取值会被注入容器凭据，绝不能出现在日志或异常文本中，
+    因此命令失败时需要先从命令行与命令输出里擦掉。
+    """
+
+    values: list[str] = []
+    for position, argument in enumerate(args):
+        if argument != "--env" or position + 1 >= len(args):
+            continue
+        key, separator, value = args[position + 1].partition("=")
+        if separator and value and any(hint in key.upper() for hint in SENSITIVE_ENV_HINTS):
+            values.append(value)
+    return tuple(values)
+
+
+def _redact(text: str, *secrets: str) -> str:
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    return text
+
+
 # --- 源数据读取 -------------------------------------------------------------
 
 
@@ -524,6 +551,7 @@ class DockerBackend:
         self.binary = binary
 
     async def run(self, *args: str, timeout: float | None = DOCKER_TIMEOUT) -> str:
+        secrets_in_use = _sensitive_env_values(args)
         process = await asyncio.create_subprocess_exec(
             self.binary,
             *args,
@@ -536,17 +564,25 @@ class DockerBackend:
             process.kill()
             await process.communicate()
             raise SeedPreparationError(
-                f"docker {' '.join(args)} 超过 {timeout} 秒未结束"
+                _redact(
+                    f"docker {' '.join(args)} 超过 {timeout} 秒未结束",
+                    *secrets_in_use,
+                )
             )
         if process.returncode:
             raise SeedPreparationError(
-                f"docker {' '.join(args)} 退出码 {process.returncode}：{stderr.decode().strip()}"
+                _redact(
+                    f"docker {' '.join(args)} 退出码 {process.returncode}："
+                    f"{stderr.decode().strip()}",
+                    *secrets_in_use,
+                )
             )
         return stdout.decode().strip()
 
     async def stream_to_file(
         self, args: Sequence[str], sink: BinaryIO, timeout: float | None = DATABASE_TIMEOUT
     ) -> None:
+        secrets_in_use = _sensitive_env_values(args)
         process = await asyncio.create_subprocess_exec(
             self.binary,
             *args,
@@ -559,11 +595,18 @@ class DockerBackend:
             process.kill()
             await process.communicate()
             raise SeedPreparationError(
-                f"docker {' '.join(args)} 超过 {timeout} 秒未结束"
+                _redact(
+                    f"docker {' '.join(args)} 超过 {timeout} 秒未结束",
+                    *secrets_in_use,
+                )
             )
         if process.returncode:
             raise SeedPreparationError(
-                f"docker {' '.join(args)} 退出码 {process.returncode}：{stderr.decode().strip()}"
+                _redact(
+                    f"docker {' '.join(args)} 退出码 {process.returncode}："
+                    f"{stderr.decode().strip()}",
+                    *secrets_in_use,
+                )
             )
 
 
@@ -777,10 +820,6 @@ async def _cleanup(backend, names: PrepareResources, log: Callable[[str], None])
 # --- 种子准备 ---------------------------------------------------------------
 
 
-def _redact(text: str, secret: str) -> str:
-    return text.replace(secret, "***") if secret else text
-
-
 def build_manifest(
     *,
     inventory: dict[str, set[str]],
@@ -814,6 +853,18 @@ def write_manifest(seed_dir: Path, manifest: dict) -> Path:
     )
     os.replace(temporary, path)
     return path
+
+
+def _discard_incomplete_seed(seed_dir: Path) -> None:
+    """删掉未写完的种子产物，让失败的种子目录回到可重跑的空状态。"""
+
+    artifacts = (
+        f"{MANIFEST_NAME}.tmp",
+        f"{DATABASE_DUMP_NAME}.tmp",
+        DATABASE_DUMP_NAME,
+    )
+    for name in artifacts:
+        (seed_dir / name).unlink(missing_ok=True)
 
 
 async def prepare_dataset(
@@ -900,7 +951,8 @@ async def prepare_dataset(
 
         dump_started = time.monotonic()
         dump_path = seed_dir / DATABASE_DUMP_NAME
-        with dump_path.open("wb") as sink:
+        temporary_dump = seed_dir / f"{DATABASE_DUMP_NAME}.tmp"
+        with temporary_dump.open("wb") as sink:
             await backend.stream_to_file(
                 (
                     "exec",
@@ -918,8 +970,9 @@ async def prepare_dataset(
                 sink,
                 DATABASE_TIMEOUT,
             )
-        if dump_path.stat().st_size == 0:
+        if temporary_dump.stat().st_size == 0:
             raise SeedPreparationError("pg_dump 输出为空，未生成种子备份")
+        os.replace(temporary_dump, dump_path)
         log(f"数据库备份完成，用时 {time.monotonic() - dump_started:.1f} 秒")
 
         manifest = build_manifest(
@@ -935,10 +988,12 @@ async def prepare_dataset(
         )
         return manifest
     except BaseException as exc:
+        if not (seed_dir / MANIFEST_NAME).exists():
+            _discard_incomplete_seed(seed_dir)
         message = _redact(str(exc), password)
         if message == str(exc):
             raise
-        raise SeedPreparationError(f"{type(exc).__name__}: {message}") from exc
+        raise SeedPreparationError(f"{type(exc).__name__}: {message}") from None
     finally:
         await _cleanup(backend, names, log)
 
