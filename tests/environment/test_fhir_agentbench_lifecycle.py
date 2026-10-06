@@ -522,6 +522,24 @@ def test_create_wait_limit_covers_the_managers_worst_case():
 
 
 @pytest.mark.asyncio
+async def test_docker_command_timeout_is_not_reported_as_the_create_deadline(seed):
+    """单条 docker 命令超时要报出真实原因，不能被当成整个创建超时。"""
+
+    class HangingBackend:
+        async def __call__(self, *args: str) -> str:
+            raise asyncio.TimeoutError()
+
+        async def stream_to_file(self, args, sink, timeout=None) -> None:
+            raise asyncio.TimeoutError()
+
+    manager = fhir_agentbench.FhirAgentBenchManager(
+        HangingBackend(), "127.0.0.1", "127.0.0.1"
+    )
+    with pytest.raises(EnvironmentUnavailable, match="docker 命令超时"):
+        await manager.create(config_for(seed))
+
+
+@pytest.mark.asyncio
 async def test_container_memory_limits_follow_the_shared_environment_variables(
     fake_docker, fake_subprocess, seed, monkeypatch
 ):

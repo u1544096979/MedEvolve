@@ -290,7 +290,7 @@ class FhirAgentBenchManager:
         try:
             # 单个 deadline 包住整个创建流程：客户端先放弃时不能留下未回收的实例。
             endpoint = await asyncio.wait_for(
-                self._provision(resources, manifest, Path(config.seed_data), password),
+                self._bounded_provision(resources, manifest, Path(config.seed_data), password),
                 timeout=WORST_CASE_CREATE_SECONDS,
             )
         except asyncio.TimeoutError:
@@ -308,6 +308,27 @@ class FhirAgentBenchManager:
             endpoint=endpoint,
             environment=ENVIRONMENT_NAME,
         )
+
+    async def _bounded_provision(
+        self,
+        resources: InstanceResources,
+        manifest: dict,
+        seed_dir: Path,
+        password: str,
+    ) -> str:
+        """把 docker 命令自身的超时与本次创建的整体 deadline 区分开。
+
+        ``docker_command`` 的短命令超时同样是 ``asyncio.TimeoutError``；如果让它冒到外层的
+        ``wait_for`` 分支，一条卡住的 docker 命令会被误报成「整个创建超时」，掩盖真实原因。
+        因此这里先把它换成带命令信息的实例创建失败。
+        """
+
+        try:
+            return await self._provision(resources, manifest, seed_dir, password)
+        except asyncio.TimeoutError as error:
+            raise FhirAgentBenchError(
+                f"准备实例时 docker 命令超时：{error or '命令未在限定时间内结束'}"
+            ) from error
 
     async def _provision(
         self,
