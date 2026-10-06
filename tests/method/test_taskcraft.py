@@ -713,6 +713,39 @@ async def test_atomic_detail_keeps_conclusion_relation_sources_and_clean_answer(
 
 
 @pytest.mark.asyncio
+async def test_atomic_zero_score_tool_answer_is_still_accepted(monkeypatch):
+    """原子过滤只按核验出错判断：工具作答得 0 分但核验无出错时仍接纳候选。"""
+    fake = FakeRuntime(agent_answer="无法确定")
+    pipeline = stage_pipeline(monkeypatch, fake)
+
+    candidates = await pipeline.atomic()
+
+    checks = [entry for entry in pipeline.records if entry["stage"] == "atomic/verify"]
+    assert [entry["agent_score"] for entry in checks] == [0.0, 0.0]
+    assert [entry["error"] for entry in checks] == [None, None]
+    assert [candidate.question.instruction for candidate in candidates] == [
+        "该患者第 1 项记录说明了什么？", "该患者第 2 项记录说明了什么？"]
+
+
+@pytest.mark.asyncio
+async def test_depth_rejects_hop_whose_tool_answer_scores_zero(monkeypatch):
+    """深度核验的工具作答评分非正时换下一跳，不为该父题生成扩展候选。"""
+    fake = FakeRuntime(agent_answer="无法确定")
+    pipeline = stage_pipeline(monkeypatch, fake)
+
+    extended = await pipeline.depth(atomic_pool(1))
+
+    attempts = TaskCraftParameters().extended_attempts
+    assert extended == []
+    checks = [entry for entry in pipeline.records if entry["stage"] == "depth/verify"]
+    assert [entry["agent_score"] for entry in checks] == [0.0] * attempts
+    assert [entry["error"] for entry in checks] == [None] * attempts
+    outcomes = [entry for entry in pipeline.records if entry["stage"] == "depth/extension"]
+    assert [entry["status"] for entry in outcomes] == ["failed"]
+    assert [item["reason"] for item in outcomes[0]["failed_attempts"]] == ["verify"] * attempts
+
+
+@pytest.mark.asyncio
 async def test_depth_detail_keeps_results_trajectory_auxiliary_sources_and_failures(monkeypatch):
     """深度 detail 保存 full_results、solve_trajectory、辅助来源与失败尝试。"""
     fake = FakeRuntime(backward_failures=1)
@@ -1175,7 +1208,7 @@ async def test_verify_agent_retries_the_whole_sequence_and_reports_action_steps(
 
 @pytest.mark.asyncio
 async def test_verify_stops_without_retry_when_the_model_answers_alone(monkeypatch):
-    """无工具回答满分立即拒绝，不用外层重试绕过该判据。"""
+    """无工具回答评分达到 1 分及以上立即拒绝，不用外层重试绕过该判据。"""
     fake = FakeRuntime(llm_answer="5.9 mmol/L")
     ledger, budget, tools = agent_ledger(monkeypatch, fake)
     outcome = await verify_query(
