@@ -4,6 +4,10 @@
 固定优先级混合不同含义的时间。本环境里 ``Observation/issued`` 是发布时间、
 ``Observation/valueDateTime`` 是测量值描述的日期、``Condition/recordedDate`` 是记录时间、
 ``MedicationStatement/dateAsserted`` 是陈述时间，字段来源必须分别保留。
+
+公共整理层读到的记录多于解题 Agent 的工具能取回的记录（发药、用药陈述、机构等只
+经 ``$everything`` 与引用补齐进入材料）。轨迹是生成角色唯一的患者视图，因此这些记录
+按 ``UNREADABLE_MARK`` 标出来：它们可以作上下文，不能成为题目的唯一依据。
 """
 
 import json
@@ -11,6 +15,13 @@ from datetime import datetime, timezone
 
 from contracts import EnvironmentInstance, Evidence, PatientTrajectory
 from environments.fhir import references
+from environments.fhir_agentbench import SUPPORTED_TYPES
+
+# 解题 Agent 官方工具可读的资源类型；与工具注册的类型是同一份定义，不另抄字面量。
+SOLVER_READABLE_TYPES = SUPPORTED_TYPES
+
+# 不可读记录的渲染标记：只标注可读性，sources 里的原始 JSON 保持完整。
+UNREADABLE_MARK = "[工具不可读]"
 
 # 就诊来源由 identifier.system 末段判定，已知取值见 MIMIC-IV FHIR 的 identifier 命名。
 ENCOUNTER_KINDS = ("encounter-hosp", "encounter-ed", "encounter-icu")
@@ -245,7 +256,9 @@ def _record_line(
             f"background={encounter_ref} {_encounter_bounds(encounters.get(encounter_ref))}"
         )
     line = " ".join(parts)
-    return f"{line}{_refs_line(resource)} {_clinical(resource)}"
+    readable = resource.get("resourceType") in SOLVER_READABLE_TYPES
+    mark = "" if readable else f" {UNREADABLE_MARK}"
+    return f"{line}{_refs_line(resource)} {_clinical(resource)}{mark}"
 
 
 def _encounter_line(resource: dict, indent: str = "") -> str:
@@ -412,6 +425,11 @@ def _stats_line(
     undated: list[tuple],
     unparsable: int,
 ) -> str:
+    unreadable = sum(
+        1
+        for resource in by_source.values()
+        if resource.get("resourceType") not in SOLVER_READABLE_TYPES
+    )
     counts = {kind: 0 for kind in ENCOUNTER_KINDS}
     other = 0
     for resource in encounters.values():
@@ -425,7 +443,7 @@ def _stats_line(
         f"（医院 {counts['encounter-hosp']}、急诊 {counts['encounter-ed']}、"
         f"ICU {counts['encounter-icu']}、其他 {other}）；"
         f"事件记录 {len(events)} 条；无事件时间记录 {len(undated)} 条；"
-        f"时间解析失败 {unparsable} 条"
+        f"时间解析失败 {unparsable} 条；工具不可读记录 {unreadable} 条"
     )
 
 

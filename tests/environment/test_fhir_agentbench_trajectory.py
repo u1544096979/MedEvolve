@@ -16,10 +16,13 @@ from environments.errors import EnvironmentUnavailable, PatientAccessError
 from environments.fhir_agentbench import (
     FALLBACK_RESOURCE_TYPES,
     REFERENCE_ROUNDS,
+    SUPPORTED_TYPES,
     read_patient_material,
     read_source,
 )
 from environments.fhir_agentbench_trajectory import (
+    SOLVER_READABLE_TYPES,
+    UNREADABLE_MARK,
     build_trajectory,
     encounter_kind,
     prepare,
@@ -464,6 +467,43 @@ def test_hospital_count_and_icu_parent_reference():
     assert "partOf=Encounter/eh" in icu
     assert "[encounter-icu]" in icu
     assert "[encounter-hosp]" in line(trajectory.text, "Encounter/eh")
+
+
+def test_solver_readable_types_are_the_registered_tool_types():
+    """轨迹标注与工具注册必须取自同一份类型定义，不能各写一份字面量。"""
+
+    assert SOLVER_READABLE_TYPES == SUPPORTED_TYPES
+
+
+def test_records_the_solver_tools_cannot_read_are_marked():
+    """发药与用药陈述记录只经公共整理层进入轨迹，解题工具取不回，必须标出来。"""
+
+    text = build_trajectory("a", material()).text
+    assert UNREADABLE_MARK in line(text, "MedicationDispense/md1")
+    assert UNREADABLE_MARK in line(text, "MedicationStatement/ms1")
+
+
+def test_records_the_solver_tools_can_read_are_not_marked():
+    text = build_trajectory("a", material()).text
+    assert UNREADABLE_MARK not in line(text, "Observation/o1")
+    assert UNREADABLE_MARK not in line(text, "Medication/m1")
+    assert UNREADABLE_MARK not in line(text, "Condition/c1")
+
+
+def test_the_mark_follows_the_solver_readable_type_set():
+    """标记与类型集合一一对应：可读类型不得被标，不可读类型必须被标。"""
+
+    trajectory = build_trajectory("a", material())
+    for evidence in trajectory.sources:
+        resource_type = evidence.source_id.split("/", 1)[0]
+        marked = UNREADABLE_MARK in line(trajectory.text, evidence.source_id)
+        assert marked == (resource_type not in SOLVER_READABLE_TYPES), evidence.source_id
+
+
+def test_stats_line_counts_records_the_solver_tools_cannot_read():
+    text = build_trajectory("a", material()).text
+    # 材料里的工具不可读记录：Organization/org-1、MedicationStatement/ms1、MedicationDispense/md1。
+    assert "工具不可读记录 3 条" in text
 
 
 def test_every_record_line_is_a_source_id_in_sources():
