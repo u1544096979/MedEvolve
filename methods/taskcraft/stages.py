@@ -450,7 +450,7 @@ class Pipeline:
                         llm_score=score)
             if score is None:
                 continue
-            # gen_width_based_task.py: 无工具回答已能答对（similarity 达满分）的问题不保留。
+            # gen_width_based_task.py: 无工具回答评分达到 1 分及以上的问题不保留。
             if score < 1:
                 kept.append(item)
         self.record("width/answer", status="completed", kept=len(kept))

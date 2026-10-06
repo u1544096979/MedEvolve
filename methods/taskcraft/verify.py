@@ -1,7 +1,7 @@
 """TaskCraft 内置核验：移植 agent_tools.VerifyAgent（提交 1e405e0）。
 
 源码路径：agent_tools.py:132-189。
-每个问题先尝试无工具回答，回答得分达到满分即判为可由模型自身解决；
+每个问题先尝试无工具回答，评分达到 1 分及以上即判为可由模型自身解决；
 再交给病历工具 Agent 回答并打分。两个分数都保留，外层重试重新走一遍整个流程。
 
 适配差异：无工具作答与每次评分请求按源码 `max_retries=1` 单次调用，外层重试次数为源码
@@ -124,7 +124,7 @@ def _failed(query: str, golden_answer, error: str) -> VerifyOutcome:
 async def verify_query(ledger: Ledger, query: str, golden_answer, tools: list, *,
                        samples: int, stage: str, instructions: str,
                        max_action_steps: int = ATOMIC_MAX_ACTION_STEPS) -> VerifyOutcome:
-    """VerifyAgent.forward：外层重试整段流程，llm_score 满分立即返回 error。"""
+    """VerifyAgent.forward：外层重试整段流程，llm_score 达到 1 分及以上立即返回 error。"""
     native = is_native(tools)
     augmented = AUGMENTED_QUERY + query
     if native:
@@ -147,7 +147,7 @@ async def verify_query(ledger: Ledger, query: str, golden_answer, tools: list, *
             # 源码：评分返回 None 时比较运算抛错，走外层重试分支。
             last_error = "LLM score unavailable"
             continue
-        # agent_tools.py:154-155：无工具回答已满分，说明该结论不是原子结论，立即返回。
+        # agent_tools.py:154-155：无工具回答评分达到 1 分及以上，说明该结论不是原子结论，立即返回。
         if llm_score >= 1:
             return _failed(query, golden_answer, "LLM can solve this task")
 

@@ -61,7 +61,7 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 
 ## 4. 适配差异与源码缺陷对照
 
-1. 原子过滤判据。源码 `filter_question`（`gen_atomic_task.py:418-444`）仅在核验返回 `error` 时拒绝，更严格的 `llm_score`、`agent_score` 判断在 `425-433` 被注释掉。适配保持该分支：无工具回答满分或核验出错才拒绝，`agent_score` 只记录不用于拒绝。患者私有事实本就不在模型自身的知识内，该判据在病历域很少触发，实际筛选由「病历 Agent 能否作答」承担。
+1. 原子过滤判据。源码 `filter_question`（`gen_atomic_task.py:418-444`）仅在核验返回 `error` 时拒绝，更严格的 `llm_score`、`agent_score` 判断在 `425-433` 被注释掉。适配保持该分支：无工具回答评分达到 1 分及以上或核验出错才拒绝，`agent_score` 只记录不用于拒绝。患者私有事实本就不在模型自身的知识内，该判据在病历域很少触发，实际筛选由「病历 Agent 能否作答」承担。
 2. superset 校验。源码把返回的 JSON 字典与字符串 `"invalid"` 比较（`gen_depth_based_task.py:67`），字典与该字符串不相等。适配按提示词声明的 `{"new_query": "valid"|"invalid"}` 判断，仅显式 `invalid` 时拒绝。
 3. 宽度结果组装。源码最终映射（`gen_width_based_task.py:234-241`）引用循环外的 `golden_answers`、`original_questions`，与当前分组不一致；评分又用响应里的稳定 ID 直接索引过滤后的局部列表（`gen_width_based_task.py:252-253`）。适配按每题自身的答案、原始问题与原始索引组装，评分按稳定 ID 在已通过分解检查的集合里查找；父题索引保持模型给定的顺序与重复项，越界或缺少父题的分组按模型输出失败丢弃整次响应重试（`gen_width_based_task.py:190-200` 的异常分支），不修剪成更小的组。
 4. 宽度合并输入。源码把 `golden_answer` 一并送入合并提示词（`gen_width_based_task.py:184-188`，与注释 `without golden_answers` 不一致）。适配保持源码行为；合并结果由后续可分解性与作答检查把关。
