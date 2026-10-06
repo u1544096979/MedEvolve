@@ -8,7 +8,23 @@ SingleShot 是本项目的单次生成对比方法，按本规范报告，不对
 
 ## main 基准与文件边界
 
+项目根目录为 `/Users/guagua/code/MedEvolve`。方法规范位于 `docs/comparison-experiments/baselines/singleshot/SPEC.md`，实施计划位于同目录 PLAN.md。本规范定义在已有 SingleShot 实现上完成 main 与双环境适配的要求。
+
 实施基准为开始实施时本地 main 最新已提交版本。实施 agent 记录其完整提交号，在已有 `.worktrees/singleshot`、`codex/singleshot` 分支同步该版本并保留现有方法实现。同步使用已有 worktree，不另建平行实现。main 工作目录中的未提交修改不自动纳入基准；需要依赖的公共改动必须先有明确的提交和归属。
+
+### 已有实现与适配范围
+
+SingleShot 实现提交为 `f18013ce9d5d1420906dcae7a81855c01a64975f`，分支为 `codex/singleshot`，worktree 为 `/Users/guagua/code/MedEvolve/.worktrees/singleshot`。main 已登记 singleshot 方法分派，但尚未包含 methods/singleshot/ 代码；实施须先同步公共更新，再以该 worktree 中的已有实现完成适配。
+
+| 项目 | 已有实现 | 本次适配要求 |
+| --- | --- | --- |
+| 生成函数与提示词 | 独立 generate_tasks、GENERATION，使用 GenerationBudget，一次调用 | 保留方法边界，根据公共契约及双环境限制调整 |
+| 轨迹输入 | 完整 text；sources 只传 source_id | 与 main 的轨迹材料口径一致，sources 同时传原始 statement |
+| 方向与输出 | 已要求两个 directions，最多两题，失败不追加调用 | 沿用公共采样与校验，增加零预算及双环境调用检查 |
+| 环境与评测 | worktree 的环境层只接受 PhysicianBench | 从 main 同步 MedAgentBench 适配、原生执行器及公共评测更新 |
+| 配置与运行记录 | 无 SingleShot 专属配置；已有 PhysicianBench 运行与三项方法测试 | 提供双环境配置，补齐 MedAgentBench 和更新后公共链路验收 |
+
+已有真实记录位于 worktree 的 `outputs/singleshot-local-20261004-201849/`：PhysicianBench 单次生成两题，其中一题被核验拒绝，另一题通过核验并完成解题。这些记录仅证明该旧版本的 PhysicianBench 链路，不替代同步 main 后的双环境验收。
 
 main 对齐指公共契约、环境适配、运行协议、实验入口和评测口径兼容，不要求复制主方法的生成算法、探索指导或进化策略。已有 SingleShot 实现作为适配起点，不重写环境客户端、LLM 客户端或 Agent 执行器。
 
@@ -28,7 +44,7 @@ SingleShot 的 generate_tasks 和生成提示词在 methods/singleshot/ 内独�
 
 公共轨迹准备 → 两个生成方向 → 一次生成 → 公共证据与整题核验 → 质量评价 → 独立解题 → 完成评价与汇总。
 
-SingleShot 只在 evaluation_patients 上生成任务，不使用 evolution_patients 或 round_patients 学习、探索或更新策略。公共入口按 initial_strategy.allocation 和 random_seed 采样两个方向；相同患者顺序、初始配比和种子下，方向安排与公共入口的初始策略评测一致。
+SingleShot 只在 evaluation_patients 上生成任务，不使用 evolution_patients 或 round_patients 学习、探索或更新策略。公共入口的评测阶段按 initial_strategy.allocation 和 random_seed 采样两个方向：experiments/runner.py 使用 sampling.choices(allocation, weights=[d.weight for d in allocation], k=2)。沿用该逻辑，相同患者顺序、初始配比和种子下得到相同方向安排。
 
 directions 是公共实验入口为本批次提供的两份任务生成要求，每个 GenerationDirection 包含 task_type（题型）、difficulty（难度要求）和 weight（公共采样权重）。字段值沿用实验已有配置，SingleShot 不新增任务方向或难度分类。两个方向可使用相同题型，分别对应一次生成中的两个目标位置；不是两个医疗环境，也不代表两次模型调用。weight 用于公共入口采样，不代表要求生成的题数。
 
@@ -61,7 +77,7 @@ TaskBatch.questions 最多两题，证据不足允许少出题或返回空列表
 
 ## 事实、答案与证据
 
-生成提示词由 SingleShot 独立组织，事实真实性、引用有效性、候选答案合理性和环境可执行性遵循本节及公共评测要求。题干明确时间范围、作答或操作要求，难度来自有依据的记录整合和临床判断，不来自缺失信息、歧义或环境故障。
+生成提示词由 SingleShot 独立组织，事实真实性、引用有效性、候选答案合理性和环境可执行性遵循本节及公共评测要求。题干明确时间范围、作答或操作要求；难度要求采用对应 direction.difficulty，不另行规定必须跨时间或整合多条记录。缺失信息、歧义或环境故障不能作为任务难度的依据。
 
 每条患者事实对应当前患者轨迹中的真实 ResourceType/id。evidence.statement 只陈述该原始记录支持的事实，核对药物、剂量、数值、单位与时间；跨记录推断写在候选答案中并分别引用依据。活动处方不证明实际服用、疗效或耐受性，记录未出现某事实不证明该事实不存在。
 
@@ -112,6 +128,8 @@ TaskBatch.questions 最多两题，证据不足允许少出题或返回空列表
 ## 配置与运行产物
 
 双环境分别提供 method="singleshot" 的可运行配置，复用对应 main 配置的环境镜像、患者、初始题型配比、种子、模型角色和公共评测预算。生成配置可显式设 max_model_turns=1、max_tool_calls=0；不改变同环境对比使用的模型、数据或公共评测要求。运行编号与输出目录独立，避免覆盖其他方法产物。
+
+PhysicianBench 配置以 main 的 configs/physicianbench-flash.json 为模板，MedAgentBench 配置以 configs/medagentbench-flash.json 为模板，分别提供 configs/physicianbench-singleshot.json 和 configs/medagentbench-singleshot.json。现有模板的模型为 deepseek-v4.1-flash；实施时以基准提交中的对应配置为准，不沿用旧运行记录或旧 PRD 中固定的 gpt-4o-mini 要求。旧 PRD 的从零实现步骤和公共配置交接安排由本规范及 PLAN.md 的适配任务替代。
 
 复用公共 config、attempts、tasks、evaluations、runs、summary 和错误产物。usage 记录 model_turns、tool_calls、input_tokens、output_tokens、total_tokens；未知 token 保留未知状态，不作为零消耗。
 
