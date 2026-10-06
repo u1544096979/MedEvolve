@@ -137,10 +137,10 @@ def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_p
 
     async def baseline(trajectory, environment, requested, runtime):
         assert trajectory.patient_id != "e" and environment.name == "fake"
-        assert requested == sampled[trajectory.patient_id]
+        assert requested == list(get_args(TaskType))
         if trajectory.patient_id == "h2":
             return result(status="failed")
-        return result([question(task_type=requested[0].task_type)])
+        return result([question(task_type="诊断与解释")])
 
     module = ModuleType("methods.singleshot")
     module.generate_tasks = baseline
@@ -157,6 +157,10 @@ def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_p
     evaluate = AsyncMock(side_effect=lambda task, *args: EvaluationResult(task_id=task.id, status="invalid", runs=[], observed_state={}))
     monkeypatch.setattr(runner, "evaluate_task", evaluate)
     asyncio.run(runner.run_experiment(config))
+    assert sorted(sampled) == ["h", "h2"]
+    assert all(len(requested) == 2 for requested in sampled.values())
+    assert {d.task_type for requested in sampled.values() for d in requested} <= {
+        direction.task_type for direction in config.initial_strategy.allocation}
     prepared.clear()
     for name in ("explore_data", "explore_environment", "analyze_feedback", "update_strategy"):
         monkeypatch.setattr(runner, name, AsyncMock(side_effect=AssertionError("MedEvolve context leaked")))

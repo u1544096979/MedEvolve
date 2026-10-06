@@ -4,11 +4,12 @@ import importlib
 import json
 import random
 from pathlib import Path
+from typing import get_args
 
 from contracts import (
     DataExploration, EnvironmentExploration, EvaluationResult, ExperimentConfig,
     ExplorationGuidance, Feedback, RunResult, Strategy, Task,
-    TaskBatch,
+    TaskBatch, TaskType,
 )
 
 from methods.common import normalize_usage, validate_task_batch
@@ -172,9 +173,15 @@ async def run_experiment(config: ExperimentConfig) -> None:
                 _save(folder / "strategy.json", current.model_dump(mode="json"))
             sampling = random.Random(config.random_seed) if folder.name == "evaluation" else rng
             allocation = config.initial_strategy.allocation if folder.name == "evaluation" else current.allocation
+            free_selection = config.method == "singleshot"
             for patient_index, patient in enumerate(patients):
-                directions = sampling.choices(allocation,
-                                              weights=[d.weight for d in allocation], k=2)
+                if free_selection:
+                    task_types = list(get_args(TaskType))
+                    selection_record = {"task_types": task_types}
+                else:
+                    directions = sampling.choices(allocation,
+                                                  weights=[d.weight for d in allocation], k=2)
+                    selection_record = {"directions": [d.model_dump(mode="json") for d in directions]}
                 stage = f"{folder.name}/generate/{patient_index}"
                 async def generate_batch():
                     if config.runtime.budgets["generator"].max_model_turns == 0:
@@ -183,10 +190,14 @@ async def run_experiment(config: ExperimentConfig) -> None:
                     if config.method == "medevolve":
                         result = await generator(trajectories[patient], guidance,
                                                  current, directions, config.runtime)
+                    elif free_selection:
+                        result = await generator(trajectories[patient], config.environment,
+                                                 task_types, config.runtime)
                     else:
                         result = await generator(trajectories[patient], config.environment,
                                                  directions, config.runtime)
-                    result = validate_task_batch(result, directions)
+                    result = (validate_task_batch(result, task_types=task_types) if free_selection
+                              else validate_task_batch(result, directions))
                     budget = config.runtime.budgets["generator"]
                     if (result.usage["model_turns"] > budget.max_model_turns or
                             result.usage["tool_calls"] > budget.max_tool_calls):
@@ -198,7 +209,7 @@ async def run_experiment(config: ExperimentConfig) -> None:
                 run = await invoke(stage, generate_batch)
                 batch = parse(stage, run, TaskBatch)
                 attempts.append({"patient_id": patient, "requested": 2,
-                                 "directions": [d.model_dump(mode="json") for d in directions],
+                                 **selection_record,
                                  "produced": len(batch.questions) if batch else 0,
                                  "status": run.status, "error": run.error, "usage": run.usage})
                 _save(folder / "attempts.json", attempts)
