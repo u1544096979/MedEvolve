@@ -261,6 +261,11 @@ def _encounter_line(resource: dict, indent: str = "") -> str:
     return " ".join(parts) + " " + _clinical(resource)
 
 
+def _encounter_parent(resource: dict) -> str | None:
+    reference = (resource.get("partOf") or {}).get("reference")
+    return reference if isinstance(reference, str) and reference else None
+
+
 def build_trajectory(patient_id: str, resources: list[dict]) -> PatientTrajectory:
     """把一份患者材料整理成轨迹：sources 保存完整原始 JSON，text 按分区呈现。"""
     records = _dedupe(resources)
@@ -274,31 +279,43 @@ def build_trajectory(patient_id: str, resources: list[dict]) -> PatientTrajector
         for source_id, resource in by_source.items()
         if resource.get("resourceType") == "Encounter"
     }
-    hospitals = [
-        resource
-        for resource in encounters.values()
-        if encounter_kind(resource) == "encounter-hosp"
-    ]
-    hospitals.sort(key=lambda resource: _encounter_sort_key(resource))
     children: dict[str, list[dict]] = {}
-    for resource in encounters.values():
-        parent = (resource.get("partOf") or {}).get("reference")
-        if parent:
+    for source_id, resource in encounters.items():
+        parent = _encounter_parent(resource)
+        if parent and parent in encounters:
             children.setdefault(parent, []).append(resource)
     for group in children.values():
         group.sort(key=lambda resource: _encounter_sort_key(resource))
 
-    encounter_lines = []
-    presented = set()
-    for hospital in hospitals:
-        encounter_lines.append(_encounter_line(hospital))
-        presented.add(_source_id(hospital))
-        for child in children.get(_source_id(hospital), []):
-            encounter_lines.append(_encounter_line(child, indent="  "))
-            presented.add(_source_id(child))
-    for source_id, resource in encounters.items():
-        if source_id not in presented:
-            encounter_lines.append(_encounter_line(resource))
+    # 每条就诊只在其最顶层祖先下渲染一次：父级不能因为也是子级而被重复呈现。
+    encounter_lines: list[str] = []
+    presented: set[str] = set()
+
+    def present(resource: dict, depth: int) -> None:
+        source_id = _source_id(resource)
+        if source_id in presented:
+            return
+        presented.add(source_id)
+        encounter_lines.append(_encounter_line(resource, indent="  " * depth))
+        for child in children.get(source_id, []):
+            present(child, depth + 1)
+
+    roots = [
+        resource
+        for resource in encounters.values()
+        if (_encounter_parent(resource) or "") not in encounters
+    ]
+    roots.sort(
+        key=lambda resource: (
+            encounter_kind(resource) != "encounter-hosp",
+            _encounter_sort_key(resource),
+        )
+    )
+    for root in roots:
+        present(root, 0)
+    # partOf 成环的赘余记录：仍分派到一个顶层行，不再重复。
+    for resource in encounters.values():
+        present(resource, 0)
 
     events = []
     undated = []

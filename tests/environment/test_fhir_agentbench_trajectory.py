@@ -15,6 +15,7 @@ from environments import fhir_agentbench, prepare_trajectory
 from environments.errors import EnvironmentUnavailable, PatientAccessError
 from environments.fhir_agentbench import (
     FALLBACK_RESOURCE_TYPES,
+    REFERENCE_ROUNDS,
     read_patient_material,
     read_source,
 )
@@ -351,6 +352,47 @@ def recorded_sources(text):
     return RECORD_LINE.findall(text)
 
 
+def test_nested_hospital_encounters_are_each_rendered_once():
+    """医院就诊 partOf 另一个医院就诊时，父级只作为顶层渲染一次。"""
+    resources = [
+        fhir("Patient", "a", birthDate="2100-01-01"),
+        fhir(
+            "Encounter",
+            "hb",
+            subject=PATIENT,
+            identifier=[{"system": HOSP}],
+            period={
+                "start": "2136-04-01T00:00:00-04:00",
+                "end": "2136-04-10T00:00:00-04:00",
+            },
+        ),
+        fhir(
+            "Encounter",
+            "ha",
+            subject=PATIENT,
+            identifier=[{"system": HOSP}],
+            partOf={"reference": "Encounter/hb"},
+            period={
+                "start": "2136-04-11T00:00:00-04:00",
+                "end": "2136-04-20T00:00:00-04:00",
+            },
+        ),
+    ]
+    text = build_trajectory("a", resources).text
+    outer = line(text, "Encounter/hb")
+    inner = line(text, "Encounter/ha")
+    assert [source for source in recorded_sources(text) if source.startswith("Encounter/")] == [
+        "Encounter/hb",
+        "Encounter/ha",
+    ]
+    assert "[encounter-hosp]" in outer and "[encounter-hosp]" in inner
+    assert "partOf=" not in outer
+    assert "partOf=Encounter/hb" in inner
+    assert "2136-04-01T00:00:00-04:00" in outer and "2136-04-10T00:00:00-04:00" in outer
+    assert "2136-04-11T00:00:00-04:00" in inner and "2136-04-20T00:00:00-04:00" in inner
+    assert "医院 2" in text
+
+
 def test_hospital_kind_comes_from_the_identifier_not_the_class():
     for code in ("AMB", "EMER", "OBSENC"):
         encounter = fhir("Encounter", "eh", **{"class": {"code": code}}, identifier=[{"system": HOSP}])
@@ -584,6 +626,51 @@ async def test_everything_fallback_reads_every_type_and_dedupes(fake):
 
 
 @pytest.mark.asyncio
+async def test_reference_completion_reaches_a_fixed_point_in_both_paths(fake):
+    """第二跳引用在 $everything 与逐类型回退两条路径上补齐到同一个闭包。"""
+    for host in ("trajectory-one", "trajectory-two"):
+        store = fake.store_for(host)
+        store["Medication/m1"]["ingredient"] = [
+            {"itemReference": {"reference": "Medication/mi"}}
+        ]
+        store["Medication/mi"] = fhir(
+            "Medication",
+            "mi",
+            ingredient=[{"itemReference": {"reference": "Medication/mii"}}],
+        )
+        store["Medication/mii"] = fhir("Medication", "mii", code={"text": "second hop"})
+    everything = await read_patient_material(instance(), "a")
+    fake.override = unsupported_everything(405)
+    fallback = await read_patient_material(instance("trajectory-two"), "a")
+
+    def identifiers(resources):
+        return {f"{r['resourceType']}/{r['id']}" for r in resources}
+
+    assert "Medication/mii" in identifiers(everything)
+    assert identifiers(fallback) == identifiers(everything)
+
+
+@pytest.mark.asyncio
+async def test_reference_completion_reports_a_chain_beyond_the_round_limit(fake):
+    """引用链超过迭代上限时报错，而不是把一个截断的子集当成完整材料。"""
+    store = fake.store_for("trajectory-one")
+    chain = [f"chain-{index}" for index in range(REFERENCE_ROUNDS + 2)]
+    store["MedicationRequest/mr2"]["medicationReference"] = {
+        "reference": f"Medication/{chain[0]}"
+    }
+    for index, identifier in enumerate(chain):
+        linked = chain[index + 1] if index + 1 < len(chain) else None
+        fields = (
+            {"ingredient": [{"itemReference": {"reference": f"Medication/{linked}"}}]}
+            if linked
+            else {}
+        )
+        store[f"Medication/{identifier}"] = fhir("Medication", identifier, **fields)
+    with pytest.raises(ValueError, match="converge"):
+        await read_patient_material(instance(), "a")
+
+
+@pytest.mark.asyncio
 async def test_only_unsupported_statuses_fall_back(fake):
     fake.override = unsupported_everything(500)
     with pytest.raises(httpx.HTTPStatusError):
@@ -632,8 +719,8 @@ async def test_prepare_returns_a_trajectory_whose_sources_are_readable(fake):
     assert trajectory.environment == "FHIR-AgentBench"
     by_source = {evidence.source_id: json.loads(evidence.statement) for evidence in trajectory.sources}
     assert set(recorded_sources(trajectory.text)) == set(by_source)
-    for source_id in ("Patient/a", "Observation/o1", "Specimen/s1", "Medication/m1", "Organization/org-1"):
-        assert await read_source(instance(), "a", source_id) == by_source[source_id]
+    for source_id, statement in sorted(by_source.items()):
+        assert await read_source(instance(), "a", source_id) == statement
 
 
 @pytest.mark.asyncio

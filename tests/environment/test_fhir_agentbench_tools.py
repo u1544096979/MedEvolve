@@ -17,9 +17,14 @@ from environments import (
     read_evidence,
     release_environment,
 )
-from environments.errors import PatientAccessError, UnsupportedDecisionPoint
+from environments.errors import (
+    EnvironmentUnavailable,
+    PatientAccessError,
+    UnsupportedDecisionPoint,
+)
 from environments.fhir import FHIRClient
 from environments.fhir_agentbench import (
+    REFERENCE_ROUNDS,
     SUPPORTED_TYPES,
     get_native_tools,
     read_patient_resources,
@@ -115,7 +120,19 @@ def initial_store():
             subject={"reference": "Patient/b"},
             medicationReference={"reference": "Medication/m2"},
         ),
-        "Medication/m1": record("Medication", "m1", code={"text": "patient-a drug"}),
+        "Medication/m1": record(
+            "Medication",
+            "m1",
+            code={"text": "patient-a drug"},
+            ingredient=[{"itemReference": {"reference": "Medication/mi"}}],
+        ),
+        "Medication/mi": record(
+            "Medication",
+            "mi",
+            code={"text": "patient-a ingredient"},
+            ingredient=[{"itemReference": {"reference": "Medication/mii"}}],
+        ),
+        "Medication/mii": record("Medication", "mii", code={"text": "second hop"}),
         "Medication/m2": record("Medication", "m2", code={"text": "patient-b drug"}),
         "Location/loc-a": record("Location", "loc-a", name="ward a"),
         "Location/loc-b": record("Location", "loc-b", name="ward b"),
@@ -310,8 +327,16 @@ async def test_unreferenced_shared_resources_are_refused(fake):
         await invoke(
             tools, "get_resources_by_resource_id", resource_type="Location", resource_id="loc-b"
         )
-    assert not any(path.endswith("Medication") for path in paths(fake))
-    assert not any(path.endswith("Location") for path in paths(fake))
+    # 展开可达闭包只读取开放患者可达的记录，从不按被拒 ID 取数。
+    requested = {
+        identifier
+        for request in fake.requests
+        for identifier in (request.url.params.get("_id") or "").split(",")
+        if identifier
+    }
+    assert "m2" not in requested
+    assert "loc-b" not in requested
+    assert requested <= {"m1", "mi", "mii", "loc-a"}
     reachable = await invoke(
         tools, "get_resources_by_resource_id", resource_type="Medication", resource_id="m1"
     )
@@ -328,7 +353,8 @@ async def test_shared_resource_reached_through_patient_search(fake):
         resource_type="Medication",
         patient_fhir_id="a",
     )
-    assert [r["id"] for r in medications["Medication"]] == ["m1"]
+    # 共享记录按可达闭包返回：直接引用的 m1 与被它 ingredient 引用的复方成分。
+    assert [r["id"] for r in medications["Medication"]] == ["m1", "mi", "mii"]
     lookups = [r for r in fake.requests if r.url.params.get("_id") == "m1"]
     assert lookups and "patient" not in lookups[-1].url.params
     locations = await invoke(
@@ -354,6 +380,44 @@ async def test_patient_type_is_queried_by_id_without_patient_param(fake):
     assert request.url.params.get("_id") == "a"
     assert "patient" not in request.url.params
     assert "subject" not in request.url.params
+
+
+@pytest.mark.asyncio
+async def test_shared_resource_reachability_follows_shared_references(fake):
+    """只被另一条 Medication 的 ingredient 引用的复方成分也必须可按同一 ID 回查。"""
+    direct = await read_source(instance(), "a", "Medication/m1")
+    assert direct["id"] == "m1"
+    ingredient = await read_source(instance(), "a", "Medication/mi")
+    assert ingredient["code"] == {"text": "patient-a ingredient"}
+    second_hop = await read_source(instance(), "a", "Medication/mii")
+    assert second_hop["code"] == {"text": "second hop"}
+    tools = get_native_tools(instance(), ["a"])
+    resolved = await invoke(
+        tools, "get_resources_by_resource_id", resource_type="Medication", resource_id="mii"
+    )
+    assert [r["id"] for r in resolved["Medication"]] == ["mii"]
+    with pytest.raises(PatientAccessError):
+        await read_source(instance(), "a", "Medication/m2")
+
+
+@pytest.mark.asyncio
+async def test_shared_reference_chain_beyond_the_round_limit_is_reported(fake):
+    """可达性超过迭代上限时报错，而不是静默返回被截断的子集。"""
+    store = fake.store_for("instance-one")
+    chain = [f"chain-{index}" for index in range(REFERENCE_ROUNDS + 2)]
+    store["MedicationRequest/mr1"]["medicationReference"] = {
+        "reference": f"Medication/{chain[0]}"
+    }
+    for index, identifier in enumerate(chain):
+        linked = chain[index + 1] if index + 1 < len(chain) else None
+        fields = (
+            {"ingredient": [{"itemReference": {"reference": f"Medication/{linked}"}}]}
+            if linked
+            else {}
+        )
+        store[f"Medication/{identifier}"] = record("Medication", identifier, **fields)
+    with pytest.raises(EnvironmentUnavailable, match="converge"):
+        await read_source(instance(), "a", f"Medication/{chain[0]}")
 
 
 @pytest.mark.asyncio
@@ -574,7 +638,13 @@ async def test_patient_resources_keep_raw_records(fake):
 async def test_shared_read_is_blocked_for_a_different_patient_scope(fake):
     with pytest.raises(PatientAccessError):
         await read_source(instance(), "b", "Medication/m1")
-    assert not any(path.endswith("Medication") for path in paths(fake))
+    requested = {
+        identifier
+        for request in fake.requests
+        for identifier in (request.url.params.get("_id") or "").split(",")
+        if identifier
+    }
+    assert "m1" not in requested
 
 
 @pytest.mark.asyncio

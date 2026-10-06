@@ -15,6 +15,8 @@
   开放患者引用可达的记录。
 - 患者材料读取优先用 ``Patient/$everything``，仅在服务端明确不支持时逐类型分页回退；
   回退与引用补齐都先核对能力声明的检索参数，再按 ``ResourceType/id`` 去重。
+- 引用补齐与共享资源可达性都迭代到不动点：``$everything`` 返回的传递闭包、逐类型回退的
+  一跳读取与共享记录之间的内部引用必须得到同一份材料。
 """
 
 import json
@@ -54,6 +56,10 @@ SHARED_REFERENCING_TYPES = {
     "Location": ("Encounter",),
     "Organization": ("Encounter", "Procedure"),
 }
+
+# 共享资源可达性与引用补齐的迭代上限：引用链远长于此说明数据或实现有问题，
+# 应当报错而不是静默截断成一个看起来完整的子集。
+REFERENCE_ROUNDS = 16
 
 # 服务端不支持 Patient/$everything 时逐类型读取的患者临床类型。
 FALLBACK_RESOURCE_TYPES = (
@@ -129,6 +135,7 @@ class ScopedReader:
     def __init__(self, instance: EnvironmentInstance, patients: frozenset[str]):
         self.client = FHIRClient(instance.endpoint, sorted(patients))
         self._referenced: dict[tuple[str, str], set[str]] = {}
+        self._shared: dict[frozenset[str], dict[str, set[str]]] = {}
         self._search_params: dict[str, set[str]] | None = None
 
     @property
@@ -183,9 +190,63 @@ class ScopedReader:
         )
 
     async def _reachable_ids(self, resource_type: str, selected: set[str]) -> set[str]:
-        allowed: set[str] = set()
-        for patient in sorted(selected):
-            allowed |= await self._referenced_by(patient, resource_type)
+        """开放患者引用可达的共享记录 ID：沿共享记录内部引用取传递闭包。"""
+        reachable = await self._shared_reachability(selected)
+        return set(reachable.get(resource_type, ()))
+
+    async def _shared_reachability(
+        self, selected: set[str]
+    ) -> dict[str, set[str]]:
+        """按开放患者为唯一入口，展开共享资源之间的引用闭包。
+
+        起点是开放患者所属记录对共享类型的直接引用（如 MedicationRequest 的
+        medicationReference），再沿共享记录内部的共享引用继续展开（如
+        ``Medication.ingredient.itemReference``、``Location.partOf``），因此与
+        ``Patient/$everything`` 的传递闭包口径一致。
+        """
+        key = frozenset(selected)
+        cached = self._shared.get(key)
+        if cached is not None:
+            return cached
+        allowed = {resource_type: set() for resource_type in SHARED_RESOURCE_TYPES}
+        for patient in sorted(key):
+            for resource_type in SHARED_RESOURCE_TYPES:
+                allowed[resource_type] |= await self._referenced_by(
+                    patient, resource_type
+                )
+        scanned = {resource_type: set() for resource_type in SHARED_RESOURCE_TYPES}
+        for _ in range(REFERENCE_ROUNDS):
+            pending: dict[str, list[str]] = {}
+            for resource_type, identifiers in allowed.items():
+                fresh = identifiers - scanned[resource_type]
+                if fresh:
+                    pending[resource_type] = sorted(fresh)
+            if not pending:
+                break
+            for resource_type, identifiers in sorted(pending.items()):
+                scanned[resource_type].update(identifiers)
+                records = await self.client.search_all(
+                    resource_type,
+                    {"_id": ",".join(identifiers), "_count": PAGE_SIZE},
+                    key,
+                )
+                missing = set(identifiers) - {record.get("id") for record in records}
+                if missing:
+                    raise EnvironmentUnavailable(
+                        f"FHIR server did not return reachable {resource_type} records: "
+                        + ", ".join(sorted(missing))
+                    )
+                for record in records:
+                    for reference in references(record):
+                        referenced_type, _, referenced_id = reference.partition("/")
+                        if referenced_type in allowed and referenced_id:
+                            allowed[referenced_type].add(referenced_id)
+        else:
+            raise EnvironmentUnavailable(
+                "FHIR shared references did not converge within "
+                f"{REFERENCE_ROUNDS} rounds"
+            )
+        self._shared[key] = allowed
         return allowed
 
     async def _referenced_by(self, patient: str, resource_type: str) -> set[str]:
@@ -307,30 +368,44 @@ class ScopedReader:
     async def _complete_references(
         self, resources: list[dict], selected: set[str]
     ) -> list[dict]:
-        """扫描引用并按 ID 补齐材料里缺少的关联记录。"""
-        existing = {(r.get("resourceType"), r.get("id")) for r in resources}
-        wanted: dict[str, set[str]] = {}
-        for resource in resources:
-            for reference in references(resource):
-                resource_type, _, identifier = reference.partition("/")
-                if not identifier or resource_type not in COMPLETION_RESOURCE_TYPES:
-                    continue
-                if (resource_type, identifier) in existing:
-                    continue
-                wanted.setdefault(resource_type, set()).add(identifier)
-        added: list[dict] = []
-        for resource_type, identifiers in sorted(wanted.items()):
-            records = await self._read_referenced(resource_type, identifiers, selected)
-            missing = identifiers - {record.get("id") for record in records}
-            if missing:
-                raise ValueError(
-                    "FHIR server did not return referenced records: "
-                    + ", ".join(
-                        f"{resource_type}/{identifier}" for identifier in sorted(missing)
+        """扫描引用并按 ID 补齐材料里缺少的关联记录，迭代到闭包不再变化。
+
+        只扫描一轮会让第二跳之后的记录（例如 ``Medication.ingredient`` 引用的复方成分）
+        在逐类型回退路径上丢掉，而 ``$everything`` 路径已经把它们带进材料。
+        """
+        material = list(resources)
+        existing = {(r.get("resourceType"), r.get("id")) for r in material}
+        for _ in range(REFERENCE_ROUNDS):
+            wanted: dict[str, set[str]] = {}
+            for resource in material:
+                for reference in references(resource):
+                    resource_type, _, identifier = reference.partition("/")
+                    if not identifier or resource_type not in COMPLETION_RESOURCE_TYPES:
+                        continue
+                    if (resource_type, identifier) in existing:
+                        continue
+                    wanted.setdefault(resource_type, set()).add(identifier)
+            if not wanted:
+                return material
+            for resource_type, identifiers in sorted(wanted.items()):
+                records = await self._read_referenced(resource_type, identifiers, selected)
+                missing = identifiers - {record.get("id") for record in records}
+                if missing:
+                    raise ValueError(
+                        "FHIR server did not return referenced records: "
+                        + ", ".join(
+                            f"{resource_type}/{identifier}"
+                            for identifier in sorted(missing)
+                        )
                     )
+                material.extend(records)
+                existing.update(
+                    (resource_type, record.get("id")) for record in records
                 )
-            added.extend(records)
-        return resources + added
+        raise ValueError(
+            "FHIR reference completion did not converge within "
+            f"{REFERENCE_ROUNDS} rounds"
+        )
 
     async def patient_resources(self, patient: str) -> list[dict]:
         selected = self._scope(patient)
