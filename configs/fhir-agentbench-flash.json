@@ -3,7 +3,7 @@
   "method": "medevolve",
   "environment": {
     "name": "FHIR-AgentBench",
-    "manager_url": "http://127.0.0.1:18086",
+    "manager_url": "http://127.0.0.1:18084",
     "seed_data": "/Users/guagua/data/mimic-iv-fhir-demo/2.1.0/seed"
   },
   "runtime": {
