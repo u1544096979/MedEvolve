@@ -30,7 +30,7 @@ SingleShot 的 generate_tasks 和生成提示词在 methods/singleshot/ 内独�
 
 SingleShot 只在 evaluation_patients 上生成任务，不使用 evolution_patients 或 round_patients 学习、探索或更新策略。公共入口按 initial_strategy.allocation 和 random_seed 采样两个方向；相同患者顺序、初始配比和种子下，方向安排与公共入口的初始策略评测一致。
 
-directions 是本批次两道目标任务的生成要求，每个 GenerationDirection 包含 task_type（题型）、difficulty（难度要求）和 weight（公共采样权重）。例如两个位置分别为“诊断与解释，关联多个时间节点分析病程变化”和“治疗规划，综合多条记录制定方案”。两个方向可使用相同题型，分别对应一次生成中的两个目标位置；不是两个医疗环境，也不代表两次模型调用。weight 用于公共入口采样，不代表要求生成的题数。
+directions 是公共实验入口为本批次提供的两份任务生成要求，每个 GenerationDirection 包含 task_type（题型）、difficulty（难度要求）和 weight（公共采样权重）。字段值沿用实验已有配置，SingleShot 不新增任务方向或难度分类。两个方向可使用相同题型，分别对应一次生成中的两个目标位置；不是两个医疗环境，也不代表两次模型调用。weight 用于公共入口采样，不代表要求生成的题数。
 
 生成模型接收当前患者的 trajectory、两个 directions 和公共输出约束。trajectory 包含患者标识、环境名称、完整 text，以及 sources 中的 source_id 和原始记录 statement；不只传来源 ID，不为节省输入而截断、抽样或概括患者事实。
 
