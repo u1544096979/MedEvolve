@@ -72,7 +72,7 @@ def test_cumulative_budget_keeps_failed_stages_and_blocks_next_call(monkeypatch)
     assert single.await_count == agent.await_count == 1
 
 
-@pytest.mark.parametrize("method", ["taskcraft", "workflow", "singleshot", "selfgen", "envexplore"])
+@pytest.mark.parametrize("method", ["taskcraft", "workflow", "singleshot", "envexplore"])
 def test_unimplemented_method_is_explicit(method):
     with pytest.raises(ValueError, match=f"Method {method} is not implemented"):
         runner.resolve_generator(method)
