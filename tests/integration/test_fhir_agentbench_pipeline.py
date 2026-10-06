@@ -1,4 +1,4 @@
-"""FHIR-AgentBench 公共任务执行链：核验 → 质量 → 解题 → 完成。
+"""FHIR-AgentBench 公共任务执行链：核验 → 质量 → 难度 → 解题 → 完成。
 
 判分沿用公共 ``evaluation.evaluate_task``，不为本环境建立单独算法。全部使用
 httpx.MockTransport 与固定模型输出，不连接 Docker、PostgreSQL、http://127.0.0.1:18086
@@ -22,7 +22,8 @@ from contracts import (
     Evidence,
     ModelConfig,
     PatientTrajectory,
-    QualityReview,
+    QualityJudgment,
+    DifficultyJudgment,
     RunResult,
     RuntimeConfig,
     SolverAnswer,
@@ -165,18 +166,18 @@ class FixedModels:
             if "resource" in payload:
                 self.verifier_payloads.append(payload["resource"])
             output = {"valid": True, "reason": "原始记录支持该题"}
-        elif output_type is QualityReview:
+        elif output_type is QualityJudgment:
             output = {
-                "dimensions": {
-                    dimension: {"judgment": "合格", "reason": "满足要求"}
-                    for dimension in (
-                        "clinical_value",
-                        "correctness",
-                        "longitudinal_integration",
-                        "clarity",
-                    )
-                }
+                dimension: {"score": 4, "reason": "满足要求"}
+                for dimension in (
+                    "factual_accuracy",
+                    "clinical_soundness",
+                    "evidence_sufficiency",
+                    "task_clarity",
+                )
             }
+        elif output_type is DifficultyJudgment:
+            output = {"reasoning_depth": 2, "reason": "跨记录整合"}
         elif output_type is CompletionReview:
             output = {"completed": True, "reason": "检索记录支持答案"}
         else:
@@ -254,7 +255,7 @@ def environment():
 
 
 def evaluation_config():
-    roles = ("verifier", "quality", "solver", "completion")
+    roles = ("verifier", "quality", "difficulty", "solver", "completion")
     return EvaluationConfig(
         runtime=RuntimeConfig(
             models={role: ModelConfig(model=role, api_key_env="UNUSED") for role in roles},
