@@ -17,7 +17,7 @@ from contracts import (
     PatientTrajectory,
     Task,
 )
-from environments.errors import EnvironmentUnavailable, PatientAccessError, UnsupportedDecisionPoint
+from environments.errors import EnvironmentUnavailable, UnsupportedDecisionPoint
 from environments.fhir import FHIRClient, decode_document_notes
 from environments.medagentbench import NativeTools, load_functions
 from environments.physicianbench import FHIR_TOOL_SCHEMAS, NATIVE_FUNCTIONS
@@ -161,14 +161,17 @@ async def get_tools(
     schemas = {schema["name"]: schema for schema in FHIR_TOOL_SCHEMAS}
 
     def tool_error(context, error):
-        if isinstance(error, (PatientAccessError, EnvironmentUnavailable, UnsupportedDecisionPoint)):
+        if isinstance(error, (EnvironmentUnavailable, UnsupportedDecisionPoint)):
             raise error
         return json.dumps({"error": f"{type(error).__name__}: {error}. Please retry with valid arguments."})
 
     def bind(native):
         @wraps(native)
         async def invoke(*args, **kwargs):
-            return json.dumps(await native(client, *args, **kwargs), default=str)
+            result = json.dumps(await native(client, *args, **kwargs), default=str)
+            if len(result) > 10000:
+                result = result[:10000] + "… [result truncated]"
+            return result
 
         signature = inspect.signature(native)
         invoke.__signature__ = signature.replace(

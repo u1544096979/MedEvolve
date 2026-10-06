@@ -235,50 +235,54 @@ async def test_disallowed_patient_queries_and_writes_never_reach_http(native_fhi
             },
         ),
     ]:
-        with pytest.raises(PatientAccessError):
-            await invoke(tools, name, **args)
+        denied = await invoke(tools, name, **args)
+        assert "PatientAccessError" in denied["error"]
+        assert "entries" not in denied
     assert not native_fhir[1]
+    corrected = await invoke(tools, "fhir_observation_search_labs", patient="a")
+    assert corrected["entries"][0]["id"] == "lab"
 
 
 @pytest.mark.asyncio
 async def test_foreign_linked_resources_block_queries_and_writes(native_fhir):
     tools = await get_tools(instance(), ["a"])
-    with pytest.raises(PatientAccessError):
-        await invoke(
-            tools,
-            "fhir_document_reference_search_clinical_notes",
-            encounter="Encounter/eb",
-        )
-    with pytest.raises(PatientAccessError):
-        await invoke(
-            tools,
-            "fhir_service_request_create",
-            patient_reference="Patient/a",
-            code_code="x",
-            code_display="x",
-            requester_reference="Practitioner/p",
-            encounter_reference="Encounter/eb",
-        )
+    denied = await invoke(
+        tools,
+        "fhir_document_reference_search_clinical_notes",
+        encounter="Encounter/eb",
+    )
+    assert "PatientAccessError" in denied["error"]
+    denied = await invoke(
+        tools,
+        "fhir_service_request_create",
+        patient_reference="Patient/a",
+        code_code="x",
+        code_display="x",
+        requester_reference="Practitioner/p",
+        encounter_reference="Encounter/eb",
+    )
+    assert "PatientAccessError" in denied["error"]
     assert all(r.method != "POST" for r in native_fhir[1])
     tools = await get_tools(instance(), ["a", "b"])
-    with pytest.raises(PatientAccessError):
-        await invoke(
-            tools,
-            "fhir_service_request_create",
-            patient_reference="Patient/a",
-            code_code="x",
-            code_display="x",
-            requester_reference="Practitioner/p",
-            encounter_reference="Encounter/eb",
-        )
+    denied = await invoke(
+        tools,
+        "fhir_service_request_create",
+        patient_reference="Patient/a",
+        code_code="x",
+        code_display="x",
+        requester_reference="Practitioner/p",
+        encounter_reference="Encounter/eb",
+    )
+    assert "PatientAccessError" in denied["error"]
 
 
 @pytest.mark.asyncio
 async def test_response_scope_and_pagination_are_checked(native_fhir):
     tools = await get_tools(instance(), ["a"])
     native_fhir[2]["response"] = bundle([native_fhir[0]["instance-one"]["Patient/b"]])
-    with pytest.raises(PatientAccessError):
-        await invoke(tools, "fhir_patient_search_demographics")
+    denied = await invoke(tools, "fhir_patient_search_demographics")
+    assert "PatientAccessError" in denied["error"]
+    assert "entries" not in denied
     native_fhir[2]["response"] = bundle(
         [
             {
@@ -288,11 +292,12 @@ async def test_response_scope_and_pagination_are_checked(native_fhir):
             }
         ]
     )
-    with pytest.raises(PatientAccessError):
-        await invoke(tools, "fhir_patient_search_demographics")
+    denied = await invoke(tools, "fhir_patient_search_demographics")
+    assert "PatientAccessError" in denied["error"]
+    assert "entries" not in denied
     native_fhir[2]["response"] = bundle([], "http://another-instance/fhir/Observation")
-    with pytest.raises(PatientAccessError, match="pagination"):
-        await invoke(tools, "fhir_observation_search_labs")
+    denied = await invoke(tools, "fhir_observation_search_labs")
+    assert "PatientAccessError" in denied["error"] and "pagination" in denied["error"]
 
 
 @pytest.mark.asyncio
