@@ -1,9 +1,14 @@
 import json
 from pathlib import Path
 import pytest
-from contracts import ExperimentConfig
+from contracts import (
+    Evidence, ExperimentConfig, GenerationDirection, PatientTrajectory, RunResult,
+)
 from experiments.runner import resolve_generator
 from methods.selfgen import generate_tasks
+
+KINDS = ["诊断与解释", "检查与风险分层"]
+BUDGET = {"max_model_turns": 6, "max_tool_calls": 0}
 
 @pytest.mark.parametrize("source,target", [
     ("physicianbench-comparison.json", "physicianbench-selfgen.json"),
@@ -23,5 +28,41 @@ def test_config_keeps_sampling_environment_and_model(source, target):
     assert set(config.runtime.models) == {"generator"}
     assert set(config.runtime.budgets) == {"generator"}
     assert values["runtime"]["models"]["generator"] == base["runtime"]["models"]["generator"]
-    assert values["runtime"]["budgets"]["generator"] == base["runtime"]["budgets"]["generator"]
+    assert config.runtime.budgets["generator"].model_dump() == BUDGET
     assert resolve_generator("selfgen") is generate_tasks
+
+def draft(kinds=KINDS):
+    return {"batch": {"questions": [dict(
+        instruction=f"{kind}-初稿", task_type=kind, reference_answer="答案-初稿",
+        decision_point=None,
+        evidence=[dict(source_id="Observation/1", statement="原始记录事实")],
+    ) for kind in kinds]}, "direction_indices": list(range(len(kinds)))}
+
+def review(size):
+    return {"questions": [dict(candidate_index=index, passed=True, issues=[])
+                           for index in range(size)]}
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["physicianbench-selfgen.json", "medagentbench-selfgen.json"])
+async def test_declared_generator_budget_completes_shortest_loop(monkeypatch, target):
+    root = Path(__file__).parents[1] / "configs"
+    config = ExperimentConfig.model_validate(json.loads((root / target).read_text()))
+    assert config.runtime.budgets["generator"].model_dump() == BUDGET
+    trajectory = PatientTrajectory(
+        patient_id="p1", environment=config.environment.name, text="患者原始轨迹",
+        sources=[Evidence(source_id="Observation/1",
+                          statement='{"resourceType":"Observation","id":"1"}')])
+    directions = [GenerationDirection(task_type=kind, difficulty="基础", weight=1)
+                  for kind in KINDS]
+    script = [draft(), review(len(KINDS))]
+    calls = []
+
+    async def call(**kwargs):
+        calls.append(kwargs)
+        return RunResult(output=script[len(calls) - 1], status="completed", trace=[],
+                         usage={"model_turns": 1, "tool_calls": 0})
+
+    monkeypatch.setattr("runtime.call_llm", call)
+    result = await generate_tasks(trajectory, config.environment, directions, config.runtime)
+    assert result.status == "completed" and result.output is not None
+    assert len(calls) == 2
