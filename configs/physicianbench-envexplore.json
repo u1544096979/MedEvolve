@@ -4,7 +4,8 @@
   "environment": {
     "name": "PhysicianBench",
     "manager_url": "http://10.7.0.15:18084",
-    "seed_data": "fhir-full:v1"
+    "seed_data": "fhir-full:v1",
+    "tool_result_limit": 5000
   },
   "runtime": {
     "models": {

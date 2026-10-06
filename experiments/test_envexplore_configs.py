@@ -16,6 +16,10 @@ def test_configs_keep_main_comparison_material(source, target):
     assert config.compare_initial_strategy is False
     for key in ("environment", "evolution_patients", "evaluation_patients",
                 "initial_strategy", "random_seed", "evaluation"):
+        if key == "environment":
+            assert {k: v for k, v in values[key].items() if k != "tool_result_limit"} == base[key]
+            assert values[key]["tool_result_limit"] == 5000
+            continue
         assert values[key] == base[key]
     assert set(config.runtime.models) == {"environment_explorer", "generator"}
     assert set(config.runtime.budgets) == {"environment_explorer", "generator"}

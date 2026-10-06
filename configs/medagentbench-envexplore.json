@@ -4,7 +4,8 @@
   "environment": {
     "name": "MedAgentBench",
     "manager_url": "http://127.0.0.1:18084",
-    "seed_data": "jyxsu6/medagentbench@sha256:3fb83d7ed71c5476f9eb6212bd440a909ef7505922bbc757dc488a8fc0701966"
+    "seed_data": "jyxsu6/medagentbench@sha256:3fb83d7ed71c5476f9eb6212bd440a909ef7505922bbc757dc488a8fc0701966",
+    "tool_result_limit": 5000
   },
   "runtime": {
     "models": {
