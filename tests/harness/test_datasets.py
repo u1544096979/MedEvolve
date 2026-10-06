@@ -86,15 +86,62 @@ def test_frozen_manifest_records_digests_counts_and_order(tmp_path, source_files
     detail = manifest["sources"]["taskcraft"]
     tasks_digest = hashlib.sha256((SOURCE_FIXTURE / "tasks.json").read_bytes()).hexdigest()
     evaluations_digest = hashlib.sha256((SOURCE_FIXTURE / "evaluations.json").read_bytes()).hexdigest()
+    patients_digest = hashlib.sha256((SOURCE_FIXTURE / "patients.json").read_bytes()).hexdigest()
+    assert detail["tasks_file"] == str(source_files["taskcraft"])
     assert detail["tasks_sha256"] == tasks_digest
     assert detail["evaluations_sha256"] == evaluations_digest
+    assert detail["patients_file"] == str(source_files["taskcraft"].parent / "patients.json")
+    assert detail["patients_sha256"] == patients_digest
     assert detail["task_ids"] == ["invalid-task", "valid-task"]
     assert detail["sampling_order"] == ["valid-task"]
     assert detail["sampled_task_ids"] == ["valid-task"]
     assert detail["counts"] == {"total": 2, "verified_valid": 1, "valid": 1,
                                 "invalid": 1, "unverified": 0, "patient_missing": 0}
     assert detail["patient_roster"] == "checked"
+    assert detail["patient_roster_reason"]
     assert load_frozen(tmp_path / "frozen") == frozen
+
+
+def test_manifest_records_absent_patient_roster_with_reason(tmp_path):
+    files = {"medevolve": _write_source(
+        tmp_path / "medevolve", [_task("keep")], [_evaluation("keep", True)])}
+    freeze_datasets(files, count=1, seed=42, destination=tmp_path / "frozen")
+    detail = json.loads((tmp_path / "frozen" / "manifest.json").read_text())["sources"]
+    assert detail["medevolve"]["patients_file"] is None
+    assert detail["medevolve"]["patients_sha256"] is None
+    assert detail["medevolve"]["patient_roster"] == "absent"
+    assert "patients.json" in detail["medevolve"]["patient_roster_reason"]
+
+
+def test_manifest_records_generation_cost_shapes_and_absence(tmp_path):
+    # PhysicianBench 批量生成：usage 与 tasks.json 同级。
+    sibling = tmp_path / "physicianbench-gpt4omini-all"
+    files = {"medevolve": _write_source(
+        sibling, [_task("pb-usage")], [_evaluation("pb-usage", True)])}
+    (sibling / "summary.json").write_text(json.dumps(
+        {"status": "completed", "usage": {"model_turns": 108, "input_tokens": 3107994,
+                                          "output_tokens": 30053, "total_tokens": 3138047}}))
+    # workflow 运行：tasks.json 位于 evaluation/，summary.json 在父目录，成本写 costs.generation。
+    workflow = tmp_path / "workflow-medagentbench-multi"
+    files["workflow"] = _write_source(
+        workflow / "evaluation", [_task("mab-workflow", source_method="workflow")],
+        [_evaluation("mab-workflow", True)])
+    (workflow / "summary.json").write_text(json.dumps(
+        {"costs": {"generation": {"model_turns": 13, "total_tokens": 799787,
+                                  "runs_without_known_tokens": 1}}}))
+    files["taskcraft"] = _write_source(
+        tmp_path / "taskcraft", [_task("mab-taskcraft", source_method="taskcraft")],
+        [_evaluation("mab-taskcraft", True)])
+    freeze_datasets(files, count=1, seed=42, destination=tmp_path / "frozen")
+    sources = json.loads((tmp_path / "frozen" / "manifest.json").read_text())["sources"]
+    assert sources["medevolve"]["generation_cost"]["total_tokens"] == 3138047
+    assert sources["medevolve"]["generation_cost_source"] == str(sibling / "summary.json")
+    assert "usage" in sources["medevolve"]["generation_cost_reason"]
+    assert sources["workflow"]["generation_cost"]["total_tokens"] == 799787
+    assert "costs.generation" in sources["workflow"]["generation_cost_reason"]
+    assert sources["taskcraft"]["generation_cost"] is None
+    assert sources["taskcraft"]["generation_cost_source"] is None
+    assert "summary.json" in sources["taskcraft"]["generation_cost_reason"]
 
 
 def test_same_seed_picks_same_tasks_from_larger_source(tmp_path):

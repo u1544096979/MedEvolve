@@ -18,6 +18,9 @@ MANIFEST_NAME = "manifest.json"
 TASKS_NAME = "tasks.json"
 EVALUATIONS_NAME = "evaluations.json"
 PATIENTS_NAME = "patients.json"
+# 已观测的生成成本形状：workflow 运行写 costs.generation，taskcraft/envexplore 写
+# generation_usage，PhysicianBench 批量生成运行写顶层 usage。
+GENERATION_COST_KEYS = ("costs.generation", "generation_usage", "usage")
 MANIFEST_VERSION = 1
 
 
@@ -40,9 +43,13 @@ class _Source:
     tasks_sha256: str = ""
     evaluations_path: Path | None = None
     evaluations_sha256: str = ""
+    patients_path: Path | None = None
+    patients_sha256: str | None = None
     patient_roster: str = "absent"
+    patient_roster_reason: str = ""
     generation_cost: dict | None = None
     generation_cost_source: str | None = None
+    generation_cost_reason: str = ""
 
 
 def freeze_datasets(
@@ -94,9 +101,13 @@ def freeze_datasets(
             "tasks_sha256": report.tasks_sha256,
             "evaluations_file": str(report.evaluations_path),
             "evaluations_sha256": report.evaluations_sha256,
+            "patients_file": str(report.patients_path) if report.patients_path else None,
+            "patients_sha256": report.patients_sha256,
             "patient_roster": report.patient_roster,
+            "patient_roster_reason": report.patient_roster_reason,
             "generation_cost": report.generation_cost,
             "generation_cost_source": report.generation_cost_source,
+            "generation_cost_reason": report.generation_cost_reason,
             "task_ids": sorted(by_id),
             "sampling_order": sampling_order,
             "sampled_task_ids": sampled_ids,
@@ -243,7 +254,13 @@ def _read_source(name: str, path: Path) -> _Source:
             report.error = (f"环境不一致：任务文件为 {report.environment}，"
                             f"患者名单为 {roster_environment}")
             return report
+        report.patients_path = roster_path
+        report.patients_sha256 = _sha256(roster_path)
         report.patient_roster = "checked"
+        report.patient_roster_reason = f"按 {PATIENTS_NAME} 名单校验 patient_id 存在于名单"
+    else:
+        report.patient_roster_reason = (f"来源目录无 {PATIENTS_NAME}，"
+                                        "患者存在只校验 patient_id 非空")
 
     report.tasks = tasks
     evaluated = {evaluation.task_id: evaluation for evaluation in evaluations}
@@ -264,24 +281,48 @@ def _read_source(name: str, path: Path) -> _Source:
         report.error = f"{EVALUATIONS_NAME} 中所有任务都没有核验结果"
         return report
 
-    report.generation_cost_source, report.generation_cost = _generation_cost(tasks_path)
+    (report.generation_cost_source, report.generation_cost,
+     report.generation_cost_reason) = _generation_cost(tasks_path)
     return report
 
 
-def _generation_cost(tasks_path: Path) -> tuple[str | None, dict | None]:
-    for candidate in (tasks_path.parent / "summary.json",
-                      tasks_path.parent.parent / "summary.json"):
-        if not candidate.is_file():
-            continue
+def _generation_cost(tasks_path: Path) -> tuple[str | None, dict | None, str]:
+    """Read the generation cost recorded next to the tasks, or explain its absence.
+
+    Cost lives in a sibling ``summary.json`` (PhysicianBench bulk generation) or in
+    the parent directory's one (workflow runs, whose tasks sit in ``evaluation/``).
+    All three observed key shapes are tried; a source without a readable summary or
+    without any of those fields keeps ``null`` cost and the reason why.
+    """
+    candidates = (tasks_path.parent / "summary.json",
+                  tasks_path.parent.parent / "summary.json")
+    observed = [candidate for candidate in candidates if candidate.is_file()]
+    if not observed:
+        return None, None, ("未找到 summary.json（已查找 "
+                            + "、".join(str(candidate) for candidate in candidates) + "）")
+    notes: list[str] = []
+    for candidate in observed:
         try:
             summary = json.loads(candidate.read_text())
-        except ValueError:
+        except (ValueError, TypeError) as error:
+            notes.append(f"{candidate} 读取失败：{error}")
             continue
-        cost = (summary.get("costs") or {}).get("generation") or summary.get("generation_usage")
-        if cost is None:
-            continue
-        return str(candidate), cost
-    return None, None
+        for key in GENERATION_COST_KEYS:
+            cost = _dig(summary, key)
+            if isinstance(cost, dict) and cost:
+                return str(candidate), cost, f"取自 {candidate} 的 {key}"
+        notes.append(f"{candidate} 没有生成成本字段（已查 "
+                     + "、".join(GENERATION_COST_KEYS) + "）")
+    return None, None, "；".join(notes)
+
+
+def _dig(payload: dict, dotted: str) -> object:
+    value: object = payload
+    for part in dotted.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
 
 
 def _sampling_order(tasks: list[Task], seed: int) -> list[str]:
