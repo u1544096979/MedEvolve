@@ -3,11 +3,12 @@
 import importlib
 import json
 from collections import Counter
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel
 
-from contracts import Budget, GenerationDirection, RunResult, RuntimeConfig, TaskBatch
+from contracts import (Budget, GenerationDirection, RunResult, RuntimeConfig, TaskBatch,
+                       TaskType)
 
 RunStatus = Literal["completed", "budget_exhausted", "failed"]
 
@@ -27,28 +28,48 @@ def normalize_usage(usage: dict) -> dict:
     return result
 
 
-def output_constraints(directions: list[GenerationDirection]) -> str:
-    if len(directions) != 2:
-        raise ValueError("directions must contain exactly two generation positions")
+NUMBER_WORDS = {1: "one", 2: "two"}
+
+
+def _validate_directions(directions: list[GenerationDirection], *, max_questions: int,
+                         candidate_pool: bool) -> None:
+    if max_questions not in (1, 2):
+        raise ValueError("max_questions must be one or two")
+    types = [d.task_type for d in directions]
+    if candidate_pool:
+        if len(types) != 5 or set(types) != set(get_args(TaskType)):
+            raise ValueError("candidate pool must contain each of the five task types once")
+    elif len(directions) != max_questions:
+        raise ValueError("directions must contain exactly "
+                         f"{NUMBER_WORDS[max_questions]} generation positions")
+
+
+def output_constraints(directions: list[GenerationDirection], *, max_questions: int = 2,
+                       candidate_pool: bool = False) -> str:
+    _validate_directions(directions, max_questions=max_questions, candidate_pool=candidate_pool)
+    positions = ("候选题型池覆盖五类题型，每类题型最多一题；" if candidate_pool else
+                 f"按 {len(directions)} 个生成位置出题；")
     return (
-        "返回 TaskBatch JSON，questions 最多两题；证据不足可少出题或返回空列表。"
+        f"返回 TaskBatch JSON，questions 最多{max_questions}题；证据不足可少出题或返回空列表。"
         "每题包含 instruction、task_type、reference_answer、evidence、decision_point。"
         "instruction 和 reference_answer 非空；evidence 逐条包含可定位的 source_id 和事实 statement。"
         "decision_point 必须为 null。不要附加患者、环境、轮次、方法或任务编号。"
-        "题型数量不能超过指定方向中该题型的数量；题型与难度方向："
+        + positions
+        + "题型数量不能超过指定方向中该题型的数量；题型与难度方向："
         + json.dumps([d.model_dump(mode="json") for d in directions], ensure_ascii=False)
     )
 
 
-def validate_task_batch(result: RunResult, directions: list[GenerationDirection]) -> RunResult:
-    output_constraints(directions)
+def validate_task_batch(result: RunResult, directions: list[GenerationDirection], *,
+                        max_questions: int = 2, candidate_pool: bool = False) -> RunResult:
+    output_constraints(directions, max_questions=max_questions, candidate_pool=candidate_pool)
     result = result.model_copy(update={"usage": normalize_usage(result.usage)})
     if result.status != "completed":
         return result.model_copy(update={"output": None})
     try:
         batch = TaskBatch.model_validate(result.output)
-        if len(batch.questions) > 2:
-            raise ValueError("TaskBatch exceeds the two generation positions")
+        if len(batch.questions) > max_questions:
+            raise ValueError(f"TaskBatch exceeds the {max_questions} allowed questions")
         allowed = Counter(d.task_type for d in directions)
         actual = Counter(q.task_type for q in batch.questions)
         if actual - allowed:
