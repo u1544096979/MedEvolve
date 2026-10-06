@@ -1315,6 +1315,23 @@ class TrackingPipeline(Pipeline):
             origin="width", parents=["父题"], locator=BLOCK_B)]
 
 
+class RaisingDepthPipeline(Pipeline):
+    """深度分支抛错的 Pipeline：原子阶段产出固定候选，用于核对失败时的候选池。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.atomic_candidates = atomic_pool(3, task_types=["诊断与解释", "治疗规划"])
+
+    async def atomic(self):
+        return self.atomic_candidates
+
+    async def width(self, atomic):
+        return []
+
+    async def depth(self, atomic):
+        raise RuntimeError("深度分支执行失败")
+
+
 def scheduling_pipeline(random_seed):
     return TrackingPipeline(trajectory(), [], directions(), TaskCraftParameters(),
                             Ledger(GenerationBudget(runtime_config())), random_seed=random_seed)
@@ -1390,6 +1407,28 @@ async def test_width_skips_with_a_real_reason_when_the_atomic_pool_is_short():
     assert len(skipped) == 1 and skipped[0]["available"] == 1
     assert "width" not in pipeline.branch_inputs
     assert "depth" in pipeline.branch_inputs
+
+
+@pytest.mark.asyncio
+async def test_branch_failure_keeps_generated_candidates_in_the_pool(patched, environment,
+                                                                    monkeypatch):
+    fake = FakeRuntime()
+    patched(fake)
+    monkeypatch.setattr("methods.taskcraft.Pipeline", RaisingDepthPipeline)
+
+    result = await generate_tasks(trajectory(), environment, directions(), runtime_config(),
+                                  random_seed=7)
+
+    assert result.status == "failed" and "深度分支执行失败" in result.error
+    failures = [entry for entry in pipeline_records(result)
+                if entry["stage"] == "depth/branch" and entry["status"] == "failed"]
+    assert [entry["reason"] for entry in failures] == ["RuntimeError: 深度分支执行失败"], \
+        "分支异常必须记录真实原因"
+    pool = pipeline_pool(result)
+    assert [candidate["origin"] for candidate in pool] == ["atomic"] * 3, \
+        "分支抛错时已生成的原子候选必须留在池中"
+    assert [candidate["question"]["instruction"] for candidate in pool] == [
+        candidate.question.instruction for candidate in atomic_pool(3)]
 
 
 def test_selection_is_repeatable_capped_and_bound_by_the_clinical_quota():

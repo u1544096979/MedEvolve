@@ -184,6 +184,8 @@ class Pipeline:
 
     async def run(self) -> None:
         atomic = await self.atomic()
+        # 分支抛错也要留下已付费的原子候选：先落地原子池，分支完成后按固定顺序重建。
+        self.pool = list(atomic)
         order = ["depth", "width"]
         random.Random(self.derived_seeds[BRANCH_ORDER_PURPOSE]).shuffle(order)
         self.branch_order = order
@@ -198,10 +200,22 @@ class Pipeline:
                             available=len(atomic))
                 continue
             self.record(f"{name}/branch", status="started", available=len(atomic))
-            produced[name] = await branches[name](atomic)
+            try:
+                produced[name] = await branches[name](atomic)
+            except Exception as exc:
+                # 分支失败不改写已生成的候选：先在池中落地，再记录真实原因并向上抛出。
+                self.record(f"{name}/branch", status="failed",
+                            reason=f"{type(exc).__name__}: {exc}", available=len(atomic))
+                self.pool = self._assemble_pool(atomic, produced)
+                raise
             self.record(f"{name}/branch", status="completed", candidates=len(produced[name]))
-        # 候选池固定为 atomic、depth、width 的各自生成顺序，与分支执行顺序无关。
-        self.pool = [*atomic, *produced.get("depth", []), *produced.get("width", [])]
+        self.pool = self._assemble_pool(atomic, produced)
+
+    @staticmethod
+    def _assemble_pool(atomic: list[Candidate],
+                       produced: dict[str, list[Candidate]]) -> list[Candidate]:
+        """候选池固定为 atomic、depth、width 的各自生成顺序，与分支执行顺序无关。"""
+        return [*atomic, *produced.get("depth", []), *produced.get("width", [])]
 
     def _branch_skip(self, name: str, atomic: list[Candidate]) -> str | None:
         """跳过的真实原因：共享预算已耗尽，或宽度缺少可合并的父题。"""
