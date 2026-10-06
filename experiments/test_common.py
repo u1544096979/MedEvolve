@@ -73,9 +73,13 @@ def test_cumulative_budget_keeps_failed_stages_and_blocks_next_call(monkeypatch)
 
 
 @pytest.mark.parametrize("method", ["taskcraft", "workflow", "singleshot", "selfgen", "envexplore"])
-def test_unimplemented_method_is_explicit(method):
-    with pytest.raises(ValueError, match=f"Method {method} is not implemented"):
-        runner.resolve_generator(method)
+def test_method_resolution_matches_available_implementation(method):
+    module_path = Path(__file__).parents[1] / "methods" / method / "__init__.py"
+    if module_path.exists():
+        assert callable(runner.resolve_generator(method))
+    else:
+        with pytest.raises(ValueError, match=f"Method {method} is not implemented"):
+            runner.resolve_generator(method)
 
 
 def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_path, monkeypatch):
