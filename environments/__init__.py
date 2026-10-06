@@ -29,6 +29,13 @@ _WRITABLE_RESOURCE_TYPES = {
     "Appointment",
 }
 
+# 管理器创建 FHIR-AgentBench 实例的最坏路径 = 数据库就绪等待 300 秒 + 种子恢复 1800 秒
+# + HAPI 就绪等待 300 秒 = 2400 秒（server/fhir_agentbench.py 的 STARTUP_TIMEOUT 与
+# RESTORE_TIMEOUT）。客户端等待上限必须覆盖该最坏路径并留出余量：客户端先放弃时管理器
+# 仍可能创建成功，返回的实例 id 没有任何一方收到，容器、卷与网络会成为只能人工按
+# id 回收的孤儿。因此这里取 2700 秒，比最坏路径多 300 秒。
+FHIR_AGENTBENCH_CREATE_TIMEOUT = 2700
+
 
 def _short_system(system: str) -> str:
     known = {
@@ -138,7 +145,9 @@ async def create_environment(config: EnvironmentConfig) -> EnvironmentInstance:
     if config.name not in {"PhysicianBench", "MedAgentBench", "FHIR-AgentBench"}:
         raise EnvironmentUnavailable(f"{config.name} is unavailable")
     # 本地 FHIR 实例需要恢复完整数据库种子，等待时间远长于镜像启动。
-    timeout = 2160 if config.name == "FHIR-AgentBench" else 240
+    timeout = (
+        FHIR_AGENTBENCH_CREATE_TIMEOUT if config.name == "FHIR-AgentBench" else 240
+    )
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         response = await client.post(
             config.manager_url.rstrip("/") + "/instances", json=config.model_dump()

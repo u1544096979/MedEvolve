@@ -271,7 +271,7 @@ class FhirAgentBenchManager:
             endpoint = f"http://{self.public_host}:{port}/fhir/"
             await self._wait_until_ready(endpoint, manifest, password)
         except BaseException as error:
-            await self._reclaim(resources, error)
+            await self._reclaim(resources, error, password)
         return EnvironmentInstance(
             instance_id=resources.instance_id,
             endpoint=endpoint,
@@ -383,6 +383,13 @@ class FhirAgentBenchManager:
                     "exec",
                     resources.database,
                     "pg_isready",
+                    # 显式走 TCP：postgres 镜像入口在 initdb 阶段会临时启动一个只监听
+                    # unix socket 的服务器，不带 -h 的探针会在该窗口误判就绪，随后
+                    # 真正服务器重启会让 pg_restore 连接被拒。
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    DATABASE_PORT,
                     "-U",
                     DATABASE_USER,
                     "-d",
@@ -512,13 +519,26 @@ class FhirAgentBenchManager:
 
     # --- 回收 ---------------------------------------------------------------
 
-    async def _reclaim(self, resources: InstanceResources, error: BaseException) -> None:
-        """清理失败也要保留原始错误，交给调用方判断实例创建失败原因。"""
+    async def _reclaim(
+        self, resources: InstanceResources, error: BaseException, password: str
+    ) -> None:
+        """清理失败也要保留原始错误，交给调用方判断实例创建失败原因。
 
+        清理异常本身挂进原因链会把 Docker 侧文本与上下文带出来，其中可能含有容器
+        环境里的凭据，因此只追加一条脱敏后的说明；在 except 之外重新抛出原始异常，
+        清理异常也不会成为它的 __cause__ 或 __context__。
+        """
+
+        cleanup_note = None
         try:
             await asyncio.shield(self.release(resources.instance_id))
         except BaseException as cleanup_error:
-            raise error from cleanup_error
+            cleanup_note = (
+                f"清理失败：{type(cleanup_error).__name__}："
+                f"{_redact(str(cleanup_error), password)}"
+            )
+        if cleanup_note is not None:
+            error.add_note(cleanup_note)
         raise error
 
     async def release(self, instance_id: str) -> None:

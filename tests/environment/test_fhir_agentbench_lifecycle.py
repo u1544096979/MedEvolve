@@ -77,6 +77,10 @@ class FakeDocker:
         self.fail_hapi_run = False
         self.image_ids: dict[str, dict] = {}
         self.port = 30000
+        # 在标签过滤之外额外返回的标识，用于覆盖列表之后的 inspect 复核。
+        self.extra_listings: dict[str, list[str]] = {}
+        self.fail_container_remove = False
+        self.database_password = ""
 
     # --- 断言辅助 -----------------------------------------------------------
 
@@ -131,10 +135,18 @@ class FakeDocker:
                 raise DockerCommandError(f"No such container: {args[-1]}")
             return json.dumps([self.containers[args[-1]]])
         if args[:2] == ("container", "rm"):
+            if self.fail_container_remove:
+                raise DockerCommandError(
+                    f"cannot remove container {args[-1]}: "
+                    f"POSTGRES_PASSWORD={self.database_password}"
+                )
             self.containers.pop(args[-1], None)
             return args[-1]
         if args[:2] == ("container", "ls"):
-            return "\n".join(self._listed(self.containers, args))
+            return "\n".join(
+                self._listed(self.containers, args)
+                + self.extra_listings.get("container", [])
+            )
         if args[:2] == ("volume", "rm"):
             self.volumes.pop(args[-1], None)
             return args[-1]
@@ -164,6 +176,9 @@ class FakeDocker:
     def _run(self, args: tuple[str, ...]) -> str:
         options = options_of(args)
         name = options["--name"][0]
+        env = environment_of(args)
+        if "POSTGRES_PASSWORD" in env:
+            self.database_password = env["POSTGRES_PASSWORD"]
         if self.fail_hapi_run and args[-1] == fhir_agentbench.HAPI_IMAGE:
             raise DockerCommandError(f"docker run {name}: port is already allocated")
         if "--publish" in options:
@@ -186,8 +201,7 @@ class FakeDocker:
         }
         return name
 
-    @staticmethod
-    def _listed(resources: dict[str, dict], args: tuple[str, ...]) -> list[str]:
+    def _listed(self, resources: dict[str, dict], args: tuple[str, ...]) -> list[str]:
         filters = {}
         for position, argument in enumerate(args):
             if argument == "--filter":
@@ -444,6 +458,40 @@ async def test_create_provisions_paired_resources_from_seed(
 
 
 @pytest.mark.asyncio
+async def test_database_probe_uses_tcp_to_skip_initdb_temporary_server(
+    fake_docker, fake_subprocess, seed
+):
+    """postgres 镜像入口在 initdb 阶段会临时启动一个只监听 unix socket 的服务器。
+
+    不带 -h 的 pg_isready 会在那个窗口误判就绪，恢复随后撞上真正的服务重启；
+    探针必须显式走 TCP，因为只有完成初始化的真实服务才监听 TCP。
+    """
+
+    manager = make_manager(fake_docker, FakeFhir(seed_manifest()))
+
+    instance = await manager.create(config_for(seed))
+
+    probe = next(
+        command
+        for command in fake_docker.commands
+        if command[0] == "exec" and "pg_isready" in command
+    )
+    assert probe == (
+        "exec",
+        f"medevolve-{instance.instance_id}-db",
+        "pg_isready",
+        "-h",
+        "127.0.0.1",
+        "-p",
+        fhir_agentbench.DATABASE_PORT,
+        "-U",
+        fhir_agentbench.DATABASE_USER,
+        "-d",
+        fhir_agentbench.DATABASE_NAME,
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_rejects_image_digest_mismatch(fake_docker, fake_subprocess, seed):
     fake_docker.add_unrelated()
     fake_docker.image_ids[fhir_agentbench.POSTGRES_IMAGE] = {
@@ -500,6 +548,35 @@ async def test_restore_failure_reclaims_all_created_resources(
 
 
 @pytest.mark.asyncio
+async def test_cleanup_failure_keeps_original_error_without_cleanup_exception(
+    fake_docker, fake_subprocess, seed
+):
+    """清理失败时仍以原始错误为失败原因，清理异常只留一条脱敏说明。"""
+
+    fake_docker.add_unrelated()
+    fake_subprocess.returncode = 1
+    fake_docker.fail_container_remove = True
+    manager = make_manager(fake_docker, FakeFhir(seed_manifest()))
+
+    with pytest.raises(EnvironmentUnavailable, match="pg_restore") as info:
+        await manager.create(config_for(seed))
+
+    password = fake_docker.database_password
+    assert password
+    assert info.value.__context__ is None
+    assert not isinstance(info.value.__cause__, DockerCommandError)
+    chain = [str(info.value), repr(info.value)]
+    cause = info.value.__cause__
+    while cause is not None:
+        chain.extend([str(cause), repr(cause)])
+        cause = cause.__cause__
+    assert all(password not in text for text in chain)
+    notes = getattr(info.value, "__notes__", [])
+    assert any("清理失败" in note for note in notes)
+    assert all(password not in note for note in notes)
+
+
+@pytest.mark.asyncio
 async def test_service_never_ready_reclaims_all_created_resources(
     fake_docker, fake_subprocess, seed
 ):
@@ -540,6 +617,31 @@ async def test_restore_timeout_kills_subprocess_and_reclaims(
 
     with pytest.raises(EnvironmentUnavailable, match="恢复"):
         await manager.create(config_for(seed))
+
+    assert fake_subprocess.processes[0].killed
+    assert_only_unrelated(fake_docker)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_create_kills_subprocess_and_reclaims(
+    fake_docker, fake_subprocess, seed
+):
+    """取消也必须杀掉恢复子进程并回收已创建的资源。"""
+
+    fake_docker.add_unrelated()
+    fake_subprocess.hang = True
+    manager = make_manager(fake_docker, FakeFhir(seed_manifest()), restore_timeout=30.0)
+
+    task = asyncio.create_task(manager.create(config_for(seed)))
+    for _ in range(200):
+        if fake_subprocess.processes:
+            break
+        await asyncio.sleep(0.01)
+    assert fake_subprocess.processes, "恢复子进程尚未启动"
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
     assert fake_subprocess.processes[0].killed
     assert_only_unrelated(fake_docker)
@@ -621,18 +723,26 @@ async def test_release_reclaims_when_hapi_container_is_gone(
 async def test_release_ignores_resources_without_our_labels(
     fake_docker, fake_subprocess, seed
 ):
+    """列表之外还有一次 inspect 复核：标签不全的同名容器不得被删除。"""
+
     fake_docker.add_unrelated()
     manager = make_manager(fake_docker, FakeFhir(seed_manifest()))
     instance = await manager.create(config_for(seed))
-    fake_docker.containers["impostor"] = {
-        "Name": "/impostor",
-        "Config": {"Labels": {"medevolve.instance": instance.instance_id}},
-        "NetworkSettings": {"Ports": {}},
-    }
+    impostor = f"medevolve-{instance.instance_id}"
+    fake_docker.containers[impostor]["Config"]["Labels"] = {}
+    # 让容器列表无视标签过滤返回它，从而真正走到 inspect 复核分支。
+    fake_docker.extra_listings["container"] = [impostor]
 
     await manager.release(instance.instance_id)
 
-    assert set(fake_docker.containers) == {"physicianbench-other", "impostor"}
+    assert set(fake_docker.containers) == {"physicianbench-other", impostor}
+    assert not [
+        command
+        for command in fake_docker.commands
+        if command[:2] == ("container", "rm") and impostor in command
+    ]
+    assert set(fake_docker.volumes) == {"physicianbench-other-data"}
+    assert set(fake_docker.networks) == {"physicianbench-other-net"}
 
 
 @pytest.mark.asyncio
@@ -715,12 +825,9 @@ def recording_client():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "environment, expected",
-    [("FHIR-AgentBench", 2160), ("PhysicianBench", 240), ("MedAgentBench", 240)],
+    "environment", ["FHIR-AgentBench", "PhysicianBench", "MedAgentBench"]
 )
-async def test_create_environment_waits_for_seed_restore(
-    monkeypatch, environment, expected
-):
+async def test_create_environment_waits_for_seed_restore(monkeypatch, environment):
     client, calls = recording_client()
     monkeypatch.setattr(httpx, "AsyncClient", client)
 
@@ -731,7 +838,17 @@ async def test_create_environment_waits_for_seed_restore(
     )
 
     assert instance.environment == environment
-    assert calls == [{"timeout": expected, "trust_env": False}]
+    assert len(calls) == 1
+    assert calls[0]["trust_env"] is False
+    if environment == "FHIR-AgentBench":
+        # 断言覆盖管理器最坏路径（数据库就绪等待 + 种子恢复 + HAPI 就绪等待），
+        # 而不是钉死具体秒数：内部上限调整后这条断言不会再次失配。
+        worst_case = (
+            fhir_agentbench.STARTUP_TIMEOUT * 2 + fhir_agentbench.RESTORE_TIMEOUT
+        )
+        assert calls[0]["timeout"] > worst_case
+    else:
+        assert calls[0]["timeout"] == 240
 
 
 @pytest.mark.asyncio
