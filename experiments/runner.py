@@ -94,6 +94,12 @@ async def run_experiment(config: ExperimentConfig) -> None:
         raise ValueError("runtime requires generator model and cumulative generator budget")
     if config.method == "workflow":
         output_constraints(config.initial_strategy.allocation, candidate_pool=True)
+    if config.method == "envexplore":
+        if not config.evolution_patients:
+            raise ValueError("EnvExplore requires nonempty exploration patients")
+        if ("environment_explorer" not in config.runtime.models
+                or "environment_explorer" not in config.runtime.budgets):
+            raise ValueError("EnvExplore requires environment_explorer model and budget")
     evolution = set(config.evolution_patients)
     if evolution.intersection(config.evaluation_patients):
         raise ValueError("Evolution and evaluation patients must be disjoint")
@@ -174,6 +180,27 @@ async def run_experiment(config: ExperimentConfig) -> None:
             guidance = ExplorationGuidance(data_guidance=data.guidance,
                                            environment_guidance=environment.guidance)
             _save(root / "guidance.json", guidance.model_dump(mode="json"))
+
+        if config.method == "envexplore":
+            environment_run = await invoke(
+                "explore_environment", explore_environment,
+                config.environment, config.evolution_patients, config.runtime,
+            )
+            environment_guidance = parse("explore_environment", environment_run, EnvironmentExploration)
+            if environment_guidance is None or not environment_guidance.guidance.strip():
+                raise RuntimeError("EnvExplore environment exploration did not produce valid guidance")
+            _save(root / "environment_guidance.json", environment_guidance.model_dump(mode="json"))
+            method_generate = generator
+            fixed_strategy = config.initial_strategy.model_copy(deep=True)
+
+            async def bound_generator(trajectory, environment, directions, runtime):
+                return await method_generate(
+                    trajectory, environment, directions, runtime,
+                    environment_guidance=environment_guidance,
+                    strategy=fixed_strategy,
+                )
+
+            generator = bound_generator
 
         async def generate_and_evaluate(folder, patients, round_index, current):
             tasks, evaluations, attempts = [], [], []

@@ -88,7 +88,7 @@ def test_cumulative_budget_keeps_failed_stages_and_blocks_next_call(monkeypatch)
     assert single.await_count == agent.await_count == 1
 
 
-@pytest.mark.parametrize("method", ["taskcraft", "singleshot", "envexplore"])
+@pytest.mark.parametrize("method", ["taskcraft", "singleshot"])
 def test_unimplemented_method_is_explicit(method):
     with pytest.raises(ValueError, match=f"Method {method} is not implemented"):
         runner.resolve_generator(method)
@@ -111,6 +111,12 @@ def test_workflow_run_requires_a_candidate_pool_allocation(tmp_path):
         asyncio.run(runner.run_experiment(config))
 
     assert not (tmp_path / "pool").exists()
+
+
+def test_envexplore_resolves_implemented_method():
+    from methods.envexplore import generate_tasks
+    assert runner.resolve_generator("envexplore") is generate_tasks
+
 
 
 def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_path, monkeypatch):
