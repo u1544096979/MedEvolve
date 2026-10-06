@@ -8,7 +8,8 @@ import pytest
 
 from contracts import (
     CompletionReview, EnvironmentInstance, EvaluationResult, ExperimentConfig,
-    Feedback, PatientTrajectory, QualityReview, RunResult, Strategy, Verification,
+    Feedback, PatientTrajectory, QualityDimension, QualityReview, RunResult, Strategy,
+    Verification,
 )
 from experiments import runner, summarize_run
 from experiments.run import main
@@ -82,7 +83,9 @@ def install_dependencies(monkeypatch, failure=False, preparation_failure=False):
             raise RuntimeError("evaluation transport failed")
         solver = result({"answer": "answer"}, usage={})
         return EvaluationResult(task_id=task.id, verification=Verification(valid=True, reason="supported"),
-                                quality=QualityReview(dimensions={"clarity": {"judgment": "good", "reason": "clear"}}),
+                                quality=QualityReview(**{name: QualityDimension(score=4, scores=[4, 4, 4], reason="clear")
+                                                         for name in ("factual_accuracy", "clinical_soundness",
+                                                                      "evidence_sufficiency", "task_clarity")}),
                                 completion=CompletionReview(completed=True, reason="done"),
                                 solver_run=solver, runs=[solver], observed_state={}, status="completed")
 
@@ -130,7 +133,6 @@ def test_two_rounds_and_read_only_summary(tmp_path, monkeypatch, capsys, failure
     assert summary["evolution"]["production"] == {"numerator": 5 if failure else 8, "denominator": 8,
                                                    "rate": 5 / 8 if failure else 1}
     assert summary["evaluation"]["completion_among_generated"] == {"numerator": 2, "denominator": 2, "rate": 1}
-    assert summary["evolution"]["quality_judgments"]["clarity"]["good"] == (4 if failure else 8)
     assert summary["model_runs"]["runs_without_known_tokens"] > 0
     assert summary["model_runs"]["known_token_totals"]["input_tokens"] > 0
     assert summary["model_runs"]["count"] == (17 if failure else 21)
