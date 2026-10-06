@@ -16,8 +16,8 @@
 | `gen_atomic_task.py:generate_initial_question`、`clean_qa` | `stages.Pipeline._initial_question` | 由 ID/R/A 出题，再用 `refined_answer` 作为参考答案 |
 | `gen_atomic_task.py:generate_initial_questions`、`filter_questions`、`filter_atomic_tasks` | `stages.Pipeline.atomic` 的生成与核验循环 | `max_candidate_atomic` 上限、内置过滤分支 |
 | `gen_depth_based_task.py:DepthExtend.backward` | `stages.Pipeline._backward` | 反向检索 superset、`is_superset_valid` 校验、生成新问题 |
-| `gen_depth_based_task.py:DepthExtend.verify`、`process_single_task`、`depth_extend` | `stages.Pipeline._extend_depth`、`_merge` | 逐跳核验、合并、`valid_hop` 与 `max_hops` 控制 |
-| `gen_width_based_task.py:width_extend`、`check_queries` | `stages.Pipeline.width`、`_check_merged` | 合并问题、可分解性检查、无工具作答检查 |
+| `gen_depth_based_task.py:DepthExtend.verify`、`process_single_task`、`depth_extend` | `stages.Pipeline._extend_depth`、`_merge`、`_solve_trajectory` | 逐跳核验、合并、`valid_hop` 与 `max_hops` 控制；参考答案取原始最终答案，子问题与中间结果进入 `solve_trajectory` |
+| `gen_width_based_task.py:width_extend`、`check_queries` | `stages.Pipeline.width`、`_merge_groups`、`_check_merged`、`_check_batch` | 合并问题、按 10 组一批的可分解性检查与无工具作答检查 |
 | `agent_tools.py:VerifyAgent.forward`、`recall_score` | `verify.verify_query`、`score_recall` | 无工具回答判原子性 + 病历工具 Agent 回答评分；外层重试 3 次重走整段流程，评分取有效采样平均 |
 | `agent_tools.py:SearchAgent` 描述 | `prompts.MEDICAL_RECORD_AGENT` | 检索范围由网络改为当前患者病历 |
 | `oagents/agents.py:ToolCallingAgent._run`、`step`、`provide_final_answer` | `agent.run_search_agent`、`step_kind` | 第 1 步规划、每 `reflection_interval=5` 步反思、action 上限后仍发起强制终答；步骤类型与真实计数写入 trace |
@@ -42,6 +42,8 @@
 | `content_identifier`（文献或网页标题） | 病历记录块标签 `[记录时间] 资源类型/资源ID`（`prepare_trajectory` 的格式） |
 | `golden_answer` | 原子题为 `clean_qa` 的 `refined_answer`；扩展题见第 4 节 |
 | — | 结论抽取额外返回 `source_ids`；映射为 `Evidence(source_id, statement=结论)`，来源不在当前轨迹内即丢弃该候选 |
+| — | 深度辅助核验的 superset 关系事实同样绑定真实来源：`Evidence(source_id, statement="identifier：relation")`，来源取自反向检索返回的记录块标识，与父题证据合并去重 |
+| — | 宽度合并题的父证据取各父题自身证据的并集，不重新归因；两阶段都不新增模型事实审查环节 |
 
 病历工具按 `patient`/`subject` 参数鉴权，本次开放的患者标识随 Agent 说明一起下发，避免使用记录正文中的其他标识。
 
@@ -61,11 +63,11 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 
 1. 原子过滤判据。源码 `filter_question`（`gen_atomic_task.py:418-444`）仅在核验返回 `error` 时拒绝，更严格的 `llm_score`、`agent_score` 判断在 `425-433` 被注释掉。适配保持该分支：无工具回答满分或核验出错才拒绝，`agent_score` 只记录不用于拒绝。患者私有事实本就不在模型自身的知识内，该判据在病历域很少触发，实际筛选由「病历 Agent 能否作答」承担。
 2. superset 校验。源码把返回的 JSON 字典与字符串 `"invalid"` 比较（`gen_depth_based_task.py:67`），字典与该字符串不相等。适配按提示词声明的 `{"new_query": "valid"|"invalid"}` 判断，仅显式 `invalid` 时拒绝。
-3. 宽度结果组装。源码最终映射（`gen_width_based_task.py:234-241`）引用循环外的 `golden_answers`、`original_questions`，与当前分组不一致。适配按每题自身的答案与子问题组装。
+3. 宽度结果组装。源码最终映射（`gen_width_based_task.py:234-241`）引用循环外的 `golden_answers`、`original_questions`，与当前分组不一致；评分又用响应里的稳定 ID 直接索引过滤后的局部列表（`gen_width_based_task.py:252-253`）。适配按每题自身的答案、原始问题与原始索引组装，评分按稳定 ID 在已通过分解检查的集合里查找；父题索引保持模型给定的顺序与重复项，越界或缺少父题的分组按模型输出失败丢弃整次响应重试（`gen_width_based_task.py:190-200` 的异常分支），不修剪成更小的组。
 4. 宽度合并输入。源码把 `golden_answer` 一并送入合并提示词（`gen_width_based_task.py:184-188`，与注释 `without golden_answers` 不一致）。适配保持源码行为；合并结果由后续可分解性与作答检查把关。
-5. 参考答案组织。`TaskBatch` 只有单个 `reference_answer`。深度题按源码 `solve_trajectory` 顺序写入「最终答案 + 子问题与中间答案（自外向内）」；宽度题写入「合并题参考答案：各子问题 → 答案」。子问题内容与顺序取自对应源码阶段，不另行改写。
+5. 参考答案组织。`TaskBatch` 只有单个 `reference_answer`。深度题的参考答案是源码 `solve_trajectory` 的原始最终答案（`full_results[-1]["answer"]`，即父题答案）；子问题、中间标识及其答案与 Agent 轨迹进入 `solve_trajectory` 和阶段 trace，不拼进参考答案。宽度题按每组自身的原始答案列表无损序列化（`json.dumps(..., ensure_ascii=False)`），顺序与重复项与分组一致。`Candidate.detail` 保存阶段来源：原子题为原结论、R、患者来源与清洗答案；宽度题为 `original_questions`、`golden_answers`、原始 `indexes` 与全部 `parent_types`；深度题为 `full_results`、`solve_trajectory`、辅助来源与失败尝试。
 6. 题型。源码没有题型采样。出题提示词追加题型约束，取值限于 `directions` 中的题型；扩展题继承父题题型，跨题型合并取第一父题的题型。批量输出按方向各取一题，同一方向内优先顺序为宽度、深度、原子。
-7. 预算边界。`max_candiated_conclusions`、`max_candidate_atomic`、`extended_attempts`、`max_hops`、`num_parallel_predictions`、`merge_attempts`、`query_attempts` 以 `TaskCraftParameters` 显式给出。`atomic_budget_share` 限制原子阶段使用的生成预算比例，`extension_guard_turns` 控制剩余轮数不足时不再发起新的扩展跳，使源码循环在共享预算内结束。
+7. 预算边界与 Agent 步数。`max_candiated_conclusions`、`max_candidate_atomic`、`judge_samples`、`question_attempts`、`query_attempts`、`merge_attempts`、`extended_attempts`、`max_hops`、`width_attempts` 以 `TaskCraftParameters` 显式给出，源码 SearchAgent 的 `max_step` 以 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10` 给出。阶段不设份额或预留轮数：共享生成预算是唯一上限，原子阶段逐个结论走到核验或预算耗尽，扩展阶段逐跳执行到 `max_hops` 或预算耗尽。
 8. Agent 步数与计数。源码 `ToolCallingAgent._run` 以 action step 计数（`max_step` 为 20，深度反向与深度核验为 10），第 1 步先规划、之后每 5 步反思；规划与反思不增加 action step，但每次都增加模型请求。适配保留该循环：`Ledger.agent(..., max_action_steps=)` 给出单次调用上限，规划与反思按 `run_search_agent` 的步骤调度执行，`usage.action_steps` 记录真实 action step 数，`verify.verify_query` 的 `agent_step_number` 取该值（不再取模型请求数）。源码 `traj_step_num()` 返回的 `self.step_number` 在终止时又递增一次，即实际 action step 数加一（达到上限时为 `max_step+1`），该串值与 `usage.step_number` 同时保留在运行结果中。
 9. 动作编码。公共单次调用入口返回结构化 JSON，无法使用 SDK 的工具调用字段；一次 action 的编码是 `{"tool_calls": [...], "final_answer": ...}`（原生协议为 `{"action": "GET …"}`）。源码 `step` 的 JSON 回退分支（agents.py:1507-1511）只支持一个 `{"name", "arguments"}` 对象，SDK 分支也只执行 `tool_calls[0]`（agents.py:1534）；适配把同一次响应里的多个工具调用依次执行、逐个计入 `tool_calls`，使台账计数与真实调用一致。
 10. 工具调用响应里的终答字段。源码在 `tool_calls` 非空时不解析消息内容，只执行 `tool_calls[0]` 并继续循环（agents.py:1500-1536）；内容解析与终答回退都只在 `tool_calls` 为空时发生（agents.py:1507-1528）。适配同样只在同一次响应不含工具调用时接受 `final_answer` 作为终答；该响应带工具调用时，工具调用全部执行并继续下一步。
@@ -83,7 +85,7 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 
 ## 5. 预算要求与实测用量
 
-`TaskCraftParameters` 默认值取自源码签名：`chunk_size=16384`、`max_candidate_conclusions=20`、`max_candidate_atomic=10`、`judge_samples=3`、`question_attempts=3`、`query_attempts=3`、`merge_attempts=5`、`extended_attempts=4`、`max_hops=2`、`width_attempts=3`；适配新增 `atomic_budget_share=0.5`、`extension_guard_turns=25`。`max_candidate_atomic` 与生成预算共同决定单批候选数，小样本运行按预算取 3。
+`TaskCraftParameters` 默认值取自源码签名：`chunk_size=16384`、`max_candidate_conclusions=20`、`max_candidate_atomic=10`、`judge_samples=3`、`question_attempts=3`、`query_attempts=3`、`merge_attempts=5`、`extended_attempts=4`、`max_hops=2`、`width_attempts=3`；Agent 步数上限为 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10`。`max_candidate_atomic` 与共享生成预算共同决定单批候选数，小样本运行按预算取 3。
 
 实测（本机 Docker，种子 `fhir-full:v1`，患者 `MRN4460967357`，`gpt-4o-mini`，生成预算 150 轮 / 150 次工具）：
 

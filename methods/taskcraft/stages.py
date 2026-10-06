@@ -26,7 +26,8 @@ from .schemas import (
     QueryMerge, SupersetCheck,
 )
 from .verify import (
-    ATOMIC_MAX_ACTION_STEPS, DEPTH_MAX_ACTION_STEPS, score_recall, verify_query,
+    ATOMIC_MAX_ACTION_STEPS, DEPTH_BACKWARD_MAX_ACTION_STEPS, DEPTH_VERIFY_MAX_ACTION_STEPS,
+    score_recall, verify_query,
 )
 
 __all__ = ["Candidate", "Pipeline", "TaskCraftParameters", "split_text"]
@@ -35,18 +36,16 @@ __all__ = ["Candidate", "Pipeline", "TaskCraftParameters", "split_text"]
 _BLOCK = re.compile(r"^\[(?P<time>[^\]]*)\] (?P<source_id>\S+)$", re.MULTILINE)
 # data_processor.split_text_intelligently 的分隔符优先级。
 _SEPARATORS = ("\n\n", "\n", ".", " ", "")
+# gen_width_based_task.py:214-218：可分解性与作答检查按 10 组合并题一批。
+WIDTH_VALIDATION_BATCH = 10
 
 
 class TaskCraftParameters(BaseModel):
-    """源码默认参数；按 common/SPEC.md 显式配置源码循环与内置核验的规模。"""
+    """源码默认参数；阶段规模与 Agent 步数上限由公共 SPEC 显式配置。"""
 
     chunk_size: int = 16384               # gen_atomic_tasks(chunk_size=16384)
     max_candidate_conclusions: int = 20   # gen_atomic_tasks(max_candiated_conclusions=20)
     max_candidate_atomic: int = 10        # gen_atomic_tasks(max_candidate_atomic=10)
-    # 源码循环与内置核验的预算边界：原子阶段最多使用该比例的生成预算。
-    atomic_budget_share: float = 0.5
-    # 剩余模型轮数低于该值时不启动新的扩展跳，保证阶段在有界预算内结束。
-    extension_guard_turns: int = 25
     judge_samples: int = 3                # VerifyAgent.recall_score(num_parallel_predictions=3)
     question_attempts: int = 3            # gen_atomic_task 各检索/生成步骤的重试次数
     query_attempts: int = 3               # DepthExtend.backward: for _ in range(3)
@@ -54,6 +53,10 @@ class TaskCraftParameters(BaseModel):
     extended_attempts: int = 4            # depth_extend(extended_attempts=4)
     max_hops: int = 2                     # depth_extend(max_hops=2)
     width_attempts: int = 3               # gen_width_based_task: MAX_RETRIES = 3
+    # 源码 SearchAgent 的 max_step：原子核验 20，深度反向 10，深度核验 10。
+    atomic_max_action_steps: int = ATOMIC_MAX_ACTION_STEPS
+    depth_backward_max_action_steps: int = DEPTH_BACKWARD_MAX_ACTION_STEPS
+    depth_verify_max_action_steps: int = DEPTH_VERIFY_MAX_ACTION_STEPS
 
 
 @dataclass
@@ -180,7 +183,7 @@ class Pipeline:
             run = await self.ledger.llm(
                 "atomic/conclusions", instructions=prompts.conclusion_extraction_prompt(),
                 input_text=f"The document content to be processed is as follows: {chunk}",
-                output_type=ConclusionList,
+                output_type=ConclusionList, attempts=self.parameters.question_attempts,
             )
             if run is None or run.status != "completed":
                 self.record("atomic/conclusions", chunk=index, status=_status(run), error=_error(run))
@@ -197,12 +200,10 @@ class Pipeline:
         if not conclusions:
             self.failure = self.failure or "原子阶段没有抽取到候选结论"
 
-        share_limit = int(self.ledger.limit_turns() * self.parameters.atomic_budget_share)
         generated = []
         for conclusion in conclusions:
-            if self.ledger.exhausted or self.ledger.used_turns() >= share_limit:
-                self.record("atomic/question", status="skipped", reason="原子阶段预算份额已用尽",
-                            share_limit=share_limit, used=self.ledger.used_turns())
+            if self.ledger.exhausted:
+                self.record("atomic/question", status="skipped", reason="共享生成预算已耗尽")
                 break
             question = await self._initial_question(conclusion)
             if question is None:
@@ -215,16 +216,15 @@ class Pipeline:
 
         accepted = []
         for item in generated:
-            if self.ledger.exhausted or self.ledger.used_turns() >= share_limit:
+            if self.ledger.exhausted:
                 self.record("atomic/verify", question=item["question"], status="skipped",
-                            reason="原子阶段预算份额已用尽", share_limit=share_limit,
-                            used=self.ledger.used_turns())
+                            reason="共享生成预算已耗尽")
                 continue
             outcome = await verify_query(
                 self.ledger, item["question"], item["answer"], self.tools,
                 samples=self.parameters.judge_samples, stage="atomic/verify",
                 instructions=self.agent_instructions(),
-                max_action_steps=ATOMIC_MAX_ACTION_STEPS,
+                max_action_steps=self.parameters.atomic_max_action_steps,
             )
             self.record("atomic/verify", question=item["question"], **outcome.record())
             if outcome.error is not None:
@@ -239,7 +239,10 @@ class Pipeline:
                     instruction=item["question"], task_type=item["task_type"],
                     reference_answer=item["answer"], evidence=evidence,
                 ),
-                origin="atomic", locator=self.locator(source_ids), detail={"source_ids": source_ids},
+                origin="atomic", locator=self.locator(source_ids),
+                detail={"conclusion": item["conclusion"], "relation": item["relation"],
+                        "source_ids": source_ids, "refined_answer": item["answer"],
+                        "task_type": item["task_type"]},
             ))
         if not accepted:
             self.failure = self.failure or "原子阶段没有通过内置核验的候选"
@@ -251,9 +254,10 @@ class Pipeline:
         locator = self.locator(conclusion.source_ids)
         payload = (f"\nData to be Processed:\nID: {locator}\n"
                    f"R: {conclusion.R}\nA: {conclusion.conclusion}\n")
-        run = await self.ledger.llm("atomic/question",
-                                   instructions=prompts.question_prompt(self.allowed_types),
-                                   input_text=payload, output_type=InitialQuestion)
+        run = await self.ledger.llm(
+            "atomic/question", instructions=prompts.question_prompt(self.allowed_types),
+            input_text=payload, output_type=InitialQuestion,
+            attempts=self.parameters.question_attempts)
         if run is None or run.status != "completed":
             self.record("atomic/question", status=_status(run), error=_error(run), conclusion=conclusion.conclusion)
             return None
@@ -266,7 +270,8 @@ class Pipeline:
                                  ensure_ascii=False)
         clean = await self.ledger.llm("atomic/clean", instructions=prompts.clean_prompt(),
                                      input_text=f"The data need to be processed is as follows: {clean_input}",
-                                     output_type=CleanedQuestion)
+                                     output_type=CleanedQuestion,
+                                     attempts=self.parameters.question_attempts)
         if clean is None or clean.status != "completed":
             self.record("atomic/clean", status=_status(clean), error=_error(clean), question=parsed.Q)
             return None
@@ -277,7 +282,7 @@ class Pipeline:
             return None
         # 源码 generate_initial_question 返回 clean_qa 的结果：问题用清洗后的文本，答案用 refined_answer。
         return {"question": cleaned.question, "task_type": parsed.task_type,
-                "answer": cleaned.refined_answer,
+                "answer": cleaned.refined_answer, "relation": conclusion.R,
                 "conclusion": conclusion.conclusion, "source_ids": list(conclusion.source_ids),
                 "locator": locator}
 
@@ -335,7 +340,12 @@ class Pipeline:
                     reference_answer=self._merged_answer(item), evidence=self._merged_evidence(parents),
                 ),
                 origin="width", parents=[parent.question.instruction for parent in parents],
-                detail={"group": [parent.locator for parent in parents], "task_type": task_type},
+                detail={"original_questions": item["original_questions"],
+                        "golden_answers": item["golden_answers"],
+                        "original_indexes": item["original_indexes"],
+                        "parent_types": [parent.question.task_type for parent in parents],
+                        "task_type": task_type,
+                        "group": [parent.locator for parent in parents]},
             ))
         self.record("width/result", checked=len(results))
         return results
@@ -356,6 +366,7 @@ class Pipeline:
                 "index": len(groups),
                 "question": item.question,
                 "content_identifier": item.content_identifier,
+                "original_indexes": list(item.index),
                 "original_questions": [parent.question.instruction for parent in parents],
                 "golden_answers": [parent.question.reference_answer for parent in parents],
                 "parents": parents,
@@ -363,9 +374,19 @@ class Pipeline:
         return groups
 
     async def _check_merged(self, merged_results: list[dict]) -> list[dict]:
+        """移植 width_extend 的检查编排：按 10 组一批调用 check_queries。"""
+        checked = []
+        for start in range(0, len(merged_results), WIDTH_VALIDATION_BATCH):
+            batch = merged_results[start:start + WIDTH_VALIDATION_BATCH]
+            checked.extend(await self._check_batch(batch))
+            if self.ledger.exhausted:
+                break
+        return checked
+
+    async def _check_batch(self, batch: list[dict]) -> list[dict]:
         """移植 check_queries：先查可分解性，再查无工具回答是否已能答对。"""
         step1_input = [{"index": item["index"], "complex_question": item["question"],
-                        "original_questions": item["original_questions"]} for item in merged_results]
+                        "original_questions": item["original_questions"]} for item in batch]
         prompt1 = ("\n    Here are the base questions to process:\n    "
                    f"{json.dumps(step1_input, ensure_ascii=False, indent=2)}\n"
                    "    Each dictionary contains: index (unique ID), complex_question (original complex question), \n"
@@ -386,7 +407,7 @@ class Pipeline:
         if report is None:
             return []
         states = {item.index: item.state for item in report}
-        for item in merged_results:
+        for item in batch:
             if states.get(item["index"], 0) == 1:
                 validated.append(item)
             else:
@@ -445,11 +466,8 @@ class Pipeline:
 
     @staticmethod
     def _merged_answer(item: dict) -> str:
-        lines = ["合并题参考答案："]
-        for index, (question, answer) in enumerate(
-                zip(item["original_questions"], item["golden_answers"]), start=1):
-            lines.append(f"{index}. {question} → {answer}")
-        return "\n".join(lines)
+        """宽度题参考答案：按分组无损序列化该组自身的答案列表，保持顺序与重复项。"""
+        return json.dumps(item["golden_answers"], ensure_ascii=False)
 
     @staticmethod
     def _merged_evidence(parents: list[Candidate]) -> list[Evidence]:
@@ -467,11 +485,6 @@ class Pipeline:
         for parent in atomic:
             if self.ledger.exhausted:
                 break
-            if self.ledger.remaining_turns() < self.parameters.extension_guard_turns:
-                self.record("depth/extension", status="skipped", reason="剩余预算不足以完成一跳",
-                            remaining=self.ledger.remaining_turns(),
-                            guard=self.parameters.extension_guard_turns)
-                break
             extended = await self._extend_depth(parent)
             if extended is not None:
                 results.append(extended)
@@ -484,60 +497,71 @@ class Pipeline:
         initial = {"initial_query": parent.question.instruction,
                    "initial_answer": parent.question.reference_answer,
                    "initial_identifier": parent.locator}
-        chain = []
+        full_results = [{**initial, "initial_trajectory": None, "valid_hop": 1}]
+        relations: list[dict] = []
+        failed: list[dict] = []
         full_query = initial["initial_query"]
         last_identifier = parent.locator
         valid_hop = 1
-        superset_sources: list[str] = []
         for attempt in range(self.parameters.extended_attempts):
             if self.ledger.exhausted:
                 break
-            if self.ledger.remaining_turns() < self.parameters.extension_guard_turns:
-                self.record("depth/extension", status="skipped", attempt=attempt,
-                            reason="剩余预算不足以完成一跳", remaining=self.ledger.remaining_turns())
-                break
             backward = await self._backward(prompts_depth, last_identifier)
             if backward is None:
+                failed.append({"hop": attempt + 1, "reason": "backward"})
                 continue
             now_query = backward["query"]
-            verify = await verify_query(self.ledger, now_query, last_identifier, self.tools,
-                                        samples=self.parameters.judge_samples, stage="depth/verify",
-                                        instructions=self.agent_instructions(),
-                                        max_action_steps=DEPTH_MAX_ACTION_STEPS)
+            verify = await verify_query(
+                self.ledger, now_query, last_identifier, self.tools,
+                samples=self.parameters.judge_samples, stage="depth/verify",
+                instructions=self.agent_instructions(),
+                max_action_steps=self.parameters.depth_verify_max_action_steps)
             self.record("depth/verify", attempt=attempt, question=now_query, **verify.record())
+            # 源码 process_single_task：核验出错或 agent_score <= 0 时换下一跳。
             if verify.error is not None or not verify.agent_score:
+                failed.append({"hop": attempt + 1, "reason": "verify", "query": now_query})
                 continue
             merged_query = await self._merge(prompts_depth, full_query, now_query, last_identifier,
                                              parent.question.reference_answer)
             if merged_query is None:
+                failed.append({"hop": attempt + 1, "reason": "merge", "query": now_query})
                 continue
             valid_hop += 1
-            chain.append({"query": now_query, "answer": last_identifier,
-                          "agent_score": verify.agent_score, "llm_score": verify.llm_score})
-            superset_sources.extend(backward["source_ids"])
+            full_results.append({"query": now_query, "answer": last_identifier, "valid_hop": 1,
+                                 "trajectory": verify.agent_trajectory,
+                                 "agent_score": verify.agent_score, "llm_score": verify.llm_score})
+            full_results.append({"query": merged_query, "answer": parent.question.reference_answer,
+                                 "valid_hop": valid_hop, "trajectory": None,
+                                 "agent_score": None, "llm_score": None})
+            relations.append({"identifier": backward["identifier"], "relation": backward["relation"],
+                              "source_ids": list(backward["source_ids"])})
             last_identifier = backward["identifier"]
             full_query = merged_query
             if valid_hop >= self.parameters.max_hops:
                 break
-        if not chain:
+        if valid_hop == 1:
             self.record("depth/extension", status="failed", question=parent.question.instruction,
-                        reason="未能在尝试次数内完成扩展")
+                        reason="未能在尝试次数内完成扩展", failed_attempts=failed)
             return None
-        evidence, source_ids = self.evidence(self._chain_statement(initial, chain), superset_sources)
-        evidence = parent.question.evidence + [
-            record for record in evidence
-            if record.source_id not in {item.source_id for item in parent.question.evidence}
-        ]
+        # 子问题、中间标识及其答案进入 trace；最终答案保持原始答案。
+        chain = full_results[1::2]
+        solve_trajectory = self._solve_trajectory(full_results)
+        evidence = parent.question.evidence + self._relation_evidence(
+            relations, parent.question.evidence)
         self.record("depth/extension", status="completed", question=full_query, hops=len(chain),
-                    chain=chain)
+                    chain=chain, failed_attempts=failed)
         return Candidate(
             question=GeneratedQuestion(
                 instruction=full_query, task_type=parent.question.task_type,
-                reference_answer=self._chain_answer(initial, chain), evidence=evidence,
+                reference_answer=self._chain_answer(initial, full_results), evidence=evidence,
             ),
             origin="depth", parents=[parent.question.instruction],
             locator=last_identifier,
-            detail={"chain": chain, "superset_source_ids": source_ids},
+            detail={"full_results": full_results, "solve_trajectory": solve_trajectory,
+                    "relations": relations,
+                    "superset_source_ids": [source_id for hop in relations
+                                            for source_id in hop["source_ids"]],
+                    "failed_attempts": failed},
         )
 
     async def _backward(self, prompts_depth: dict, element: str) -> dict | None:
@@ -548,7 +572,7 @@ class Pipeline:
         run = await self.ledger.agent("depth/backward", instructions=self.agent_instructions(),
                                       input_text=payload, tools=self.tools,
                                       output_type=BackwardContext,
-                                      max_action_steps=DEPTH_MAX_ACTION_STEPS)
+                                      max_action_steps=self.parameters.depth_backward_max_action_steps)
         if run is None or run.status != "completed":
             self.record("depth/backward", status=_status(run), error=_error(run), element=element)
             return None
@@ -636,19 +660,35 @@ class Pipeline:
         return None
 
     @staticmethod
-    def _chain_statement(initial: dict, chain: list[dict]) -> str:
-        parts = [f"{item['query']}：{item['answer']}" for item in chain]
-        return "；".join([initial["initial_query"], *parts])
+    def _solve_trajectory(full_results: list[dict]) -> dict:
+        """移植 process_single_task 的轨迹整理：自外向内列出子问题与中间结果。"""
+        trajectory = [{"sub_query": full_results[0]["initial_query"],
+                       "sub_answer": full_results[0]["initial_answer"],
+                       "sub_trajectory": full_results[0]["initial_trajectory"]}]
+        for index in range(1, len(full_results), 2):
+            item = full_results[index]
+            trajectory.append({"sub_query": item["query"], "sub_answer": item["answer"],
+                               "sub_trajectory": item["trajectory"]})
+        last = full_results[-1]
+        return {"question": last["query"], "golden_answer": last["answer"],
+                "trajectory": trajectory[::-1]}
+
+    def _relation_evidence(self, relations: list[dict],
+                           existing: list[Evidence]) -> list[Evidence]:
+        """辅助核验的来源：每条 superset 关系事实绑定支持它的记录块标识。"""
+        evidence, seen = [], {record.source_id for record in existing}
+        for hop in relations:
+            records, _ = self.evidence(f"{hop['identifier']}：{hop['relation']}", hop["source_ids"])
+            for record in records:
+                if record.source_id not in seen:
+                    seen.add(record.source_id)
+                    evidence.append(record)
+        return evidence
 
     @staticmethod
     def _chain_answer(initial: dict, chain: list[dict]) -> str:
-        lines = [f"最终答案：{initial['initial_answer']}", "",
-                 "支撑该答案的子问题与中间结果（自外向内）："]
-        for index, item in enumerate(reversed(chain), start=1):
-            lines.append(f"{index}. 子问题：{item['query']} → 中间答案：{item['answer']}")
-        lines.append(f"{len(chain) + 1}. 原始问题：{initial['initial_query']} "
-                     f"→ 原始答案：{initial['initial_answer']}")
-        return "\n".join(lines)
+        """深度题参考答案是原始最终答案；子问题与中间识别符不进答案。"""
+        return initial["initial_answer"]
 
     # ------------------------------------------------------------------ 输出选择
     def select(self) -> list[Candidate]:

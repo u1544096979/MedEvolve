@@ -112,7 +112,7 @@ class FakeRuntime:
                  superset_state="valid", off_type=None, merge_valid=True,
                  decompose_states=None, width_answer="无法确定", backward_failure=False,
                  agent_action_rounds=1, tool_calls_per_action=1, fail_agent_runs=0,
-                 score_failures=(), final_answer_with_tools=False):
+                 score_failures=(), final_answer_with_tools=False, backward_failures=0):
         self.task_types = list(task_types)
         self.conclusions = conclusions if conclusions is not None else [
             {"conclusion": "2024-03-05 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
@@ -128,6 +128,9 @@ class FakeRuntime:
         self.decompose_states = decompose_states or {}
         self.width_answer = width_answer
         self.backward_failure = backward_failure
+        # 前几次反向检索失败，用于验证失败尝试进入 trace。
+        self.backward_failures = 0
+        self.backward_runs = 0
         # 首次检索前发出几次工具调用；检索步数达到 agent_action_rounds 后给出答案。
         self.agent_action_rounds = agent_action_rounds
         self.tool_calls_per_action = tool_calls_per_action
@@ -135,6 +138,7 @@ class FakeRuntime:
         self.score_failures = set(score_failures)
         # 工具调用轮次里是否同时给出 final_answer 字段。
         self.final_answer_with_tools = final_answer_with_tools
+        self.backward_failures = backward_failures
         self.llm_calls = []
         self.agent_calls = []
         self.agent_instructions = []
@@ -167,6 +171,10 @@ class FakeRuntime:
         task = self._task(input_text)
         if self.backward_failure and self.BACKWARD_MARK in task:
             return None
+        if self.BACKWARD_MARK in task:
+            self.backward_runs += 1
+            if self.backward_runs <= self.backward_failures:
+                return None
         served = self.agent_steps.get(task, 0)
         if served == 0:
             self.agent_runs += 1
@@ -319,14 +327,24 @@ class WidthRuntime(FakeRuntime):
                                       input_text=input_text, output_type=output_type)
 
 
-def atomic_pool(count):
-    """构造可直接驱动宽度阶段的原子候选；参考答案逐题不同以便区分分组来源。"""
+def atomic_pool(count, *, task_types=None):
+    """构造可直接驱动扩展阶段的原子候选；参考答案逐题不同以便区分分组来源。"""
+    types = list(task_types or [])
     return [Candidate(
         question=GeneratedQuestion(
-            instruction=f"该患者第 {index} 项记录说明了什么？", task_type="诊断与解释",
+            instruction=f"该患者第 {index} 项记录说明了什么？",
+            task_type=types[index % len(types)] if types else "诊断与解释",
             reference_answer=f"答案 {index}",
             evidence=[Evidence(source_id=BLOCK_A, statement=f"第 {index} 项记录")]),
         origin="atomic", locator=BLOCK_A) for index in range(count)]
+
+
+def stage_pipeline(monkeypatch, fake, *, tools=None):
+    """用替身运行层直接驱动一个阶段，便于核对候选的 detail 与阶段记录。"""
+    monkeypatch.setattr("runtime.call_llm", fake.call_llm)
+    return Pipeline(trajectory(),
+                    tools if tools is not None else [FakeTool(name) for name in READ_ONLY_TOOLS],
+                    directions(), TaskCraftParameters(), Ledger(GenerationBudget(runtime_config())))
 
 
 def width_pipeline(fake, monkeypatch, *, turns=160):
@@ -504,8 +522,18 @@ async def test_depth_extension_depends_on_parent_and_keeps_sub_query_chain(patch
                 if "综合问题" in question.instruction]
     assert len(extended) == 1
     question = extended[0]
-    assert question.reference_answer.startswith("最终答案：5.9 mmol/L")
-    assert "子问题：在该患者的高钾血症问题条目下，血钾结果是多少？" in question.reference_answer
+    assert question.reference_answer == "5.9 mmol/L"
+    pool = pipeline_pool(result)
+    depth_entry = next(entry for entry in pool if entry["origin"] == "depth"
+                       and entry["instruction"] == question.instruction)
+    parent = next(entry for entry in pool if entry["origin"] == "atomic"
+                  and entry["instruction"] == depth_entry["parents"][0])
+    # 子问题与中间标识属于 trace，不拼进最终答案。
+    completed = next(entry for entry in stage_records(result, "depth/extension")
+                     if entry["status"] == "completed")
+    assert [item["query"] for item in completed["chain"]] == [
+        "在该患者的高钾血症问题条目下，血钾结果是多少？"]
+    assert [item["answer"] for item in completed["chain"]] == [parent["locator"]]
     assert {item.source_id for item in question.evidence} == {BLOCK_B}
     pool = pipeline_pool(result)
     depth = [candidate for candidate in pool if candidate["origin"] == "depth"]
@@ -551,8 +579,7 @@ async def test_width_extension_checks_decomposition_and_model_answering(patched,
     merged = [question for question in batch.questions if "合并问题" in question.instruction]
     assert len(merged) == 1
     question = merged[0]
-    assert question.reference_answer.startswith("合并题参考答案：")
-    assert "该患者第 1 项记录说明了什么？ → 5.9 mmol/L" in question.reference_answer
+    assert json.loads(question.reference_answer) == ["5.9 mmol/L", "5.9 mmol/L"]
     assert {item.source_id for item in question.evidence} == {BLOCK_A, BLOCK_B}
     pool = pipeline_pool(result)
     width = next(candidate for candidate in pool if candidate["origin"] == "width")
@@ -635,6 +662,95 @@ async def test_width_keeps_duplicate_parent_indexes_in_model_order(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_width_checks_merged_groups_in_batches_of_ten(monkeypatch):
+    """至少 11 组合并题按源码 batch_size=10 分两批，各批保留自身答案。"""
+    groups = [[index, index + 1] for index in range(0, 22, 2)]
+    fake = WidthRuntime(groups=groups,
+                        width_answers={index: "无法确定" for index in range(len(groups))})
+    pipeline = width_pipeline(fake, monkeypatch)
+
+    candidates = await pipeline.width(atomic_pool(22))
+
+    assert len(candidates) == 11
+    for group, candidate in zip(groups, candidates):
+        assert json.loads(candidate.question.reference_answer) == [f"答案 {index}" for index in group]
+    decompose = [text for kind, name, text in fake.log if name == "DecompositionReport"]
+    assert len(decompose) == 2
+    assert [len(re.findall(r'"complex_question"', text)) for text in decompose] == [10, 1]
+
+
+@pytest.mark.asyncio
+async def test_width_detail_keeps_parent_questions_answers_indexes_and_types(monkeypatch):
+    """宽度候选保存各父题原文、答案、原始索引与全部题型；跨题型取首父题标签。"""
+    fake = WidthRuntime(groups=[[2, 1, 0]], width_answers={0: "无法确定"})
+    pipeline = width_pipeline(fake, monkeypatch)
+
+    candidates = await pipeline.width(atomic_pool(3, task_types=["治疗规划", "诊断与解释"]))
+
+    detail = candidates[0].detail
+    assert detail["original_indexes"] == [2, 1, 0]
+    assert detail["original_questions"] == [
+        f"该患者第 {index} 项记录说明了什么？" for index in (2, 1, 0)]
+    assert detail["golden_answers"] == ["答案 2", "答案 1", "答案 0"]
+    assert detail["parent_types"] == ["治疗规划", "诊断与解释", "治疗规划"]
+    assert candidates[0].question.task_type == "治疗规划"
+    mixed = [entry for entry in pipeline.records if entry["stage"] == "width/task_type"]
+    assert mixed and mixed[0]["parent_types"] == ["治疗规划", "诊断与解释", "治疗规划"]
+
+
+@pytest.mark.asyncio
+async def test_atomic_detail_keeps_conclusion_relation_sources_and_clean_answer(monkeypatch):
+    """原子候选保留原结论、关系、患者来源与清洗后的答案。"""
+    fake = FakeRuntime()
+    pipeline = stage_pipeline(monkeypatch, fake)
+
+    candidates = await pipeline.atomic()
+
+    assert len(candidates) == 2
+    assert candidates[0].detail == {
+        "conclusion": "2024-03-05 血钾 5.9 mmol/L", "relation": "该次检验的血钾结果",
+        "source_ids": [BLOCK_A], "refined_answer": "5.9 mmol/L", "task_type": "诊断与解释"}
+
+
+@pytest.mark.asyncio
+async def test_depth_detail_keeps_results_trajectory_auxiliary_sources_and_failures(monkeypatch):
+    """深度 detail 保存 full_results、solve_trajectory、辅助来源与失败尝试。"""
+    fake = FakeRuntime(backward_failures=1)
+    pipeline = stage_pipeline(monkeypatch, fake)
+    atomic = await pipeline.atomic()
+
+    extended = await pipeline.depth([atomic[0]])
+
+    assert len(extended) == 1
+    detail = extended[0].detail
+    assert detail["failed_attempts"] == [{"hop": 1, "reason": "backward"}]
+    assert [item["query"] for item in detail["full_results"][1::2]] == [
+        "在该患者的高钾血症问题条目下，血钾结果是多少？"]
+    assert detail["full_results"][-1]["answer"] == "5.9 mmol/L"
+    assert detail["solve_trajectory"]["golden_answer"] == "5.9 mmol/L"
+    assert detail["solve_trajectory"]["trajectory"][-1] == {
+        "sub_query": atomic[0].question.instruction, "sub_answer": "5.9 mmol/L",
+        "sub_trajectory": None}
+    assert detail["superset_source_ids"] == [BLOCK_B]
+    assert detail["relations"] == [{"identifier": BLOCK_B, "relation": "该问题条目下的检验结果",
+                                    "source_ids": [BLOCK_B]}]
+    assert {item.source_id for item in extended[0].question.evidence} == {BLOCK_A, BLOCK_B}
+
+
+@pytest.mark.asyncio
+async def test_depth_answer_is_the_original_final_answer():
+    initial = {"initial_answer": "5.9 mmol/L"}
+    chain = [{"query": "先查哪个标识", "answer": "Observation/77"}]
+    assert Pipeline._chain_answer(initial, chain) == "5.9 mmol/L"
+
+
+def test_width_answer_is_lossless_json():
+    item = {"original_questions": ["Q1", "Q2"],
+            "golden_answers": ["5.9 mmol/L", "含换行\n和引号\"的原答案"]}
+    assert json.loads(Pipeline._merged_answer(item)) == item["golden_answers"]
+
+
+@pytest.mark.asyncio
 async def test_failed_extension_stage_does_not_discard_produced_candidates(patched, environment):
     fake = FakeRuntime(backward_failure=True)
     patched(fake)
@@ -671,8 +787,7 @@ async def test_cumulative_budget_exhaustion_keeps_usage_and_full_batch_cost(patc
     fake = FakeRuntime()
     patched(fake)
     result = await generate_tasks(trajectory(), environment, directions(),
-                                  runtime_config(max_model_turns=2),
-                                  parameters=TaskCraftParameters(atomic_budget_share=1.0))
+                                  runtime_config(max_model_turns=2))
 
     assert result.status == "budget_exhausted" and result.output is None
     assert result.usage["model_turns"] == 2
@@ -682,36 +797,20 @@ async def test_cumulative_budget_exhaustion_keeps_usage_and_full_batch_cost(patc
 
 
 @pytest.mark.asyncio
-async def test_atomic_stage_stops_at_its_budget_share(patched, environment):
-    conclusions = [{"conclusion": f"2024-03-0{index} 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
-                    "source_ids": [BLOCK_A]} for index in range(1, 5)]
+async def test_stages_use_the_shared_budget_as_their_only_limit(patched, environment):
+    """原子与扩展阶段不再按阶段份额或预留轮数截断，跑满共享生成预算才停。"""
+    conclusions = [{"conclusion": f"2024-03-{index:02d} 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
+                    "source_ids": [BLOCK_A]} for index in range(1, 9)]
     fake = FakeRuntime(conclusions=conclusions)
     patched(fake)
-    result = await generate_tasks(trajectory(), environment, directions(),
-                                  runtime_config(max_model_turns=60))
+    result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
 
-    assert result.status == "completed", result.error
-    skipped = [entry for entry in stage_records(result, "atomic/verify")
-               if entry.get("status") == "skipped"]
-    assert skipped and skipped[0]["share_limit"] == 30
-    accepted = [entry for entry in stage_records(result, "atomic/result")][0]
-    assert 0 < accepted["accepted"] < accepted["generated"]
-    assert len(fake.llm_calls) + len(fake.agent_calls) < 60
-
-
-@pytest.mark.asyncio
-async def test_extension_stage_keeps_a_guard_so_the_batch_completes(patched, environment):
-    fake = FakeRuntime(backward_failure=False)
-    patched(fake)
-    result = await generate_tasks(trajectory(), environment, directions(),
-                                  runtime_config(max_model_turns=45, max_tool_calls=40))
-
-    assert result.status == "completed", result.error
-    assert TaskBatch.model_validate(result.output).questions
-    guards = [entry for entry in stage_records(result, "depth/extension")
-              if entry.get("status") == "skipped"]
-    assert guards and guards[0]["reason"] == "剩余预算不足以完成一跳"
-    assert result.usage["model_turns"] <= 45
+    assert result.status == "budget_exhausted"
+    assert result.usage["model_turns"] == 160
+    atomic = stage_records(result, "atomic/result")[0]
+    assert atomic["generated"] == atomic["accepted"] == 8
+    assert not [entry for entry in pipeline_records(result)
+                if entry.get("reason") in {"原子阶段预算份额已用尽", "剩余预算不足以完成一跳"}]
 
 
 @pytest.mark.asyncio
@@ -816,9 +915,18 @@ def test_stage_parameters_keep_source_defaults(environment):
     settings = TaskCraftParameters()
     assert settings.chunk_size == 16384
     assert settings.max_candidate_conclusions == 20
+    assert settings.max_candidate_atomic == 10
     assert settings.judge_samples == 3
+    assert settings.question_attempts == 3 and settings.width_attempts == 3
     assert settings.extended_attempts == 4 and settings.max_hops == 2
     assert settings.merge_attempts == 5 and settings.query_attempts == 3
+    # 源码 SearchAgent 的 max_step：原子核验 20，深度反向与深度核验各 10。
+    assert settings.atomic_max_action_steps == 20
+    assert settings.depth_backward_max_action_steps == 10
+    assert settings.depth_verify_max_action_steps == 10
+    # 阶段份额与预留轮数已取消，共享生成预算是唯一上限。
+    assert "atomic_budget_share" not in TaskCraftParameters.model_fields
+    assert "extension_guard_turns" not in TaskCraftParameters.model_fields
 
 
 def test_method_reads_no_medevolve_guidance():
