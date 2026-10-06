@@ -130,15 +130,14 @@
     }
   },
   "evolution_patients": [
-    "e232ee4d-3042-51c6-b730-a79eb8579d42",
     "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0"
   ],
   "evaluation_patients": [
-    "42f0ed8f-d744-5edb-a05d-8e011c1fbd64"
+    "e232ee4d-3042-51c6-b730-a79eb8579d42"
   ],
   "round_patients": [
     [
-      "e232ee4d-3042-51c6-b730-a79eb8579d42"
+      "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0"
     ],
     [
       "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0"
