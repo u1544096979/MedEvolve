@@ -21,6 +21,7 @@ from environments.errors import EnvironmentUnavailable, UnsupportedDecisionPoint
 from environments.fhir import FHIRClient, decode_document_notes
 from environments.medagentbench import NativeTools, load_functions
 from environments.physicianbench import FHIR_TOOL_SCHEMAS, NATIVE_FUNCTIONS
+from environments.tool_results import serialize_tool_result, validate_tool_result_limit
 
 _WRITABLE_RESOURCE_TYPES = {
     "Communication",
@@ -175,21 +176,29 @@ async def get_tools(
         return get_native_tools(instance, patient_ids)
     if instance.environment == "MedAgentBench":
         return NativeTools(instance.endpoint, patient_ids, load_functions())
+    validate_tool_result_limit(tool_result_limit)
     client = FHIRClient(instance.endpoint, patient_ids)
     schemas = {schema["name"]: schema for schema in FHIR_TOOL_SCHEMAS}
 
     def tool_error(context, error):
         if isinstance(error, (EnvironmentUnavailable, UnsupportedDecisionPoint)):
             raise error
-        return json.dumps({"error": f"{type(error).__name__}: {error}. Please retry with valid arguments."})
+        return serialize_tool_result(
+            {"error": f"{type(error).__name__}: {error}. Please retry with valid arguments."},
+            tool_result_limit,
+            error=True,
+        )
 
     def bind(native):
         @wraps(native)
         async def invoke(*args, **kwargs):
-            result = json.dumps(await native(client, *args, **kwargs), default=str)
-            if len(result) > tool_result_limit:
-                result = result[:tool_result_limit] + "… [result truncated]"
-            return result
+            value = await native(client, *args, **kwargs)
+            return serialize_tool_result(
+                value, tool_result_limit, write=native.__name__ in {
+                    "fhir_communication_create_message", "fhir_service_request_create",
+                    "fhir_medication_request_create", "fhir_appointment_create",
+                },
+            )
 
         signature = inspect.signature(native)
         invoke.__signature__ = signature.replace(

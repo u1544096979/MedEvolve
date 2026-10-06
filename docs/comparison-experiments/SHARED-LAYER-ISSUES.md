@@ -4,14 +4,6 @@
 
 ## 待修复
 
-### 1. 工具返回截断产出非法 JSON
-
-- 现象：截断在 `json.dumps` 之后按字符数切，模型收到的是被截断的 JSON 字符串加 `… [result truncated]`，无法解析。
-- 证据：PhysicianBench 运行 54 条工具返回中 27 条被截断，最长 10020 字符（`physicianbench-envexplore-acceptance`）。
-- 影响：模型将残缺结果视为读取失败并重复同一查询，是探索阶段反复查询与上下文膨胀的助推因素。
-- 位置：`environments/__init__.py` 的 FHIR 工具包装。
-- 建议：先按记录条数与字段裁剪数据，再序列化，保证返回始终是合法 JSON。
-
 ### 2. 环境探索既不探测也不停止
 
 - 现象：探索 Agent 要么重复同一批查询直到耗尽预算，要么完全不调用工具直接写出指导。
@@ -45,6 +37,11 @@
 - 建议：补全各查询支持的筛选参数，或对未知参数返回明确提示并允许重试后计入成功。
 
 ## 已修复
+
+工具返回截断产出非法 JSON：截断在 `json.dumps` 之后按字符数切，模型收到的是被截断的 JSON 字符串加 `… [result truncated]`，无法解析；PhysicianBench 运行 54 条工具返回中 27 条被截断，最长 10020 字符（`physicianbench-envexplore-acceptance`）。
+
+- 修复：`environments/__init__.py` 的 FHIR 工具包装改为调用 `environments/tool_results.py`，先按完整记录裁剪数据再序列化，超限返回合法 JSON 与 `truncation` 标记，写入响应与超限错误同样受限。
+- 验证：`tests/environment/test_tool_results.py` 与 `tests/environment/test_patient_boundary.py` 覆盖 500、5000、10000、200000 四种上限、单条超大记录、写入响应、超限错误与低于下限的配置；`PYTHONPATH="$PWD" python -m pytest -q` 382 passed, 4 skipped。
 
 原生通道缺少交付说明：协议只有 GET、POST、FINISH 三种动作，未说明结论需作为 `FINISH` 的文本项提交，模型提交 `FINISH([])` 导致指导为空或解题答案为空。
 
