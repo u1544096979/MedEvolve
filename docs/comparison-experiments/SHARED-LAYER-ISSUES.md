@@ -4,14 +4,6 @@
 
 ## 待修复
 
-### 2. 环境探索既不探测也不停止
-
-- 现象：探索 Agent 要么重复同一批查询直到耗尽预算，要么完全不调用工具直接写出指导。
-- 证据：PhysicianBench 运行 30 轮、66 次调用、仅 2 种不同参数、模型文本 0 条，以 `MaxTurnsExceeded` 结束，累计 1,579,360 input tokens（`physicianbench-envexplore-r5000`）；换用 deepseek 后为 1 轮、0 次工具调用（`physicianbench-envexplore-deepseek`）。
-- 影响：正式配置下 PhysicianBench 在探索阶段终止，实验无法继续；指导可能包含未验证的能力声明。
-- 位置：`methods/medevolve/prompts.py` 的 `ENVIRONMENT_EXPLORATION`。
-- 建议：明确“同一查询只做一次”与“确认能力后立即交付指导”，并设定最少探测要求。
-
 ### 3. 公共核验出现假拒绝
 
 - 现象：核验把与声明一致的记录判为矛盾，据此拒绝整题。
@@ -37,6 +29,11 @@
 - 建议：补全各查询支持的筛选参数，或对未知参数返回明确提示并允许重试后计入成功。
 
 ## 已修复
+
+环境探索既不探测也不停止：探索 Agent 要么重复同一批查询直到耗尽预算，要么完全不调用工具直接写出指导；PhysicianBench 运行 30 轮、66 次调用、仅 2 种不同参数、模型文本 0 条，以 `MaxTurnsExceeded` 结束，累计 1,579,360 input tokens（`physicianbench-envexplore-r5000`），换用 deepseek 后为 1 轮、0 次工具调用（`physicianbench-envexplore-deepseek`）。
+
+- 修复：`methods/medevolve/prompts.py` 的 `ENVIRONMENT_EXPLORATION` 增加探索规则，要求交付前实际调用工具、相同工具与参数的查询只执行一次、被裁剪时缩小范围而非重复原查询、信息足够即交付，并要求指导区分已验证能力、调用失败与未验证能力；双环境共用同一份提示词，预算与原生动作格式不变。
+- 验证：`tests/method/test_envexplore_environment.py` 断言 PhysicianBench 与 MedAgentBench 两条通道都把 `ENVIRONMENT_EXPLORATION` 作为 `instructions` 传入，预算、释放与 FINISH 格式测试通过；提示词只能约束模型行为，尚无真实运行证据，仍待实跑确认模型遵守这些规则。
 
 工具返回截断产出非法 JSON：截断在 `json.dumps` 之后按字符数切，模型收到的是被截断的 JSON 字符串加 `… [result truncated]`，无法解析；PhysicianBench 运行 54 条工具返回中 27 条被截断，最长 10020 字符（`physicianbench-envexplore-acceptance`）。
 
