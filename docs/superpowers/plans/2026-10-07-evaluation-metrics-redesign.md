@@ -636,7 +636,7 @@ def _compute_complexity(task: Task, trajectory: PatientTrajectory) -> Complexity
 ```bash
 PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q
 ```
-Expected: `210 passed, 3 skipped`（205 基线 + 5 个新增用例：3 个新测试 + 1 个参数化测试的 2 个用例）。
+Expected: `211 passed, 3 skipped`（205 基线 + 5 个新增用例 + 1 个新增故障表参数化行）。
 
 - [ ] **Step 8: 提交**
 
@@ -790,7 +790,7 @@ def summarize_difficulty(evaluations: list[dict]) -> JsonObject:
 ```bash
 PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q
 ```
-Expected: `210 passed, 3 skipped`。
+Expected: `211 passed, 3 skipped`。
 
 - [ ] **Step 6: 提交**
 
@@ -833,7 +833,7 @@ body 说明：数值评分才能做统计对比，汇总输出每个维度的均
 ```bash
 PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q
 ```
-Expected: `210 passed, 3 skipped`。
+Expected: `211 passed, 3 skipped`。
 
 - [ ] **Step 3: 确认没有残留旧维度名**
 
