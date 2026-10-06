@@ -67,18 +67,19 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 6. 题型。源码没有题型采样。出题提示词追加题型约束，取值限于 `directions` 中的题型；扩展题继承父题题型，跨题型合并取第一父题的题型。批量输出按方向各取一题，同一方向内优先顺序为宽度、深度、原子。
 7. 预算边界。`max_candiated_conclusions`、`max_candidate_atomic`、`extended_attempts`、`max_hops`、`num_parallel_predictions`、`merge_attempts`、`query_attempts` 以 `TaskCraftParameters` 显式给出。`atomic_budget_share` 限制原子阶段使用的生成预算比例，`extension_guard_turns` 控制剩余轮数不足时不再发起新的扩展跳，使源码循环在共享预算内结束。
 8. Agent 步数与计数。源码 `ToolCallingAgent._run` 以 action step 计数（`max_step` 为 20，深度反向与深度核验为 10），第 1 步先规划、之后每 5 步反思；规划与反思不增加 action step，但每次都增加模型请求。适配保留该循环：`Ledger.agent(..., max_action_steps=)` 给出单次调用上限，规划与反思按 `run_search_agent` 的步骤调度执行，`usage.action_steps` 记录真实 action step 数，`verify.verify_query` 的 `agent_step_number` 取该值（不再取模型请求数）。源码 `traj_step_num()` 返回的 `self.step_number` 在终止时又递增一次，即实际 action step 数加一（达到上限时为 `max_step+1`），该串值与 `usage.step_number` 同时保留在运行结果中。
-9. 动作编码。公共单次调用入口返回结构化 JSON，无法使用 SDK 的工具调用字段；一次 action 的编码是 `{"tool_calls": [...], "final_answer": ...}`（原生协议为 `{"action": "GET …"}`）。源码 `step` 的 JSON 回退分支（agents.py:1516-1525）只支持一个 `{"name", "arguments"}` 对象，SDK 分支也只执行 `tool_calls[0]`（agents.py:1546）；适配把同一次响应里的多个工具调用依次执行、逐个计入 `tool_calls`，使台账计数与真实调用一致。
-10. 无工具调用的回退。源码 `step` 在既无工具调用、内容也不是 JSON 动作时，把模型输出直接当作终答文本；结构化输出下没有对应形态，适配将该情形记为生成失败（`action response carries no tool call`），由调用方的外层重试处理。
-11. 终答解析。`final_answer` 的参数是答案 JSON；达到 action 上限后的 `provide_final_answer` 请求按源码要求返回 `<think>/<answer>`（`AgentThought`），再由 `agent._finish` 把 `answer` 解析为声明的输出结构，对应 `SearchAgent.forward` 的 `safe_json_loads`。原始 `oagents` 运行在此处返回文本，公共运行层需要 `output_type` 结构。
-12. 工具调用记账。每个模型请求与每次工具调用都进入同一 `GenerationBudget.records`：工具调用单独记一条 `model_turns=0`、`tool_calls=1` 的记录，使累计工具预算真实递减，并在达到上限时按总工具预算阻断。
-13. Agent 记忆与模板渲染。规划与反思的请求把消息列表展平为单一输入文本（公共单次调用入口只接受 `instructions` 与 `input_text`），字段与顺序保持作者 `to_messages` 口径；`managed_agents` 为空，模板中的对应 Jinja 分支渲染为空文本，工具清单由 Jinja 循环改为预渲染。提示词逐字取自 `oagents/prompts/w_think_reflect/toolcalling_agent.yaml`。
-14. 评分采样与失败样本。`recall_score` 的 3 次并行判定在公共层顺序执行（`judge_samples=3`），判定提示词与评分区间不变，成本逐次计入累计预算。单个样本的请求失败或输出无法比较时不计入平均值，其余有效样本继续求平均（源码在并行分支里会把整个评分置为 None）；全部无效时返回 None，无工具回答分支按源码的比较异常路径重试，病历工具回答分支按源码直接带回空分数，由原子过滤或深度扩展的对应分支处理。
-15. 无工具回答路径。源码该路径不传 system 指令，公共 `call_llm` 固定携带 system 消息，适配使用最小指令（`LLM_ONLY_INSTRUCTIONS`）保持「无工具、仅自身知识」的语义。
-16. 提示词。源码正文逐字保留，医疗适配以追加约束块实现；正文中的文献与网页示例保留用于说明字段格式，追加块声明本任务领域是病历记录。
-17. `clean_qa` 输入由 Python 字典的 f-string 改为 JSON 文本，字段不变。
-18. 患者标识。病历工具按参数鉴权，本次开放的患者标识写入 Agent 说明。
-19. 原生协议分派。MedAgentBench 的工具列表不是函数工具，按名字过滤会得到空列表。生成阶段检测原生工具对象后按只读视图绑定，放行清单为 GET 与 FINISH；核验与反向检索的输出形态改为 `FINISH` 约定，机制分支与 PhysicianBench 一致。
-20. 原生接口范围。MedAgentBench 声明含 6 个 GET 与 3 个 POST，没有病历文书检索接口；依赖文书内容的结论在该环境下候选更少，机制不变。
+9. 动作编码。公共单次调用入口返回结构化 JSON，无法使用 SDK 的工具调用字段；一次 action 的编码是 `{"tool_calls": [...], "final_answer": ...}`（原生协议为 `{"action": "GET …"}`）。源码 `step` 的 JSON 回退分支（agents.py:1507-1511）只支持一个 `{"name", "arguments"}` 对象，SDK 分支也只执行 `tool_calls[0]`（agents.py:1534）；适配把同一次响应里的多个工具调用依次执行、逐个计入 `tool_calls`，使台账计数与真实调用一致。
+10. 工具调用响应里的终答字段。源码在 `tool_calls` 非空时不解析消息内容，只执行 `tool_calls[0]` 并继续循环（agents.py:1500-1536）；内容解析与终答回退都只在 `tool_calls` 为空时发生（agents.py:1507-1528）。适配同样只在同一次响应不含工具调用时接受 `final_answer` 作为终答；该响应带工具调用时，工具调用全部执行并继续下一步。
+11. 无工具调用的回退。源码 `step` 在既无工具调用、内容也不是 JSON 动作时，把模型输出直接当作终答文本；结构化输出下没有对应形态，适配将该情形记为生成失败（`action response carries no tool call`），由调用方的外层重试处理。
+12. 终答解析。`final_answer` 的参数是答案 JSON；达到 action 上限后的 `provide_final_answer` 请求按源码要求返回 `<think>/<answer>`（`AgentThought`），再由 `agent._finish` 把 `answer` 解析为声明的输出结构，对应 `SearchAgent.forward` 的 `safe_json_loads`。原始 `oagents` 运行在此处返回文本，公共运行层需要 `output_type` 结构。
+13. 工具调用记账。每个模型请求与每次工具调用都进入同一 `GenerationBudget.records`：工具调用单独记一条 `model_turns=0`、`tool_calls=1` 的记录，使累计工具预算真实递减，并在达到上限时按总工具预算阻断。工具调用不发起模型请求，该记录同时声明 `runs_without_known_tokens=0`，不把工具调用计为缺少 token 的运行。
+14. Agent 记忆与模板渲染。规划与反思的请求把消息列表展平为单一输入文本（公共单次调用入口只接受 `instructions` 与 `input_text`），字段与顺序保持作者 `to_messages` 口径；`managed_agents` 为空，模板中的对应 Jinja 分支渲染为空文本，工具清单由 Jinja 循环改为预渲染。提示词逐字取自 `oagents/prompts/w_think_reflect/toolcalling_agent.yaml`。
+15. 评分采样与失败样本。`recall_score` 的 3 次并行判定在公共层顺序执行（`judge_samples=3`），判定提示词与评分区间不变，成本逐次计入累计预算。单个样本的请求失败或输出无法比较时不计入平均值，其余有效样本继续求平均（源码在并行分支里会把整个评分置为 None）；全部无效时返回 None，无工具回答分支按源码的比较异常路径重试，病历工具回答分支按源码直接带回空分数，由原子过滤或深度扩展的对应分支处理。
+16. 无工具回答路径。源码该路径不传 system 指令，公共 `call_llm` 固定携带 system 消息，适配使用最小指令（`LLM_ONLY_INSTRUCTIONS`）保持「无工具、仅自身知识」的语义。
+17. 提示词。源码正文逐字保留，医疗适配以追加约束块实现；正文中的文献与网页示例保留用于说明字段格式，追加块声明本任务领域是病历记录。
+18. `clean_qa` 输入由 Python 字典的 f-string 改为 JSON 文本，字段不变。
+19. 患者标识。病历工具按参数鉴权，本次开放的患者标识写入 Agent 说明。
+20. 原生协议分派。MedAgentBench 的工具列表不是函数工具，按名字过滤会得到空列表。生成阶段检测原生工具对象后按只读视图绑定，放行清单为 GET 与 FINISH；核验与反向检索的输出形态改为 `FINISH` 约定，机制分支与 PhysicianBench 一致。
+21. 原生接口范围。MedAgentBench 声明含 6 个 GET 与 3 个 POST，没有病历文书检索接口；依赖文书内容的结论在该环境下候选更少，机制不变。
 
 ## 5. 预算要求与实测用量
 

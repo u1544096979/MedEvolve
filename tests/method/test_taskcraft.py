@@ -111,7 +111,7 @@ class FakeRuntime:
                  superset_state="valid", off_type=None, merge_valid=True,
                  decompose_states=None, width_answer="无法确定", backward_failure=False,
                  agent_action_rounds=1, tool_calls_per_action=1, fail_agent_runs=0,
-                 score_failures=()):
+                 score_failures=(), final_answer_with_tools=False):
         self.task_types = list(task_types)
         self.conclusions = conclusions if conclusions is not None else [
             {"conclusion": "2024-03-05 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
@@ -132,6 +132,8 @@ class FakeRuntime:
         self.tool_calls_per_action = tool_calls_per_action
         self.fail_agent_runs = fail_agent_runs
         self.score_failures = set(score_failures)
+        # 工具调用轮次里是否同时给出 final_answer 字段。
+        self.final_answer_with_tools = final_answer_with_tools
         self.llm_calls = []
         self.agent_calls = []
         self.agent_instructions = []
@@ -176,7 +178,8 @@ class FakeRuntime:
             return {"tool_calls": [{"name": self.AGENT_TOOL,
                                     "arguments": {"patient": PATIENT}}
                                    for _ in range(self.tool_calls_per_action)],
-                    "final_answer": None}
+                    "final_answer": ({"answer_list": ["工具调用响应里的终答"]}
+                                     if self.final_answer_with_tools else None)}
         if native:
             answers = self._final_answer(instructions + input_text, as_list=True)
             return {"action": f"FINISH({json.dumps(answers, ensure_ascii=False)})"}
@@ -853,6 +856,28 @@ async def test_action_response_with_several_tool_calls_counts_each(monkeypatch):
         FakeRuntime.AGENT_TOOL, FakeRuntime.AGENT_TOOL]
     called = next(tool for tool in tools if tool.name == FakeRuntime.AGENT_TOOL)
     assert len(called.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_action_response_with_tools_and_final_answer_keeps_the_loop(monkeypatch):
+    """同一响应同时带工具调用与 final_answer 时，源码继续循环并执行工具调用。"""
+    fake = FakeRuntime(agent_action_rounds=2, final_answer_with_tools=True)
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    run = await run_search_agent(
+        ledger=ledger, stage="depth/backward", instructions="只使用当前患者的病历工具",
+        input_text="该患者 2024-03-05 的血钾结果是多少？", tools=tools,
+        output_type=AnswerList, max_action_steps=20)
+
+    assert run.status == "completed", run.error
+    assert AnswerList.model_validate(run.output).answer_list == ["5.9 mmol/L"]
+    assert run.usage["action_steps"] == 3
+    assert run.usage["tool_calls"] == 2
+    tool_events = [item for item in run.trace if item["type"] == "tool_start"]
+    assert [item["name"] for item in tool_events] == [FakeRuntime.AGENT_TOOL] * 2
+    # 前两步执行工具调用且没有收尾；只有第 3 步（无工具调用的响应）给出终答。
+    early = [item for item in run.trace if item["type"] == "action" and item["step"] < 3]
+    assert [item.get("action_output") for item in early] == [None, None]
+    assert all(item["observations"] is not None for item in early)
 
 
 @pytest.mark.asyncio

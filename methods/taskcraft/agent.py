@@ -1,7 +1,7 @@
 """源码 ToolCallingAgent 的执行控制移植（提交 1e405e0）。
 
 源码路径：``taskcraft/oagents/agents.py`` 的 ``ToolCallingAgent._run``（1401-1487）、
-``step``（1488-1626）、``provide_final_answer``（445-489）、``planning_step``（618-866）与
+``step``（1488-1623）、``provide_final_answer``（445-489）、``planning_step``（618-866）与
 ``reflection_step``（868-1010），记忆映射取自 ``oagents/memory.py``。
 提示词逐字取自 ``oagents/prompts/w_think_reflect/toolcalling_agent.yaml``，即 ``SearchAgent``
 实际使用的 ``prompts_type``；许可与作者归属见 LICENSE-TaskCraft。
@@ -379,7 +379,10 @@ class _SearchRun:
             if observation is None:
                 break
             observations.append(observation)
-        if not finished and self.stop is None and action.final_answer is not None:
+        if not finished and self.stop is None and not action.tool_calls \
+                and action.final_answer is not None:
+            # 源码在 tool_calls 非空时只执行工具调用并继续循环，不解析消息内容，
+            # 因此 final_answer 字段只在同一次响应不含工具调用时才作为终答。
             finished = self._finish(action.final_answer, kind="action", step=step, entry=entry)
         if not finished and self.stop is None and not observations:
             # 源码 step：JSON 动作里既没有工具名也没有终答，视为生成失败。
