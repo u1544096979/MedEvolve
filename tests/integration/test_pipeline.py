@@ -1,3 +1,4 @@
+import ast
 """Cross-module experiment with only external HTTP services replaced."""
 
 import json
@@ -49,8 +50,8 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_rol
         if role == 'data_explorer':
             if not tools:
                 call = ('list_patients', {})
-            elif len(tools) < 3:
-                call = ('read_trajectory', {'patient_id': ['e1', 'e2'][len(tools)-1]})
+            elif len(tools) <= len(ast.literal_eval(tools[0]['content'])):
+                call = ('read_trajectory', {'patient_id': ast.literal_eval(tools[0]['content'])[len(tools)-1]})
             output = {'guidance': '按病程关联记录'}
         elif role == 'environment_explorer':
             if not tools:

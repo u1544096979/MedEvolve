@@ -21,7 +21,8 @@ from contracts import (
 )
 from environments import create_environment, get_tools, release_environment
 from runtime import call_llm, run_agent
-from methods.common import output_constraints, validate_task_batch
+from methods.common import USAGE_FIELDS, normalize_usage, output_constraints, validate_task_batch
+from .compression import COMPRESSION, CompressedTrajectory, compression_input
 
 from .prompts import (
     DATA_EXPLORATION,
@@ -64,6 +65,7 @@ async def explore_data(
     trajectories: list[PatientTrajectory], runtime: RuntimeConfig
 ) -> RunResult:
     cache = {trajectory.patient_id: trajectory for trajectory in trajectories}
+    compression_runs = []
 
     @function_tool(failure_error_function=None)
     async def list_patients() -> list[str]:
@@ -77,14 +79,48 @@ async def explore_data(
             raise ValueError("patient_id is outside the supplied trajectory cache")
         return json.dumps(_trajectory_input(cache[patient_id]), ensure_ascii=False)
 
-    return await run_agent(
+    @function_tool
+    async def compress_trajectory(patient_id: str) -> str:
+        """压缩本次开放患者的缓存轨迹；必须指定患者 ID，执行一次模型调用。"""
+        if patient_id not in cache:
+            return json.dumps({"error": "patient_id is outside the supplied trajectory cache"})
+        model = runtime.models.get("trajectory_compressor")
+        if model is None:
+            return json.dumps({"error": "runtime.models.trajectory_compressor is not configured"})
+        try:
+            input_text = compression_input(cache[patient_id], model)
+        except ValueError as exc:
+            return json.dumps({"error": str(exc)})
+        run = await call_llm(instructions=COMPRESSION, input_text=input_text,
+                             output_type=CompressedTrajectory, model=model)
+        compression_runs.append({"patient_id": patient_id, "result": run.model_dump(mode="json")})
+        if run.status != "completed" or run.output is None:
+            return json.dumps({"error": run.error or run.status})
+        return json.dumps({"patient_id": patient_id,
+                           "input_truncated": json.loads(input_text)["input_truncated"],
+                           "summary": CompressedTrajectory.model_validate(run.output).summary},
+                          ensure_ascii=False)
+
+    result = await run_agent(
         instructions=DATA_EXPLORATION,
         input_text="请先列出开放患者，再读取缓存轨迹，归纳抽象数据指导。",
-        tools=[list_patients, read_trajectory],
+        tools=[list_patients, read_trajectory, compress_trajectory],
         output_type=DataExploration,
         model=runtime.models["data_explorer"],
         budget=runtime.budgets["data_explorer"],
     )
+    if not compression_runs:
+        return result
+    usages = [normalize_usage(result.usage),
+              *(normalize_usage(run["result"]["usage"]) for run in compression_runs)]
+    usage = {**result.usage, **{field: (sum(u[field] or 0 for u in usages)
+                                    if any(u[field] is not None for u in usages) else None)
+                              for field in USAGE_FIELDS}}
+    usage["runs_without_known_tokens"] = sum(
+        u.get("runs_without_known_tokens", int(u["total_tokens"] is None)) for u in usages
+    )
+    return result.model_copy(update={"usage": usage,
+        "trace": [*result.trace, *({"type": "trajectory_compression", **run} for run in compression_runs)]})
 
 
 async def explore_environment(

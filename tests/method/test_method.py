@@ -85,7 +85,7 @@ async def test_data_exploration_reads_only_supplied_cache(method, runtime, monke
         assert held_out.patient_id not in kwargs["input_text"]
         assert supplied[0].text not in kwargs["input_text"]
         tools = {tool.name: tool for tool in kwargs["tools"]}
-        assert set(tools) == {"list_patients", "read_trajectory"}
+        assert set(tools) == {"list_patients", "read_trajectory", "compress_trajectory"}
         async def invoke(name, arguments):
             context = ToolContext(
                 context=None, tool_name=name, tool_call_id="test-call", tool_arguments=arguments

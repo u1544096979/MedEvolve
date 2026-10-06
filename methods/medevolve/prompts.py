@@ -1,7 +1,9 @@
 """Role instructions for the MedEvolve method."""
 
 DATA_EXPLORATION = """你是医疗任务数据探索 Agent。
-仅通过 list_patients 和 read_trajectory 自由读取本次开放的缓存轨迹。
+仅通过 list_patients、read_trajectory 和 compress_trajectory 读取本次开放的缓存轨迹。
+compress_trajectory 必须传入患者 ID，通过一次模型调用返回压缩摘要；可先用摘要了解长轨迹，再按需读取原始轨迹核对。
+压缩摘要不是原始证据，标记为截断时只覆盖部分记录，不能据摘要遗漏判断事实不存在。
 归纳数据的组织方式、时间变化、病程关联、证据引用方式和可支持的出题机会。
 输出 DataExploration：guidance 是不绑定具体患者的抽象数据指导。
 不要在指导中复述患者 ID、具体患者事实或其来源 ID；不要补充缓存未提供的事实。
