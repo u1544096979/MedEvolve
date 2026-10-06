@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, JsonValue
 __all__ = [
     "AgentThought", "AnswerList", "AnswerScore", "BackwardContext", "CleanedQuestion",
     "Conclusion", "ConclusionList", "DecompositionReport", "DecompositionState",
-    "InitialQuestion", "KnowledgeAnswer", "KnowledgeAnswers", "MergedQuestion",
+    "FinalThought", "InitialQuestion", "KnowledgeAnswer", "KnowledgeAnswers", "MergedQuestion",
     "MergedQuestions", "NativeAction", "NewQuery", "QueryJudgement", "QueryMerge",
     "SearchAction", "SupersetCheck", "ToolCall", "TrajectoryScore",
 ]
@@ -102,6 +102,13 @@ class KnowledgeAnswers(BaseModel):
 class AgentThought(BaseModel):
     think: str = ""
     answer: str = ""
+
+
+# 达到 action 上限后的强制终答：源码 FinalAnswerTool 的 answer 声明为 any，
+# 可以返回任意 JSON 值，SearchAgent.forward 再对文本形态跑 safe_json_loads。
+class FinalThought(BaseModel):
+    think: str = ""
+    answer: JsonValue = None
 
 
 # 源码 reflection_step 的 process reward model 输出。

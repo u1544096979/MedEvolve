@@ -115,7 +115,8 @@ class FakeRuntime:
                  superset_state="valid", off_type=None, merge_valid=True,
                  decompose_states=None, width_answer="无法确定", backward_failure=False,
                  agent_action_rounds=1, tool_calls_per_action=1, fail_agent_runs=0,
-                 score_failures=(), final_answer_with_tools=False, backward_failures=0):
+                 score_failures=(), final_answer_with_tools=False, backward_failures=0,
+                 final_answer_as_object=False):
         self.task_types = list(task_types)
         self.conclusions = conclusions if conclusions is not None else [
             {"conclusion": "2024-03-05 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
@@ -141,6 +142,8 @@ class FakeRuntime:
         self.score_failures = set(score_failures)
         # 工具调用轮次里是否同时给出 final_answer 字段。
         self.final_answer_with_tools = final_answer_with_tools
+        # 强制终答的 answer 是直接给出 JSON 值还是序列化后的 JSON 文本。
+        self.final_answer_as_object = final_answer_as_object
         self.backward_failures = backward_failures
         self.llm_calls = []
         self.agent_calls = []
@@ -218,12 +221,17 @@ class FakeRuntime:
                                  status="failed",
                                  error="AgentGenerationError: action response missing")
             return completed(action)
+        if "An agent tried to answer a user query" in instructions:
+            # 源码 provide_final_answer 把答案放在 answer 字段；源码 FinalAnswerTool 的
+            # answer 类型是 any，因此这里既可能是 JSON 值，也可能是序列化后的 JSON 文本。
+            answer = self._final_answer(instructions + input_text, as_list=False)
+            payload = {"think": "按记忆给出答案",
+                       "answer": (answer if self.final_answer_as_object
+                                  else json.dumps(answer, ensure_ascii=False))}
+            # 与 runtime.call_llm 同一口径：返回前按本次请求声明的结构校验。
+            output_type.model_validate(payload)
+            return completed(payload)
         if output_type is AgentThought:
-            if "An agent tried to answer a user query" in instructions:
-                # 源码 provide_final_answer：返回 <think>/<answer> 文本，answer 里是答案 JSON。
-                answer = self._final_answer(instructions + input_text, as_list=False)
-                return completed({"think": "按记忆给出答案",
-                                  "answer": json.dumps(answer, ensure_ascii=False)})
             if "Below I will present you a task." in input_text:
                 return completed({"think": "先核对该片段已知事实",
                                   "answer": "### 1. Facts given in the task\n病历片段"})
@@ -1171,6 +1179,27 @@ async def test_post_cap_provide_final_answer_is_billed(monkeypatch):
     # 局部 action 上限不等于累计预算耗尽。
     assert ledger.exhausted is False
     assert [stage for stage, _ in budget.records][-1] == "depth/backward/forced_final/attempt-1"
+
+
+@pytest.mark.parametrize("as_object", [False, True])
+@pytest.mark.asyncio
+async def test_forced_final_keeps_author_answer_typing_for_depth_backward(monkeypatch, as_object):
+    """源码 FinalAnswerTool 的 answer 为 any：终答是 JSON 对象或 JSON 文本都要落到 BackwardContext。"""
+    fake = FakeRuntime(agent_action_rounds=99, final_answer_as_object=as_object)
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    run = await run_search_agent(
+        ledger=ledger, stage="depth/backward", instructions="只使用当前患者的病历工具",
+        input_text=('Conduct divergent searches from {"identifier": "Observation/lab-77"} '
+                    "以找出更宽的问题条目。"),
+        tools=tools, output_type=BackwardContext, max_action_steps=2)
+
+    assert run.status == "completed", run.error
+    assert [item["kind"] for item in run.trace if item["type"] == "final_answer"] == ["forced_final"]
+    # 强制终答的 answer 落到本次调用声明的 BackwardContext 上。
+    context = BackwardContext.model_validate(run.output)
+    assert context.identifier == BLOCK_B
+    assert context.relation == "该问题条目下的检验结果"
+    assert context.source_ids == [BLOCK_B]
 
 
 @pytest.mark.asyncio

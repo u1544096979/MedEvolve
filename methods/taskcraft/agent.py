@@ -21,7 +21,7 @@ from contracts import RunResult, SolverAnswer
 
 from .environment import is_native
 from .schemas import (
-    AgentThought, AnswerList, NativeAction, SearchAction, TrajectoryScore,
+    AgentThought, AnswerList, FinalThought, NativeAction, SearchAction, TrajectoryScore,
 )
 
 __all__ = ["DEFAULT_MAX_ACTION_STEPS", "REFLECTION_INTERVAL", "run_search_agent", "step_kind"]
@@ -477,12 +477,13 @@ class _SearchRun:
             "forced_final", kind="forced_final", step=step,
             instructions=AGENT_PROMPTS["final_answer.pre_messages"],
             input_text=f"{_memory_messages(self.memory)}\n\n{post}",
-            output_type=AgentThought)
+            output_type=FinalThought)
         if run is None:
             return
-        thought = AgentThought.model_validate(run.output)
-        # 源码 provide_final_answer 返回 <think>/<answer> 文本，SearchAgent.forward 用
+        thought = FinalThought.model_validate(run.output)
+        # 源码 provide_final_answer 返回  thinking/<answer> 文本，SearchAgent.forward 用
         # safe_json_loads 解析 answer；适配在同一位置把 answer 解析为声明的输出结构。
+        # FinalThought.answer 对应源码 FinalAnswerTool 的 any：对象与 JSON 文本都要落到该结构上。
         self._finish(thought.answer, kind="forced_final", step=step)
 
     def result(self) -> RunResult:
