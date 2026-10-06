@@ -19,12 +19,14 @@
 - 不改生成模块（`methods/*` 的生成相关代码、`methods/common.py`）、不改 `feedback` / `strategy_update` 的业务逻辑。唯一例外：Task 5 按用户确认把 FEEDBACK 提示词里的旧维度名换成新维度名。
 - 汇总保持既有键名不动：把 `quality_judgments` 换成 `quality_summary`，新增 `difficulty_summary`，其余键（`actual_questions`、`validity_among_verified`、`completion_among_*`、`quality_reviews` 等）不改名、不删除。
 - `time_span_days` 只保存在每条评测记录里，不进入汇总输出（设计文档 4.2 的 `complexity_metrics` 只列 `avg_evidence_count` 与 `avg_resource_types`）。
-- 测试命令（必须在 worktree 根目录执行，`PYTHONPATH` 用于压过主仓库的 editable 安装）：
+- 测试命令（必须在 worktree 根目录执行；`PYTHONPATH` 与 wrapper 共同保证测试只加载本 worktree 的代码）：
   ```bash
   cd /Users/guagua/code/MedEvolve/.worktrees/evaluation-metrics
-  PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
+  PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q
   ```
-  基线：`171 passed, 3 skipped`（3 个 skip 是本地未加载 Docker 镜像的 live 测试，与本改造无关）。
+  不要直接用 `python -m pytest`：共享 venv 的 editable 安装指向主仓库，而 `methods` 是命名空间包，`methods.*` 会从主仓库加载。
+  基线：`205 passed, 3 skipped`（3 个 skip 是本地未加载 Docker 镜像的 live 测试，与本改造无关）。
+- 分支基线：worktree 已 rebase 到 `main` 的 `0a32231`（main 期间新增了 envexplore 方法与共享出题模块）。`configs/` 现有 8 个配置，全部需要加 `difficulty` 角色。
 - 代码库既有约定：不为提示词字符串和字段转发建立重复测试（见 `docs/comparison-experiments/common/SPEC.md` 的方法实现要求），因此 Task 1、Task 2、Task 5 不新增测试，靠全量测试与内容核对验收。
 - commit message 规范：`<type>(<scope>): 中文描述`；body 用中文写「为什么」，description 只写「做了什么」。
 
@@ -39,7 +41,7 @@
 | 文件 | 职责 | 任务 |
 | --- | --- | --- |
 | `evaluation/prompts.py` | 质量与难度裁判提示词 | Task 1 |
-| `configs/*.json`（6 个） | 评测运行配置的 difficulty 角色 | Task 2 |
+| `configs/*.json`（8 个） | 评测运行配置的 difficulty 角色 | Task 2 |
 | `contracts.py` | 裁判输出结构与聚合结果结构 | Task 3 |
 | `evaluation/evaluator.py` | 三裁判调用、中位数聚合、复杂度自动计算 | Task 3 |
 | `tests/evaluation/test_evaluator.py` | 裁判机制、聚合、复杂度的单元测试 | Task 3 |
@@ -111,9 +113,9 @@ complexity_metrics已在输入中提供（evidence_count、resource_type_count�
 - [ ] **Step 3: 运行全量测试**
 
 ```bash
-PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
+PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q
 ```
-Expected: `171 passed, 3 skipped`。
+Expected: `205 passed, 3 skipped`。
 
 - [ ] **Step 4: 核对提示词与设计文档一致**
 
@@ -132,14 +134,14 @@ body 说明：旧提示词只要求文本 judgment，无法统计对比；新提
 ### Task 2: 评测配置增加 difficulty 角色
 
 **Files:**
-- Modify: `configs/experiment.json`、`configs/medagentbench-flash.json`、`configs/medagentbench-selfgen.json`、`configs/physicianbench-comparison.json`、`configs/physicianbench-flash.json`、`configs/physicianbench-selfgen.json`（各文件 `evaluation.runtime.models` 与 `evaluation.runtime.budgets`）
+- Modify: `configs/experiment.json`、`configs/medagentbench-flash.json`、`configs/medagentbench-selfgen.json`、`configs/medagentbench-envexplore.json`、`configs/physicianbench-comparison.json`、`configs/physicianbench-flash.json`、`configs/physicianbench-selfgen.json`、`configs/physicianbench-envexplore.json`（各文件 `evaluation.runtime.models` 与 `evaluation.runtime.budgets`）
 - Test: 无新增测试（配置为纯数据，`tests/integration/test_pipeline.py` 会真实读取 `configs/experiment.json`）
 
 **Interfaces:**
 - Consumes: `runtime.models` / `runtime.budgets` 的 `dict[str, ModelConfig]` / `dict[str, Budget]` 结构。
 - Produces: 每个评测配置里存在 `difficulty` 角色，供 Task 3 的 `config.runtime.models["difficulty"]` 使用。
 
-- [ ] **Step 1: 在 6 个配置的 models 中加入 difficulty**
+- [ ] **Step 1: 在 8 个配置的 models 中加入 difficulty**
 
 在每个文件的 `evaluation.runtime.models.quality` 块之后插入与同文件 `quality` 完全相同的块，键名改为 `difficulty`。例如 `configs/experiment.json`：
 
@@ -152,9 +154,9 @@ body 说明：旧提示词只要求文本 judgment，无法统计对比；新提
           "parallel_tool_calls": true
         },
 ```
-`configs/medagentbench-flash.json`、`configs/medagentbench-selfgen.json`、`configs/physicianbench-flash.json`、`configs/physicianbench-selfgen.json` 用各自的 `quality` 块内容（`deepseek-v4.1-flash` / `https://opencode.ai/zen/go/v1` / `OPENCODE_API_KEY`），`configs/physicianbench-comparison.json` 用 `gpt-4o-mini` / `https://api.openlux.ai/v1` / `OPENLUX_API_KEY`。以同文件 `quality` 块为准逐字复制，不要凭记忆填写。
+`configs/medagentbench-flash.json`、`configs/medagentbench-selfgen.json`、`configs/physicianbench-flash.json`、`configs/physicianbench-selfgen.json` 用各自的 `quality` 块内容（`deepseek-v4.1-flash` / `https://opencode.ai/zen/go/v1` / `OPENCODE_API_KEY`），`configs/physicianbench-comparison.json` 用 `gpt-4o-mini` / `https://api.openlux.ai/v1` / `OPENLUX_API_KEY`。以同文件 `quality` 块为准逐字复制，不要凭记忆填写。`experiments/test_envexplore_configs.py` 断言两个 envexplore 配置的 `evaluation` 与配对配置（`physicianbench-comparison.json`、`medagentbench-flash.json`）逐字相等，因此配对的两个文件必须一起改。
 
-- [ ] **Step 2: 在 6 个配置的 budgets 中加入 difficulty**
+- [ ] **Step 2: 在 8 个配置的 budgets 中加入 difficulty**
 
 同样复制同文件 `quality` 的预算块，键名改为 `difficulty`：
 
@@ -183,9 +185,9 @@ Expected: 输出 `ok`。
 - [ ] **Step 4: 运行全量测试**
 
 ```bash
-PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
+PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q
 ```
-Expected: `171 passed, 3 skipped`。
+Expected: `205 passed, 3 skipped`。
 
 - [ ] **Step 5: 提交**
 
@@ -403,7 +405,7 @@ quality=QualityReview(**{name: QualityDimension(score=4, scores=[4, 4, 4], reaso
 - [ ] **Step 2: 运行测试确认失败**
 
 ```bash
-PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest tests/evaluation/test_evaluator.py -q
+PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py tests/evaluation/test_evaluator.py -q
 ```
 Expected: FAIL —— 假模型返回的 `QualityJudgment` 结构与旧评测代码期望的 `dimensions` 不匹配，且难度裁判没有被调用（`next()` 找不到 `DifficultyJudgment` 调用）或 `result.difficulty` 不存在。
 
@@ -614,9 +616,9 @@ def _compute_complexity(task: Task, trajectory: PatientTrajectory) -> Complexity
 - [ ] **Step 7: 运行测试确认通过**
 
 ```bash
-PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
+PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q
 ```
-Expected: `176 passed, 3 skipped`（171 基线 + 5 个新增用例：3 个新测试 + 1 个参数化测试的 2 个用例）。
+Expected: `210 passed, 3 skipped`（205 基线 + 5 个新增用例：3 个新测试 + 1 个参数化测试的 2 个用例）。
 
 - [ ] **Step 8: 提交**
 
@@ -680,7 +682,7 @@ body 说明：单次文本 judgment 无法统计对比，改成三裁判各打 1
 - [ ] **Step 2: 运行测试确认失败**
 
 ```bash
-PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest tests/experiment/test_closed_loop.py -q
+PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py tests/experiment/test_closed_loop.py -q
 ```
 Expected: FAIL，`KeyError: 'quality_summary'`。
 
@@ -768,9 +770,9 @@ def summarize_difficulty(evaluations: list[dict]) -> JsonObject:
 - [ ] **Step 5: 运行测试确认通过**
 
 ```bash
-PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
+PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q
 ```
-Expected: `176 passed, 3 skipped`。
+Expected: `210 passed, 3 skipped`。
 
 - [ ] **Step 6: 提交**
 
@@ -811,9 +813,9 @@ body 说明：数值评分才能做统计对比，汇总输出每个维度的均
 - [ ] **Step 2: 运行全量测试**
 
 ```bash
-PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
+PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q
 ```
-Expected: `176 passed, 3 skipped`。
+Expected: `210 passed, 3 skipped`。
 
 - [ ] **Step 3: 确认没有残留旧维度名**
 
