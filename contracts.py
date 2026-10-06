@@ -106,8 +106,47 @@ class Verification(BaseModel):
     reason: str
 
 
+class DimensionJudgment(BaseModel):
+    score: int
+    reason: str
+
+
+class QualityJudgment(BaseModel):
+    factual_accuracy: DimensionJudgment
+    clinical_soundness: DimensionJudgment
+    evidence_sufficiency: DimensionJudgment
+    task_clarity: DimensionJudgment
+
+
+class QualityDimension(BaseModel):
+    score: int
+    scores: list[int]
+    reason: str
+
+
 class QualityReview(BaseModel):
-    dimensions: JsonObject
+    factual_accuracy: QualityDimension
+    clinical_soundness: QualityDimension
+    evidence_sufficiency: QualityDimension
+    task_clarity: QualityDimension
+
+
+class ComplexityMetrics(BaseModel):
+    evidence_count: int
+    resource_type_count: int
+    time_span_days: float | None
+
+
+class DifficultyJudgment(BaseModel):
+    reasoning_depth: int
+    reason: str
+
+
+class DifficultyScore(BaseModel):
+    reasoning_depth: int
+    reasoning_depths: list[int]
+    reason: str
+    complexity_metrics: ComplexityMetrics
 
 
 class CompletionReview(BaseModel):
@@ -119,6 +158,7 @@ class EvaluationResult(BaseModel):
     task_id: str
     verification: Verification | None = None
     quality: QualityReview | None = None
+    difficulty: DifficultyScore | None = None
     completion: CompletionReview | None = None
     solver_run: RunResult | None = None
     observed_state: JsonObject

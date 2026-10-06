@@ -1,20 +1,26 @@
 """Evidence verification, quality review, isolated solving and state review."""
 
 import json
+import statistics
+from datetime import datetime, timezone
 from importlib import import_module
 
 from pydantic import BaseModel
 
 from contracts import (
-    CompletionReview, EnvironmentConfig, EvaluationConfig, EvaluationResult,
-    PatientTrajectory, QualityReview, RunResult, SolverAnswer, SolverInput, Task,
-    Verification,
+    CompletionReview, ComplexityMetrics, DifficultyJudgment, DifficultyScore,
+    EnvironmentConfig, EvaluationConfig, EvaluationResult, PatientTrajectory,
+    QualityDimension, QualityJudgment, QualityReview, RunResult, SolverAnswer,
+    SolverInput, Task, Verification,
 )
 from . import prompts
 
-QUALITY_DIMENSIONS = {
-    "clinical_value", "correctness", "longitudinal_integration", "clarity"
-}
+JUDGE_COUNT = 3
+TIME_FIELDS = (
+    "effectiveDateTime", "onsetDateTime", "performedDateTime", "occurrenceDateTime",
+    "authoredOn", "sent", "start", "date", "recordedDate", "issued",
+)
+PERIOD_FIELDS = ("effectivePeriod", "onsetPeriod", "performedPeriod", "period")
 
 
 def _review_material(task: Task, trajectory: PatientTrajectory) -> dict:
@@ -41,6 +47,111 @@ def _output(run: RunResult, schema: type[BaseModel]) -> BaseModel:
     if run.status != "completed" or run.output is None:
         raise ValueError(run.error or f"model run {run.status}")
     return schema.model_validate(run.output)
+
+
+def _judge_outputs(runs: list[RunResult], schema: type[BaseModel]) -> list[BaseModel]:
+    if len(runs) != JUDGE_COUNT:
+        raise ValueError(f"judging requires exactly {JUDGE_COUNT} runs")
+    return [_output(run, schema) for run in runs]
+
+
+def _aggregate_quality_scores(runs: list[RunResult]) -> QualityReview:
+    judges = _judge_outputs(runs, QualityJudgment)
+
+    def aggregate(dimension: str) -> QualityDimension:
+        judgments = [getattr(judge, dimension) for judge in judges]
+        scores = [judgment.score for judgment in judgments]
+        for judgment in judgments:
+            if not judgment.reason.strip():
+                raise ValueError(f"{dimension}.reason must not be empty")
+        for score in scores:
+            if not 1 <= score <= 5:
+                raise ValueError(f"{dimension}.score must be 1-5")
+        return QualityDimension(
+            score=int(statistics.median(scores)), scores=scores,
+            reason=" | ".join(f"J{index}: {judgment.reason}"
+                              for index, judgment in enumerate(judgments, start=1)),
+        )
+
+    return QualityReview(
+        factual_accuracy=aggregate("factual_accuracy"),
+        clinical_soundness=aggregate("clinical_soundness"),
+        evidence_sufficiency=aggregate("evidence_sufficiency"),
+        task_clarity=aggregate("task_clarity"),
+    )
+
+
+def _aggregate_difficulty_scores(runs: list[RunResult],
+                                 complexity: ComplexityMetrics) -> DifficultyScore:
+    judges = _judge_outputs(runs, DifficultyJudgment)
+    depths = [judge.reasoning_depth for judge in judges]
+    for judge in judges:
+        if not judge.reason.strip():
+            raise ValueError("reason must not be empty")
+    for depth in depths:
+        if not 1 <= depth <= 4:
+            raise ValueError("reasoning_depth must be 1-4")
+    return DifficultyScore(
+        reasoning_depth=int(statistics.median(depths)), reasoning_depths=depths,
+        reason=" | ".join(f"J{index}: {judge.reason}"
+                          for index, judge in enumerate(judges, start=1)),
+        complexity_metrics=complexity,
+    )
+
+
+def _parse_moment(value) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _statement_time(statement: str) -> datetime | None:
+    try:
+        resource = json.loads(statement)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(resource, dict):
+        return None
+    for field in TIME_FIELDS:
+        parsed = _parse_moment(resource.get(field))
+        if parsed is not None:
+            return parsed
+    for field in PERIOD_FIELDS:
+        period = resource.get(field)
+        if isinstance(period, dict):
+            parsed = _parse_moment(period.get("start"))
+            if parsed is not None:
+                return parsed
+    context = resource.get("context")
+    if isinstance(context, dict):
+        period = context.get("period")
+        if isinstance(period, dict):
+            return _parse_moment(period.get("start"))
+    return None
+
+
+def _compute_complexity(task: Task, trajectory: PatientTrajectory) -> ComplexityMetrics:
+    source_ids = {evidence.source_id for evidence in task.evidence}
+    resource_types = {source_id.split("/", 1)[0]
+                      for source_id in source_ids if "/" in source_id}
+    moments = []
+    for source in trajectory.sources:
+        if source.source_id not in source_ids:
+            continue
+        moment = _statement_time(source.statement)
+        if moment is not None:
+            moments.append(moment)
+    span = None
+    if moments:
+        span = (max(moments) - min(moments)).total_seconds() / 86400
+    return ComplexityMetrics(
+        evidence_count=len(source_ids), resource_type_count=len(resource_types),
+        time_span_days=span,
+    )
 
 
 async def evaluate_task(task: Task, trajectory: PatientTrajectory,
@@ -78,7 +189,7 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
         env = import_module("environments")
         phase = "model_error"
         runtime = import_module("runtime")
-        for role in ("verifier", "quality", "solver", "completion"):
+        for role in ("verifier", "quality", "difficulty", "solver", "completion"):
             if role not in config.runtime.models:
                 raise ValueError(f"missing evaluation model: {role}")
         for role in ("verifier", "solver"):
@@ -141,20 +252,19 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
 
         phase = "model_error"
         material["verification"] = result.verification.model_dump()
-        run = await model_run(
-            runtime.call_llm, role="quality", schema=QualityReview,
-            instructions=prompts.QUALITY, payload=material,
-        )
-        quality = _output(run, QualityReview)
-        if set(quality.dimensions) != QUALITY_DIMENSIONS:
-            raise ValueError("quality review must contain the four required dimensions")
-        for dimension in quality.dimensions.values():
-            if not isinstance(dimension, dict) or any(
-                not isinstance(dimension.get(key), str) or not dimension[key].strip()
-                for key in ("judgment", "reason")
-            ):
-                raise ValueError("each quality dimension requires judgment and reason")
-        result.quality = quality
+        result.quality = _aggregate_quality_scores([
+            await model_run(runtime.call_llm, role="quality", schema=QualityJudgment,
+                            instructions=prompts.QUALITY, payload=material)
+            for _ in range(JUDGE_COUNT)
+        ])
+        complexity = _compute_complexity(task, trajectory)
+        result.difficulty = _aggregate_difficulty_scores([
+            await model_run(runtime.call_llm, role="difficulty", schema=DifficultyJudgment,
+                            instructions=prompts.DIFFICULTY,
+                            payload={"task": material["task"],
+                                     "complexity_metrics": complexity.model_dump()})
+            for _ in range(JUDGE_COUNT)
+        ], complexity)
 
         phase = "environment_error"
         instance = await env.create_environment(environment)

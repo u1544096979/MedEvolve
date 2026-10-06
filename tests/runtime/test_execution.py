@@ -5,7 +5,7 @@ import pytest
 from agents import function_tool
 from openai import AsyncOpenAI
 
-from contracts import Budget, ModelConfig, QualityReview, SolverAnswer
+from contracts import Budget, ModelConfig, SolverAnswer, Verification
 from runtime import call_llm, run_agent
 from runtime import execution
 
@@ -48,7 +48,7 @@ FINAL_MESSAGE = {"role": "assistant", "content": '{"answer":"patient found"}'}
 @pytest.mark.parametrize("instructions_role", ["system", "user"])
 @pytest.mark.parametrize("output_type,output", [
     (SolverAnswer, {"answer": "patient found"}),
-    (QualityReview, {"dimensions": {"correctness": {"judgment": "supported", "reason": "patient found"}}}),
+    (Verification, {"valid": True, "reason": "patient found"}),
 ])
 async def test_sdk_tool_loop(monkeypatch, output_type, output, instructions_role):
     requests = install_transport(monkeypatch, [TOOL_MESSAGE,
