@@ -160,7 +160,8 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
         instance = await env.create_environment(environment)
         try:
             tools = await env.get_tools(
-                instance, [task.patient_id], decision_point=task.decision_point
+                instance, [task.patient_id], decision_point=task.decision_point,
+                tool_result_limit=environment.tool_result_limit,
             )
             phase = "model_error"
             result.solver_run = await model_run(

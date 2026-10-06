@@ -50,7 +50,7 @@ def harness(monkeypatch):
     async def release_environment(config, instance):
         h.released.append(instance)
 
-    async def get_tools(instance, patient_ids, decision_point=None):
+    async def get_tools(instance, patient_ids, decision_point=None, tool_result_limit=None):
         h.tool_calls.append((instance, patient_ids, decision_point))
         if h.fail == "tools":
             raise RuntimeError("tool setup failed")

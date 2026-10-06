@@ -170,6 +170,34 @@ async def test_malformed_native_arguments_return_error_then_allow_retry(native_f
 
 
 @pytest.mark.asyncio
+async def test_tool_result_limit_truncates_fhir_results(native_fhir):
+    _, _, override = native_fhir
+    override["response"] = bundle(
+        [{"resourceType": "Observation", "id": f"obs-{n}",
+          "subject": {"reference": "Patient/a"}, "valueString": "x" * 200}
+         for n in range(80)]
+    )
+    suffix = "… [result truncated]"
+
+    async def raw(limit=None):
+        tools = (await get_tools(instance(), ["a"]) if limit is None else
+                 await get_tools(instance(), ["a"], tool_result_limit=limit))
+        tool = next(t for t in tools if t.name == "fhir_observation_search_labs")
+        arguments = json.dumps({"patient": "a"})
+        context = ToolContext(
+            context=None, tool_name=tool.name, tool_call_id="limit", tool_arguments=arguments
+        )
+        return await tool.on_invoke_tool(context, arguments)
+
+    default = await raw()
+    capped = await raw(500)
+    whole = await raw(200000)
+    assert default.endswith(suffix) and len(default) == 10000 + len(suffix)
+    assert capped.endswith(suffix) and len(capped) == 500 + len(suffix)
+    assert not whole.endswith(suffix) and json.loads(whole)["entries"][0]["id"] == "obs-0"
+
+
+@pytest.mark.asyncio
 async def test_native_reads_writes_state_and_instance_isolation(native_fhir):
     tools = await get_tools(instance(), ["a"])
     assert len(tools) == 13

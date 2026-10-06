@@ -15,6 +15,7 @@ class EnvironmentConfig(BaseModel):
     name: str
     manager_url: str
     seed_data: str
+    tool_result_limit: int = Field(default=10000, gt=0)
 
 
 class EnvironmentInstance(BaseModel):

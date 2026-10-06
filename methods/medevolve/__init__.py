@@ -127,7 +127,8 @@ async def explore_environment(
     release_error = None
     try:
         instance = await create_environment(config)
-        tools = await get_tools(instance, patient_ids)
+        tools = await get_tools(instance, patient_ids,
+                                tool_result_limit=config.tool_result_limit)
         result = await run_agent(
             instructions=ENVIRONMENT_EXPLORATION,
             input_text=json.dumps({"environment": instance.environment, "patient_ids": patient_ids},

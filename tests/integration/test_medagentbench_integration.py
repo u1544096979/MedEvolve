@@ -42,7 +42,7 @@ def test_completion_receives_native_submission_and_unmodified_solver_input(monke
     async def read_evidence(instance, patient_id, source_id):
         return {"resourceType": "Observation", "id": "1"}
 
-    async def get_tools(instance, patient_ids, decision_point=None):
+    async def get_tools(instance, patient_ids, decision_point=None, tool_result_limit=None):
         return []
 
     async def read_state(instance, task):

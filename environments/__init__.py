@@ -29,6 +29,8 @@ _WRITABLE_RESOURCE_TYPES = {
     "Appointment",
 }
 
+TOOL_RESULT_LIMIT = 10000
+
 
 def _short_system(system: str) -> str:
     known = {
@@ -152,6 +154,8 @@ async def get_tools(
     instance: EnvironmentInstance,
     patient_ids: list[str],
     decision_point: str | None = None,
+    *,
+    tool_result_limit: int = TOOL_RESULT_LIMIT,
 ) -> list[Tool]:
     _check_environment(instance.environment)
     _check_decision_point(decision_point)
@@ -169,8 +173,8 @@ async def get_tools(
         @wraps(native)
         async def invoke(*args, **kwargs):
             result = json.dumps(await native(client, *args, **kwargs), default=str)
-            if len(result) > 10000:
-                result = result[:10000] + "… [result truncated]"
+            if len(result) > tool_result_limit:
+                result = result[:tool_result_limit] + "… [result truncated]"
             return result
 
         signature = inspect.signature(native)
