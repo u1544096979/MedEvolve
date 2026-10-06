@@ -52,6 +52,12 @@ def _trajectory_input(trajectory: PatientTrajectory) -> dict:
     }
 
 
+def _record_blocks(trajectory: PatientTrajectory) -> dict[str, str]:
+    """Map each source_id to its record block in the trajectory body."""
+    return dict(zip((source.source_id for source in trajectory.sources),
+                    trajectory.text.split("\n\n")))
+
+
 def _selected_focuses(selection: FocusSelection, directions: list[GenerationDirection],
                       trajectory: PatientTrajectory) -> list[ClinicalFocus]:
     """Validate the two located task types against the candidate pool and trajectory."""
@@ -171,7 +177,7 @@ async def generate_tasks(
     if not candidates:
         return _finish(budget, selected, focuses, output=TaskBatch(questions=[]))
 
-    records = {source.source_id: source.statement for source in trajectory.sources}
+    records = _record_blocks(trajectory)
     checked = await budget.call_llm(
         "check",
         instructions=INTERNAL_CHECK,
