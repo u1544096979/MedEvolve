@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from contracts import (
-    CompletionReview, EnvironmentInstance, EvaluationResult, ExperimentConfig,
-    Feedback, PatientTrajectory, QualityDimension, QualityReview, RunResult, Strategy,
-    Verification,
+    ComplexityMetrics, CompletionReview, DifficultyScore, EnvironmentInstance,
+    EvaluationResult, ExperimentConfig, Feedback, PatientTrajectory, QualityDimension,
+    QualityReview, RunResult, Strategy, Verification,
 )
 from experiments import runner, summarize_run
 from experiments.run import main
@@ -86,6 +86,10 @@ def install_dependencies(monkeypatch, failure=False, preparation_failure=False):
                                 quality=QualityReview(**{name: QualityDimension(score=4, scores=[4, 4, 4], reason="clear")
                                                          for name in ("factual_accuracy", "clinical_soundness",
                                                                       "evidence_sufficiency", "task_clarity")}),
+                                difficulty=DifficultyScore(
+                                    reasoning_depth=2, reasoning_depths=[2, 2, 2], reason="整合",
+                                    complexity_metrics=ComplexityMetrics(evidence_count=3, resource_type_count=2,
+                                                                        time_span_days=5.0)),
                                 completion=CompletionReview(completed=True, reason="done"),
                                 solver_run=solver, runs=[solver], observed_state={}, status="completed")
 
@@ -133,6 +137,14 @@ def test_two_rounds_and_read_only_summary(tmp_path, monkeypatch, capsys, failure
     assert summary["evolution"]["production"] == {"numerator": 5 if failure else 8, "denominator": 8,
                                                    "rate": 5 / 8 if failure else 1}
     assert summary["evaluation"]["completion_among_generated"] == {"numerator": 2, "denominator": 2, "rate": 1}
+    reviews = 4 if failure else 8
+    assert summary["evolution"]["quality_summary"]["task_clarity"] == {
+        "mean": 4, "median": 4.0, "distribution": {"4": reviews}, "high_quality_rate": 1.0}
+    assert summary["evolution"]["difficulty_summary"]["reasoning_depth"] == {
+        "mean": 2, "distribution": {"2": reviews}}
+    assert summary["evolution"]["difficulty_summary"]["complexity_metrics"] == {
+        "avg_evidence_count": 3, "avg_resource_types": 2}
+    assert summary["evaluation"]["quality_summary"]["factual_accuracy"]["high_quality_rate"] == 1.0
     assert summary["model_runs"]["runs_without_known_tokens"] > 0
     assert summary["model_runs"]["known_token_totals"]["input_tokens"] > 0
     assert summary["model_runs"]["count"] == (17 if failure else 21)

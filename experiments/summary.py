@@ -1,7 +1,8 @@
 """Read-only aggregation of experiment artifacts."""
 
 import json
-from collections import Counter, defaultdict
+import statistics
+from collections import Counter
 from pathlib import Path
 
 from contracts import JsonObject
@@ -15,6 +16,48 @@ def _read(path, default):
 def _ratio(numerator, denominator):
     return {"numerator": numerator, "denominator": denominator,
             "rate": numerator / denominator if denominator else None}
+
+
+QUALITY_DIMENSIONS = (
+    "factual_accuracy", "clinical_soundness", "evidence_sufficiency", "task_clarity",
+)
+
+
+def summarize_quality(evaluations: list[dict]) -> JsonObject:
+    reviews = [evaluation["quality"] for evaluation in evaluations
+               if evaluation.get("quality")]
+    if not reviews:
+        return {}
+    summary = {}
+    for dimension in QUALITY_DIMENSIONS:
+        scores = [review[dimension]["score"] for review in reviews]
+        summary[dimension] = {
+            "mean": statistics.mean(scores),
+            "median": statistics.median(scores),
+            "distribution": {str(score): count for score, count in sorted(Counter(scores).items())},
+            "high_quality_rate": sum(score >= 4 for score in scores) / len(scores),
+        }
+    return summary
+
+
+def summarize_difficulty(evaluations: list[dict]) -> JsonObject:
+    scores = [evaluation["difficulty"] for evaluation in evaluations
+              if evaluation.get("difficulty")]
+    if not scores:
+        return {}
+    depths = [score["reasoning_depth"] for score in scores]
+    evidence_counts = [score["complexity_metrics"]["evidence_count"] for score in scores]
+    resource_counts = [score["complexity_metrics"]["resource_type_count"] for score in scores]
+    return {
+        "reasoning_depth": {
+            "mean": statistics.mean(depths),
+            "distribution": {str(depth): count for depth, count in sorted(Counter(depths).items())},
+        },
+        "complexity_metrics": {
+            "avg_evidence_count": statistics.mean(evidence_counts),
+            "avg_resource_types": statistics.mean(resource_counts),
+        },
+    }
 
 
 def summarize_run(output_dir: str) -> JsonObject:
@@ -33,11 +76,8 @@ def summarize_run(output_dir: str) -> JsonObject:
         verification = [e for e in evaluations if e.get("verification") is not None]
         completion = [e for e in evaluations if e.get("completion") is not None]
         completed = sum(e["completion"]["completed"] for e in completion)
-        quality = defaultdict(Counter)
-        for evaluation in evaluations:
-            for dimension, assessment in (evaluation.get("quality") or {}).get("dimensions", {}).items():
-                if isinstance(assessment, dict) and "judgment" in assessment:
-                    quality[dimension][str(assessment["judgment"])] += 1
+        quality = summarize_quality(evaluations)
+        difficulty = summarize_difficulty(evaluations)
         return {
             "requested_questions": requested,
             "generation_attempts": len(attempts),
@@ -51,7 +91,8 @@ def summarize_run(output_dir: str) -> JsonObject:
             "completion_among_generated": _ratio(completed, len(tasks)),
             "completion_among_reviewed": _ratio(completed, len(completion)),
             "completion_reviews_missing": len(tasks) - len(completion),
-            "quality_judgments": dict(quality),
+            "quality_summary": quality,
+            "difficulty_summary": difficulty,
             "quality_reviews": sum(e.get("quality") is not None for e in evaluations),
             "evaluation_statuses": dict(Counter(e["status"] for e in evaluations)),
             "failure_categories": dict(Counter(e["failure_category"] for e in evaluations if e.get("failure_category"))),
