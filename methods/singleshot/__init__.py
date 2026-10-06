@@ -1,14 +1,14 @@
-"""Single-call task generation without exploration, verification or repair."""
+"""One-shot task generation with free task selection, without exploration or repair."""
 
 import json
 
 from contracts import (
     EnvironmentConfig,
-    GenerationDirection,
     PatientTrajectory,
     RunResult,
     RuntimeConfig,
     TaskBatch,
+    TaskType,
 )
 from methods.common import GenerationBudget, output_constraints
 
@@ -18,36 +18,27 @@ __all__ = ["generate_tasks"]
 
 
 def _trajectory_input(trajectory: PatientTrajectory) -> dict:
-    return {
-        "patient_id": trajectory.patient_id,
-        "environment": trajectory.environment,
-        "text": trajectory.text,
-        "sources": [source.source_id for source in trajectory.sources],
-    }
+    return trajectory.model_dump(mode="json")
 
 
 async def generate_tasks(
     trajectory: PatientTrajectory,
     environment: EnvironmentConfig,
-    directions: list[GenerationDirection],
+    task_types: list[TaskType],
     runtime: RuntimeConfig,
 ) -> RunResult:
-    """Generate the two requested positions in one model call."""
-    if len(directions) != 2:
-        raise ValueError("directions must contain exactly two generation positions")
+    """Select suitable task types for the patient and generate at most two tasks in one call."""
     if environment.name != trajectory.environment:
         raise ValueError("Environment configuration does not match the trajectory")
+    constraints = output_constraints(task_types=task_types)
     budget = GenerationBudget(runtime)
     await budget.call_llm(
         "generate",
-        instructions=GENERATION + "\n" + output_constraints(directions),
+        instructions=GENERATION + "\n" + constraints,
         input_text=json.dumps(
-            {
-                "trajectory": _trajectory_input(trajectory),
-                "directions": [direction.model_dump(mode="json") for direction in directions],
-            },
+            {"trajectory": _trajectory_input(trajectory), "task_types": task_types},
             ensure_ascii=False,
         ),
         output_type=TaskBatch,
     )
-    return budget.finish(directions)
+    return budget.finish(task_types=task_types)
