@@ -22,9 +22,11 @@ def test_config_keeps_sampling_environment_and_model(source, target):
     assert config.method == "selfgen" and config.round_patients == []
     assert values["compare_initial_strategy"] is False
     assert config.evaluation_patients
-    for key in ("environment", "evolution_patients", "evaluation_patients",
+    for key in ("environment", "evolution_patients",
                 "initial_strategy", "random_seed", "evaluation"):
         assert values[key] == base[key]
+    assert values["evaluation_patients"] == (["MRN4460967357", "MRN2299051392"]
+                                            if "physicianbench" in target else base["evaluation_patients"])
     assert set(config.runtime.models) == {"generator"}
     assert set(config.runtime.budgets) == {"generator"}
     assert values["runtime"]["models"]["generator"] == base["runtime"]["models"]["generator"]
