@@ -239,6 +239,19 @@ async def test_oversized_tool_error_returns_valid_limited_json(native_fhir):
 
 
 @pytest.mark.asyncio
+async def test_oversized_rejected_write_reports_error_not_success(native_fhir):
+    tools = await get_tools(instance(), ["a"], tool_result_limit=256)
+    result = await invoke(
+        tools, "fhir_appointment_create",
+        patient_reference="Patient/a", practitioner_reference="Practitioner/x",
+        description="Cardiology consult",
+    )
+    assert "succeeded" not in json.dumps(result)
+    assert result["error"] == "Tool call failed; error message exceeds the limit."
+    assert all(r.method != "POST" for r in native_fhir[1])
+
+
+@pytest.mark.asyncio
 async def test_native_reads_writes_state_and_instance_isolation(native_fhir):
     tools = await get_tools(instance(), ["a"])
     assert len(tools) == 13

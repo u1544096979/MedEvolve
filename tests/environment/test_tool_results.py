@@ -73,6 +73,24 @@ def test_error_within_limit_keeps_original_message():
         value, ensure_ascii=False, separators=(",", ":"))
 
 
+def test_rejected_write_error_payload_takes_precedence_over_write_hint():
+    """被拒绝的写入返回 error 载荷，即使超限也不能报成功。"""
+    rejected = {
+        "error": "Appointment rejected: the description indicates a referral or "
+        "consult, but no 'based_on' ServiceRequest reference was provided. "
+        "Referrals must first be placed as a ServiceRequest, then an Appointment "
+        "may be scheduled with based_on referencing that ServiceRequest."
+    }
+    assert len(json.dumps(rejected, ensure_ascii=False,
+                          separators=(",", ":"))) > 256
+    raw = serialize_tool_result(rejected, 256, write=True)
+    result = json.loads(raw)
+    assert len(raw) <= 256
+    assert "succeeded" not in raw
+    assert result["error"] == "Tool call failed; error message exceeds the limit."
+    assert result["truncation"]["message"] == result["error"]
+
+
 def test_error_takes_precedence_over_write_and_entries():
     raw = serialize_tool_result(
         {"error": "x" * 5000, "entries": [{"id": str(i)} for i in range(50)]},

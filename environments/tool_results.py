@@ -3,6 +3,9 @@
 交付文本使用紧凑 JSON（`separators=(",", ":")` 与 `ensure_ascii=False`），与早期
 `json.dumps` 默认输出的文本不同；配置上限按交付 JSON 的字符数计算，包含结构、记录
 与裁剪标记。超限时只选择完整记录或省略资源，不对序列化字符串硬切。
+
+错误返回优先于写入标记：返回载荷带 `error` 键表示调用被拒绝，即使绑定层按写工具
+传入 `write=True` 也不能报告成功。
 """
 
 import json
@@ -28,7 +31,7 @@ def serialize_tool_result(value: object, limit: int, *, write: bool = False,
     raw = _dump(value)
     if len(raw) <= limit:
         return raw
-    if error:
+    if error or (isinstance(value, dict) and "error" in value):
         result = _dump({
             "error": _ERROR_HINT,
             "truncation": {"truncated": True, "message": _ERROR_HINT},
