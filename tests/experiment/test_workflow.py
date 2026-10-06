@@ -19,8 +19,9 @@ def test_workflow_pool_and_public_evaluation(tmp_path, monkeypatch, status, prod
                   round_patients=[], output_dir=str(tmp_path), run_id='workflow-test')
     config = ExperimentConfig.model_validate(values)
     trajectory = PatientTrajectory(patient_id='p', environment=config.environment.name,
-        text='[undated] Observation/o1\n{}',
-        sources=[Evidence(source_id='Observation/o1', statement='{}')])
+        text='[undated] Observation/o1\n{}\n\n[undated] MedicationRequest/m1\n{}',
+        sources=[Evidence(source_id='Observation/o1', statement='{}'),
+                 Evidence(source_id='MedicationRequest/m1', statement='{}')])
     question = dict(instruction='解释血压', task_type='诊断与解释', reference_answer='需评估',
                     evidence=[dict(source_id='Observation/o1', statement='记录存在')],
                     decision_point=None)
