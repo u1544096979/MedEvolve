@@ -1,7 +1,8 @@
 """Read-only aggregation of experiment artifacts."""
 
 import json
-from collections import Counter, defaultdict
+import statistics
+from collections import Counter
 from pathlib import Path
 
 from contracts import JsonObject
@@ -15,6 +16,77 @@ def _read(path, default):
 def _ratio(numerator, denominator):
     return {"numerator": numerator, "denominator": denominator,
             "rate": numerator / denominator if denominator else None}
+
+
+QUALITY_DIMENSIONS = (
+    "factual_accuracy", "clinical_soundness", "evidence_sufficiency", "task_clarity",
+)
+
+
+def _quality_scores(evaluation: dict) -> list[int] | None:
+    review = evaluation.get("quality")
+    if not isinstance(review, dict):
+        return None
+    scores = []
+    for dimension in QUALITY_DIMENSIONS:
+        assessment = review.get(dimension)
+        if not isinstance(assessment, dict) or not isinstance(assessment.get("score"), int):
+            return None
+        scores.append(assessment["score"])
+    return scores
+
+
+def _difficulty_score(evaluation: dict) -> dict | None:
+    score = evaluation.get("difficulty")
+    if not isinstance(score, dict) or not isinstance(score.get("reasoning_depth"), int):
+        return None
+    metrics = score.get("complexity_metrics")
+    if not isinstance(metrics, dict):
+        return None
+    if not all(isinstance(metrics.get(field), int)
+               for field in ("evidence_count", "resource_type_count")):
+        return None
+    return {"reasoning_depth": score["reasoning_depth"],
+            "evidence_count": metrics["evidence_count"],
+            "resource_type_count": metrics["resource_type_count"]}
+
+
+def summarize_quality(evaluations: list[dict]) -> JsonObject:
+    # Legacy records keep the retired `dimensions` shape and cannot be aggregated.
+    score_lists = [scores for evaluation in evaluations
+                   if (scores := _quality_scores(evaluation)) is not None]
+    if not score_lists:
+        return {}
+    summary = {}
+    for index, dimension in enumerate(QUALITY_DIMENSIONS):
+        scores = [score_list[index] for score_list in score_lists]
+        summary[dimension] = {
+            "mean": float(statistics.mean(scores)),
+            "median": float(statistics.median(scores)),
+            "distribution": {str(score): count for score, count in sorted(Counter(scores).items())},
+            "high_quality_rate": sum(score >= 4 for score in scores) / len(scores),
+        }
+    return summary
+
+
+def summarize_difficulty(evaluations: list[dict]) -> JsonObject:
+    entries = [entry for evaluation in evaluations
+               if (entry := _difficulty_score(evaluation)) is not None]
+    if not entries:
+        return {}
+    depths = [entry["reasoning_depth"] for entry in entries]
+    evidence_counts = [entry["evidence_count"] for entry in entries]
+    resource_counts = [entry["resource_type_count"] for entry in entries]
+    return {
+        "reasoning_depth": {
+            "mean": float(statistics.mean(depths)),
+            "distribution": {str(depth): count for depth, count in sorted(Counter(depths).items())},
+        },
+        "complexity_metrics": {
+            "avg_evidence_count": float(statistics.mean(evidence_counts)),
+            "avg_resource_types": float(statistics.mean(resource_counts)),
+        },
+    }
 
 
 def summarize_run(output_dir: str) -> JsonObject:
@@ -33,11 +105,8 @@ def summarize_run(output_dir: str) -> JsonObject:
         verification = [e for e in evaluations if e.get("verification") is not None]
         completion = [e for e in evaluations if e.get("completion") is not None]
         completed = sum(e["completion"]["completed"] for e in completion)
-        quality = defaultdict(Counter)
-        for evaluation in evaluations:
-            for dimension, assessment in (evaluation.get("quality") or {}).get("dimensions", {}).items():
-                if isinstance(assessment, dict) and "judgment" in assessment:
-                    quality[dimension][str(assessment["judgment"])] += 1
+        quality = summarize_quality(evaluations)
+        difficulty = summarize_difficulty(evaluations)
         return {
             "requested_questions": requested,
             "generation_attempts": len(attempts),
@@ -51,7 +120,8 @@ def summarize_run(output_dir: str) -> JsonObject:
             "completion_among_generated": _ratio(completed, len(tasks)),
             "completion_among_reviewed": _ratio(completed, len(completion)),
             "completion_reviews_missing": len(tasks) - len(completion),
-            "quality_judgments": dict(quality),
+            "quality_summary": quality,
+            "difficulty_summary": difficulty,
             "quality_reviews": sum(e.get("quality") is not None for e in evaluations),
             "evaluation_statuses": dict(Counter(e["status"] for e in evaluations)),
             "failure_categories": dict(Counter(e["failure_category"] for e in evaluations if e.get("failure_category"))),
@@ -81,6 +151,13 @@ def summarize_run(output_dir: str) -> JsonObject:
         aggregate["runs_without_known_tokens"] += missing
         for key in USAGE_FIELDS:
             aggregate[key] += usage[key] or 0
+    if config["method"] == "envexplore":
+        fields = (*USAGE_FIELDS, "runs", "runs_without_known_tokens")
+        costs["method"] = {
+            field: sum(costs.get(category, {}).get(field, 0)
+                       for category in ("exploration", "generation"))
+            for field in fields
+        }
     return {
         "run_id": config["run_id"], "method": config["method"],
         "status": manifest["status"], "errors": manifest.get("errors", []),
@@ -90,6 +167,9 @@ def summarize_run(output_dir: str) -> JsonObject:
         "evolution": summarize_folders(sorted((root / "rounds").glob("*")),
                                         2 * sum(len(p) for p in config["round_patients"]) if config["method"] == "medevolve" else 0),
         "evaluation": summarize_folders([root / "evaluation"], 2 * len(config["evaluation_patients"])),
+        **({"initial_evaluation": summarize_folders([root / "initial_evaluation"],
+                                                   2 * len(config["evaluation_patients"]))}
+           if config.get("compare_initial_strategy") else {}),
         "model_runs": {"count": len(records),
                        "statuses": dict(Counter(r["result"]["status"] for r in records)),
                        "known_token_totals": dict(tokens),

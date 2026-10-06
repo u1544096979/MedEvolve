@@ -54,6 +54,22 @@ def test_selection_policy_rejects_incomplete_duplicate_or_mixed_input():
         output_constraints(directions(), task_types=types)
 
 
+def test_single_node_and_candidate_pool_limits():
+    one = directions()[:1]
+    assert validate_task_batch(result([question()]), one,
+                               max_questions=1).status == 'completed'
+    assert validate_task_batch(result([question()] * 2), one,
+                               max_questions=1).status == 'failed'
+    pool = [GenerationDirection(task_type=t, difficulty='基础', weight=1)
+            for t in ('诊断与解释', '检查与风险分层', '治疗规划', '药物处方', '治疗重规划')]
+    assert validate_task_batch(result([question(), question(task_type='药物处方')]),
+                               pool, candidate_pool=True).status == 'completed'
+    assert validate_task_batch(result([question()] * 2), pool,
+                               candidate_pool=True).status == 'failed'
+    assert validate_task_batch(result([question()] * 3), pool,
+                               candidate_pool=True).status == 'failed'
+
+
 def test_cumulative_budget_keeps_failed_stages_and_blocks_next_call(monkeypatch):
     config = json.loads((Path(__file__).parents[1] / "configs/experiment.json").read_text())
     runtime = RuntimeConfig.model_validate(config["runtime"])
@@ -102,14 +118,40 @@ def test_free_selection_accepts_same_type_without_changing_direction_mode():
     assert failed.status == "failed" and failed.usage["model_turns"] == 1
 
 
-@pytest.mark.parametrize("method", ["taskcraft", "workflow", "singleshot", "selfgen", "envexplore"])
-def test_method_resolution_matches_available_implementation(method):
-    module_path = Path(__file__).parents[1] / "methods" / method / "__init__.py"
-    if module_path.exists():
-        assert callable(runner.resolve_generator(method))
-    else:
-        with pytest.raises(ValueError, match=f"Method {method} is not implemented"):
-            runner.resolve_generator(method)
+@pytest.mark.parametrize("method", ["taskcraft"])
+def test_unimplemented_method_is_explicit(method):
+    with pytest.raises(ValueError, match=f"Method {method} is not implemented"):
+        runner.resolve_generator(method)
+
+
+def test_singleshot_resolves_implemented_method():
+    from methods.singleshot import generate_tasks
+    assert runner.resolve_generator("singleshot") is generate_tasks
+
+
+def test_workflow_dispatch_resolves_to_the_method_entry():
+    from methods import workflow
+
+    assert runner.resolve_generator("workflow") is workflow.generate_tasks
+
+
+def test_workflow_run_requires_a_candidate_pool_allocation(tmp_path):
+    values = json.loads((Path(__file__).parents[1] / "configs/experiment.json").read_text())
+    values.update(method="workflow", run_id="workflow-pool", output_dir=str(tmp_path / "pool"),
+                  evolution_patients=[], evaluation_patients=["h"], round_patients=[])
+    values["initial_strategy"]["allocation"] = [d.model_dump(mode="json") for d in directions()]
+    config = ExperimentConfig.model_validate(values)
+
+    with pytest.raises(ValueError, match="candidate pool"):
+        asyncio.run(runner.run_experiment(config))
+
+    assert not (tmp_path / "pool").exists()
+
+
+def test_envexplore_resolves_implemented_method():
+    from methods.envexplore import generate_tasks
+    assert runner.resolve_generator("envexplore") is generate_tasks
+
 
 
 def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_path, monkeypatch):
@@ -177,3 +219,83 @@ def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_p
     assert summary["costs"]["generation"]["total_tokens"] == 20
     assert json.loads((Path(config.output_dir) / "summary.json").read_text()) == summary
     assert evaluate.call_args.args[0].source_method == "singleshot"
+
+
+def test_initial_and_final_strategy_comparison_uses_same_heldout_directions(tmp_path, monkeypatch):
+    values = json.loads((Path(__file__).parents[1] / "configs/experiment.json").read_text())
+    values.update(run_id="strategy-comparison", evolution_patients=["train"],
+                  evaluation_patients=["test"], round_patients=[["train"]],
+                  output_dir=str(tmp_path), compare_initial_strategy=True)
+    config = ExperimentConfig.model_validate(values)
+    calls = []
+    changed = config.initial_strategy.model_copy(update={"generation_guidance": "evolved",
+                                                         "allocation": [directions()[1]]})
+
+    async def generate(trajectory, guidance, strategy, requested, runtime):
+        calls.append((trajectory.patient_id, strategy.generation_guidance, requested))
+        return result([question(task_type=requested[0].task_type)])
+
+    monkeypatch.setattr(runner, "create_environment", AsyncMock(return_value=EnvironmentInstance(
+        instance_id="cache", endpoint="fake", environment=config.environment.name)))
+    monkeypatch.setattr(runner, "release_environment", AsyncMock())
+    monkeypatch.setattr(runner, "prepare_trajectory", AsyncMock(side_effect=lambda instance, patient:
+        PatientTrajectory(patient_id=patient, environment=instance.environment, text="records", sources=[])))
+    monkeypatch.setattr(runner, "explore_data", AsyncMock(return_value=RunResult(
+        output={"guidance": "data"}, trace=[], usage={}, status="completed")))
+    monkeypatch.setattr(runner, "explore_environment", AsyncMock(return_value=RunResult(
+        output={"guidance": "env"}, trace=[], usage={}, status="completed")))
+    monkeypatch.setattr(runner, "generate_tasks", generate)
+    feedback = AsyncMock(return_value=RunResult(output=dict(quality_findings=[], difficulty_findings=[],
+        failure_findings=[], suggestions=[]), trace=[], usage={}, status="completed"))
+    monkeypatch.setattr(runner, "analyze_feedback", feedback)
+    monkeypatch.setattr(runner, "update_strategy", AsyncMock(return_value=RunResult(
+        output=changed.model_dump(), trace=[], usage={}, status="completed")))
+    monkeypatch.setattr(runner, "evaluate_task", AsyncMock(side_effect=lambda task, *args:
+        EvaluationResult(task_id=task.id, status="invalid", runs=[], observed_state={})))
+    asyncio.run(runner.run_experiment(config))
+    assert [c[0] for c in calls] == ["test", "train", "test"]
+    assert calls[0][2] == calls[2][2]
+    assert calls[0][1] == config.initial_strategy.generation_guidance
+    assert calls[2][1] == "evolved"
+    assert {task.patient_id for task in feedback.call_args.args[0]} == {"train"}
+    assert {t.patient_id for t in runner.explore_data.call_args.args[0]} == {"train"}
+    assert runner.explore_environment.call_args.args[1] == ["train"]
+    summary = summarize_run(str(tmp_path))
+    assert summary["initial_evaluation"]["actual_questions"] == 1
+    assert summary["evaluation"]["actual_questions"] == 1
+    assert summary["initial_evaluation"]["requested_questions"] == 2
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 5])
+def test_data_exploration_opens_reproducible_half_of_training(tmp_path, monkeypatch, count):
+    import math
+    import random
+    values = json.loads((Path(__file__).parents[1] / "configs/experiment.json").read_text())
+    patients = [f"train-{n}" for n in range(count)]
+    values.update(run_id="half", evolution_patients=patients, evaluation_patients=["test"],
+                  round_patients=[patients], output_dir=str(tmp_path))
+    config = ExperimentConfig.model_validate(values)
+    monkeypatch.setattr(runner, "create_environment", AsyncMock(return_value=EnvironmentInstance(
+        instance_id="cache", endpoint="fake", environment=config.environment.name)))
+    monkeypatch.setattr(runner, "release_environment", AsyncMock())
+    monkeypatch.setattr(runner, "prepare_trajectory", AsyncMock(side_effect=lambda instance, patient:
+        PatientTrajectory(patient_id=patient, environment=instance.environment, text="records", sources=[])))
+    data = AsyncMock(return_value=RunResult(output={"guidance": "data"}, trace=[], usage={}, status="completed"))
+    monkeypatch.setattr(runner, "explore_data", data)
+    environment = AsyncMock(return_value=RunResult(output={"guidance": "env"}, trace=[], usage={}, status="completed"))
+    monkeypatch.setattr(runner, "explore_environment", environment)
+    generate = AsyncMock(return_value=result())
+    monkeypatch.setattr(runner, "generate_tasks", generate)
+    feedback = AsyncMock(return_value=RunResult(output=dict(quality_findings=[], difficulty_findings=[],
+        failure_findings=[], suggestions=[]), trace=[], usage={}, status="completed"))
+    monkeypatch.setattr(runner, "analyze_feedback", feedback)
+    monkeypatch.setattr(runner, "update_strategy", AsyncMock(return_value=RunResult(
+        output=config.initial_strategy.model_dump(), trace=[], usage={}, status="completed")))
+    asyncio.run(runner.run_experiment(config))
+    selected = [p.patient_id for p in data.call_args.args[0]]
+    assert selected == random.Random(config.random_seed).sample(patients, math.ceil(count * 0.5))
+    assert json.loads((tmp_path / "data_exploration_patients.json").read_text()) == selected
+    assert "test" not in selected
+    assert environment.call_args.args[1] == patients
+    assert [t.patient_id for t in feedback.call_args.args[1]] == patients
+    assert generate.await_count == count + 1

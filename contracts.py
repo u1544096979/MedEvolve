@@ -15,6 +15,7 @@ class EnvironmentConfig(BaseModel):
     name: str
     manager_url: str
     seed_data: str
+    tool_result_limit: int = Field(default=10000, gt=0)
 
 
 class EnvironmentInstance(BaseModel):
@@ -83,6 +84,8 @@ class ModelConfig(BaseModel):
     api_key_env: str
     instructions_role: Literal["system", "user"] = "system"
     parallel_tool_calls: bool = True
+    context_window: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
 
 
 class Budget(BaseModel):
@@ -103,8 +106,47 @@ class Verification(BaseModel):
     reason: str
 
 
+class DimensionJudgment(BaseModel):
+    score: int
+    reason: str
+
+
+class QualityJudgment(BaseModel):
+    factual_accuracy: DimensionJudgment
+    clinical_soundness: DimensionJudgment
+    evidence_sufficiency: DimensionJudgment
+    task_clarity: DimensionJudgment
+
+
+class QualityDimension(BaseModel):
+    score: int
+    scores: list[int]
+    reason: str
+
+
 class QualityReview(BaseModel):
-    dimensions: JsonObject
+    factual_accuracy: QualityDimension
+    clinical_soundness: QualityDimension
+    evidence_sufficiency: QualityDimension
+    task_clarity: QualityDimension
+
+
+class ComplexityMetrics(BaseModel):
+    evidence_count: int
+    resource_type_count: int
+    time_span_days: float | None
+
+
+class DifficultyJudgment(BaseModel):
+    reasoning_depth: int
+    reason: str
+
+
+class DifficultyScore(BaseModel):
+    reasoning_depth: int
+    reasoning_depths: list[int]
+    reason: str
+    complexity_metrics: ComplexityMetrics
 
 
 class CompletionReview(BaseModel):
@@ -116,6 +158,7 @@ class EvaluationResult(BaseModel):
     task_id: str
     verification: Verification | None = None
     quality: QualityReview | None = None
+    difficulty: DifficultyScore | None = None
     completion: CompletionReview | None = None
     solver_run: RunResult | None = None
     observed_state: JsonObject
@@ -173,3 +216,4 @@ class ExperimentConfig(BaseModel):
     initial_strategy: Strategy
     random_seed: int
     output_dir: str
+    compare_initial_strategy: bool = False

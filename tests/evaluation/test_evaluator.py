@@ -8,9 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from contracts import (
-    Budget, CompletionReview, EnvironmentConfig, EnvironmentInstance, Evidence,
-    EvaluationConfig, ModelConfig, PatientTrajectory, QualityReview, RunResult,
-    RuntimeConfig, SolverAnswer, Task, Verification,
+    Budget, CompletionReview, ComplexityMetrics, DifficultyJudgment, EnvironmentConfig,
+    EnvironmentInstance, Evidence, EvaluationConfig, ModelConfig, PatientTrajectory,
+    QualityJudgment, QualityReview, RunResult, RuntimeConfig, SolverAnswer, Task,
+    Verification,
 )
 from evaluation import evaluate_task
 
@@ -28,7 +29,7 @@ def harness(monkeypatch):
         patient_id=task.patient_id, environment=task.environment,
         text="private-trajectory", sources=[{"source_id": "source-1", "statement": "轨迹证据"}],
     )
-    roles = ["verifier", "quality", "solver", "completion"]
+    roles = ["verifier", "quality", "difficulty", "solver", "completion"]
     config = EvaluationConfig(runtime=RuntimeConfig(
         models={r: ModelConfig(model=r, api_key_env="UNUSED") for r in roles},
         budgets={r: Budget(max_model_turns=3, max_tool_calls=5) for r in roles},
@@ -38,6 +39,7 @@ def harness(monkeypatch):
         environment=EnvironmentConfig(name="fixture", manager_url="unused", seed_data="seed"),
         created=[], released=[], tool_calls=[], model_calls=[], state_reads=[],
         state={"prescriptions": []}, fail=None, valid=True,
+        quality_scores=[4, 4, 4], depths=[2, 2, 2], blank_reason=None,
     )
 
     async def create_environment(config):
@@ -50,7 +52,7 @@ def harness(monkeypatch):
     async def release_environment(config, instance):
         h.released.append(instance)
 
-    async def get_tools(instance, patient_ids, decision_point=None):
+    async def get_tools(instance, patient_ids, decision_point=None, tool_result_limit=None):
         h.tool_calls.append((instance, patient_ids, decision_point))
         if h.fail == "tools":
             raise RuntimeError("tool setup failed")
@@ -97,8 +99,17 @@ def harness(monkeypatch):
         if role == "verifier":
             output = {"valid": h.valid, "reason": "checked original records"}
         elif role == "quality":
-            output = {"dimensions": {key: {"judgment": "suitable", "reason": "supported"}
-                      for key in ("clinical_value", "correctness", "longitudinal_integration", "clarity")}}
+            index = sum(1 for call in h.model_calls[:-1]
+                        if call["output_type"] is QualityJudgment)
+            reason = "" if h.blank_reason == "quality" else "supported"
+            output = {key: {"score": h.quality_scores[index], "reason": reason}
+                      for key in ("factual_accuracy", "clinical_soundness",
+                                  "evidence_sufficiency", "task_clarity")}
+        elif role == "difficulty":
+            index = sum(1 for call in h.model_calls[:-1]
+                        if call["output_type"] is DifficultyJudgment)
+            reason = "" if h.blank_reason == "difficulty" else "跨记录整合"
+            output = {"reasoning_depth": h.depths[index], "reason": reason}
         elif role == "solver":
             output = {"answer": "处方已创建"}
         else:
@@ -141,7 +152,7 @@ def test_solver_receives_only_patient_question_and_decision_point(harness):
         assert "private-method" not in call["input_text"]
     assert h.tool_calls[0][1:] == ([h.task.patient_id], h.task.decision_point)
     assert h.created[0] != h.created[1]
-    assert len(result.runs) == 5
+    assert len(result.runs) == 10
 
 
 @pytest.mark.parametrize("state, completed", [
@@ -171,15 +182,16 @@ def test_write_completion_uses_observed_state(harness, state, completed):
     ("evidence", "environment_error", 1, 0),
     ("verifier", "model_error", 1, 1),
     ("verifier_budget", "model_error", 1, 1),
-    ("quality", "model_error", 1, 3),
-    ("solver", "model_error", 2, 4),
-    ("solver_tool_error", "tool_error", 2, 4),
-    ("solver_environment_error", "environment_error", 2, 4),
-    ("solver_model_error", "model_error", 2, 4),
-    ("solver_unknown_error", "model_error", 2, 4),
-    ("solver_budget", "model_error", 2, 4),
-    ("state", "environment_error", 2, 4),
-    ("completion", "model_error", 2, 5),
+    ("quality", "model_error", 1, 5),
+    ("difficulty", "model_error", 1, 8),
+    ("solver", "model_error", 2, 9),
+    ("solver_tool_error", "tool_error", 2, 9),
+    ("solver_environment_error", "environment_error", 2, 9),
+    ("solver_model_error", "model_error", 2, 9),
+    ("solver_unknown_error", "model_error", 2, 9),
+    ("solver_budget", "model_error", 2, 9),
+    ("state", "environment_error", 2, 9),
+    ("completion", "model_error", 2, 10),
 ])
 def test_faults_release_instances_without_clinical_conclusions(
     harness, failure, category, instances, runs
@@ -197,6 +209,9 @@ def test_faults_release_instances_without_clinical_conclusions(
         assert result.verification is None
     if failure.endswith("budget"):
         assert result.runs[-1].status == "budget_exhausted"
+    if failure == "difficulty":
+        assert result.quality is not None
+        assert result.difficulty is None
 
 
 def test_invalid_task_stops_before_solver_and_releases_instance(harness):
@@ -245,3 +260,87 @@ def test_cancellation_releases_solver_instance(harness, monkeypatch):
         evaluate(h)
     assert len(h.created) == 2
     assert h.released == h.created
+
+
+def test_three_judges_take_median_and_keep_raw_scores(harness):
+    h = harness
+    h.quality_scores = [5, 3, 4]
+    h.depths = [4, 1, 3]
+    result = evaluate(h)
+    factual = result.quality.factual_accuracy
+    assert factual.score == 4
+    assert factual.scores == [5, 3, 4]
+    assert factual.reason == "J1: supported | J2: supported | J3: supported"
+    assert result.quality.task_clarity.score == 4
+    assert result.difficulty.reasoning_depth == 3
+    assert result.difficulty.reasoning_depths == [4, 1, 3]
+    assert result.difficulty.reason == "J1: 跨记录整合 | J2: 跨记录整合 | J3: 跨记录整合"
+    assert len([c for c in h.model_calls
+                if c["output_type"] is QualityJudgment]) == 3
+    assert len([c for c in h.model_calls
+                if c["output_type"] is DifficultyJudgment]) == 3
+
+
+def test_difficulty_receives_only_task_and_computed_complexity(harness):
+    h = harness
+    result = evaluate(h)
+    quality_call = next(c for c in h.model_calls if c["output_type"] is QualityJudgment)
+    assert set(json.loads(quality_call["input_text"])) == {"task", "trajectory", "verification"}
+    difficulty_call = next(c for c in h.model_calls if c["output_type"] is DifficultyJudgment)
+    payload = json.loads(difficulty_call["input_text"])
+    assert set(payload) == {"task", "complexity_metrics"}
+    assert payload["task"]["instruction"] == h.task.instruction
+    assert payload["complexity_metrics"] == {"evidence_count": 1, "resource_type_count": 0,
+                                            "time_span_days": None}
+    assert result.difficulty.complexity_metrics == ComplexityMetrics(
+        evidence_count=1, resource_type_count=0, time_span_days=None)
+
+
+def test_complexity_metrics_count_sources_types_and_time_span(harness):
+    h = harness
+    h.task = h.task.model_copy(update={"evidence": [
+        Evidence(source_id="Observation/1", statement="首次检验"),
+        Evidence(source_id="Condition/2", statement="首次诊断"),
+        Evidence(source_id="Encounter/4", statement="首次就诊"),
+        Evidence(source_id="MedicationRequest/5", statement=json.dumps(
+            {"resourceType": "MedicationRequest",
+             "effectivePeriod": {"start": "2026-01-31T00:00:00+08:00"}})),
+    ]})
+    h.trajectory = h.trajectory.model_copy(update={"sources": [
+        Evidence(source_id="Observation/1", statement=json.dumps(
+            {"resourceType": "Observation", "effectiveDateTime": "2026-01-01T00:00:00+08:00"})),
+        Evidence(source_id="Condition/2", statement=json.dumps(
+            {"resourceType": "Condition", "onsetDateTime": "2026-01-11T00:00:00"})),
+        Evidence(source_id="Encounter/4", statement=json.dumps(
+            {"resourceType": "Encounter",
+             "context": {"period": {"start": "2026-01-21T00:00:00+08:00"}}})),
+        Evidence(source_id="MedicationRequest/5", statement=json.dumps(
+            {"resourceType": "MedicationRequest",
+             "effectivePeriod": {"start": "2026-01-31T00:00:00+08:00"}})),
+        Evidence(source_id="Observation/9", statement=json.dumps(
+            {"resourceType": "Observation", "effectiveDateTime": "2027-05-01T00:00:00+08:00"})),
+        Evidence(source_id="Patient/3", statement="不是 JSON"),
+    ]})
+    result = evaluate(h)
+    assert result.difficulty.complexity_metrics == ComplexityMetrics(
+        evidence_count=4, resource_type_count=4, time_span_days=30.0)
+
+
+@pytest.mark.parametrize("role", ["quality", "difficulty"])
+def test_empty_judge_reason_fails_evaluation(harness, role):
+    h = harness
+    h.blank_reason = role
+    result = evaluate(h)
+    assert result.status == "failed"
+    assert result.failure_category == "model_error"
+    assert result.completion is None
+
+
+@pytest.mark.parametrize("field, scores", [("quality_scores", [6, 4, 4]), ("depths", [5, 2, 2])])
+def test_out_of_range_judgments_fail_evaluation(harness, field, scores):
+    h = harness
+    setattr(h, field, scores)
+    result = evaluate(h)
+    assert result.status == "failed"
+    assert result.failure_category == "model_error"
+    assert result.completion is None

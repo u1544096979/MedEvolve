@@ -113,16 +113,20 @@
 | Budget | max_model_turns: int, max_tool_calls: int |
 | RunResult | output: JsonObject 或空, trace: list[JsonObject], usage: JsonObject, status: str, error: str 或空 |
 | Verification | valid: bool, reason: str |
-| QualityReview | dimensions: JsonObject，四个维度各有 judgment 与 reason |
+| QualityJudgment | 单裁判输出，四个维度（`factual_accuracy`、`clinical_soundness`、`evidence_sufficiency`、`task_clarity`）各含 `score: int` 与 `reason: str` |
+| QualityReview | 四个固定维度 `factual_accuracy`、`clinical_soundness`、`evidence_sufficiency`、`task_clarity`，每维含 `score: int`、`scores: list[int]`、`reason: str` |
+| ComplexityMetrics | `evidence_count`、`resource_type_count`、`time_span_days` |
+| DifficultyJudgment | 单裁判输出，含 `reasoning_depth`、`reason` |
+| DifficultyScore | `reasoning_depth`、`reasoning_depths`、`reason`、`complexity_metrics` |
 | CompletionReview | completed: bool, reason: str |
-| EvaluationResult | task_id: str, verification: Verification 或空, quality: QualityReview 或空, completion: CompletionReview 或空, solver_run: RunResult 或空, observed_state: JsonObject, status: str, failure_category: str 或空, runs: list[RunResult] |
+| EvaluationResult | task_id: str, verification: Verification 或空, quality: QualityReview 或空, difficulty: DifficultyScore 或空, completion: CompletionReview 或空, solver_run: RunResult 或空, observed_state: JsonObject, status: str, failure_category: str 或空, runs: list[RunResult] |
 | Feedback | quality_findings: list[str], difficulty_findings: list[str], failure_findings: list[str], suggestions: list[str] |
 | SolverInput | instruction: str, patient_id: str, decision_point: str 或空 |
 | SolverAnswer | answer: str |
 | DataExploration | guidance: str |
 | EnvironmentExploration | guidance: str |
 | RuntimeConfig | models: dict[str, ModelConfig], budgets: dict[str, Budget] |
-| EvaluationConfig | runtime: RuntimeConfig，角色为 verifier、quality、solver、completion |
+| EvaluationConfig | runtime: RuntimeConfig，角色为 verifier、quality、difficulty、solver、completion |
 | ExperimentConfig | run_id: str, method: str, environment: EnvironmentConfig, runtime: RuntimeConfig, evaluation: EvaluationConfig, evolution_patients: list[str], evaluation_patients: list[str], round_patients: list[list[str]], initial_strategy: Strategy, random_seed: int, output_dir: str |
 
 RunResult.status 为 completed、budget_exhausted 或 failed；EvaluationResult.status 为 completed、invalid 或 failed。failure_category 为 clinical、insufficient_evidence、ambiguous_task、tool_error、environment_error、model_error 或空。无法完成核验时 verification 为空，不能伪造为任务不成立。

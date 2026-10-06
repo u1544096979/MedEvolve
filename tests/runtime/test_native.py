@@ -131,6 +131,33 @@ async def test_native_zero_tool_budget_and_last_turn_exhaustion(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_exploration_prompt_requires_guidance_in_finish_answers(monkeypatch):
+    tools = native_tools()
+
+    async def execute(action):
+        return {"kind": "FINISH", "request": {"action": action}, "reply": "FINISH", "answers": ["指导"]}
+
+    monkeypatch.setattr(tools, "execute", execute)
+    requests = install_transport(monkeypatch, [{"role": "assistant", "content": 'FINISH(["指导"])'}])
+    result = await run_agent(instructions="Explore", input_text="patient", tools=tools,
+        output_type=EnvironmentExploration, model=MODEL,
+        budget=Budget(max_model_turns=1, max_tool_calls=1))
+    assert result.status == "completed", result.error
+    prompt = requests[0]["messages"][1]["content"]
+    assert "没有待回答的题目" in prompt and "不能提交空列表" in prompt
+    assert "本任务是解题" not in prompt
+    assert prompt.index("FINISH([answer1, answer2, ...])") < prompt.index("没有待回答的题目")
+
+    requests = install_transport(monkeypatch, [{"role": "assistant", "content": 'FINISH(["a"])'}])
+    solution = await run_agent(instructions="Solve", input_text="patient", tools=tools,
+        output_type=SolverAnswer, model=MODEL, budget=Budget(max_model_turns=1, max_tool_calls=1))
+    assert solution.status == "completed", solution.error
+    solution_prompt = requests[0]["messages"][1]["content"]
+    assert "没有待回答的题目" not in solution_prompt
+    assert "本任务是解题" in solution_prompt and "不能提交空列表" in solution_prompt
+
+
+@pytest.mark.asyncio
 async def test_native_environment_error_is_returned_as_feedback_and_not_clinical(monkeypatch):
     requests = install_transport(monkeypatch, [
         {"role": "assistant", "content": "GET Observation?patient=p1"},

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from contracts import (
     Budget, EnvironmentConfig, EnvironmentInstance, EvaluationConfig, ModelConfig,
     PatientTrajectory, RunResult, RuntimeConfig, SolverAnswer, Task,
-    CompletionReview, Verification, QualityReview,
+    CompletionReview, Verification, QualityJudgment, DifficultyJudgment,
 )
 from evaluation import evaluate_task
 
@@ -25,7 +25,7 @@ def test_completion_receives_native_submission_and_unmodified_solver_input(monke
         patient_id="patient-1", environment="fixture", text="fixture",
         sources=[{"source_id": "Observation/1", "statement": "证据"}],
     )
-    roles = ("verifier", "quality", "solver", "completion")
+    roles = ("verifier", "quality", "difficulty", "solver", "completion")
     config = EvaluationConfig(runtime=RuntimeConfig(
         models={role: ModelConfig(model=role, api_key_env="UNUSED") for role in roles},
         budgets={role: Budget(max_model_turns=2, max_tool_calls=2) for role in roles},
@@ -42,7 +42,7 @@ def test_completion_receives_native_submission_and_unmodified_solver_input(monke
     async def read_evidence(instance, patient_id, source_id):
         return {"resourceType": "Observation", "id": "1"}
 
-    async def get_tools(instance, patient_ids, decision_point=None):
+    async def get_tools(instance, patient_ids, decision_point=None, tool_result_limit=None):
         return []
 
     async def read_state(instance, task):
@@ -53,11 +53,12 @@ def test_completion_receives_native_submission_and_unmodified_solver_input(monke
         schema = kwargs["output_type"]
         if schema is Verification:
             output = {"valid": True, "reason": "证据存在"}
-        elif schema is QualityReview:
-            output = {"dimensions": {
-                key: {"judgment": "合格", "reason": "满足要求"}
-                for key in ("clinical_value", "correctness", "longitudinal_integration", "clarity")
-            }}
+        elif schema is QualityJudgment:
+            output = {key: {"score": 4, "reason": "满足要求"}
+                      for key in ("factual_accuracy", "clinical_soundness",
+                                  "evidence_sufficiency", "task_clarity")}
+        elif schema is DifficultyJudgment:
+            output = {"reasoning_depth": 2, "reason": "跨记录整合"}
         elif schema is SolverAnswer:
             output = {"answer": "已提交处方请求"}
             trace = [

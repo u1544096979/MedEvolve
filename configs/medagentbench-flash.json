@@ -42,6 +42,13 @@
         "api_key_env": "OPENCODE_API_KEY",
         "instructions_role": "system",
         "parallel_tool_calls": true
+      },
+      "trajectory_compressor": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "context_window": 1000000,
+        "max_output_tokens": 131072
       }
     },
     "budgets": {
@@ -76,6 +83,13 @@
           "instructions_role": "system",
           "parallel_tool_calls": true
         },
+        "difficulty": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
         "solver": {
           "model": "deepseek-v4.1-flash",
           "base_url": "https://opencode.ai/zen/go/v1",
@@ -97,6 +111,10 @@
           "max_tool_calls": 200
         },
         "quality": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "difficulty": {
           "max_model_turns": 30,
           "max_tool_calls": 200
         },

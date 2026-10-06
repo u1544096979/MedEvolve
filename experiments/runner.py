@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import math
 import random
 from pathlib import Path
 from typing import get_args
@@ -12,7 +13,7 @@ from contracts import (
     TaskBatch, TaskType,
 )
 
-from methods.common import normalize_usage, validate_task_batch
+from methods.common import normalize_usage, output_constraints, validate_task_batch
 
 METHOD_MODULES = {
     "medevolve": "methods.medevolve",
@@ -88,8 +89,18 @@ async def evaluate_task(*args):
 
 async def run_experiment(config: ExperimentConfig) -> None:
     generator = resolve_generator(config.method)
+    if config.compare_initial_strategy and config.method != "medevolve":
+        raise ValueError("Initial strategy comparison requires medevolve")
     if "generator" not in config.runtime.models or "generator" not in config.runtime.budgets:
         raise ValueError("runtime requires generator model and cumulative generator budget")
+    if config.method == "workflow":
+        output_constraints(config.initial_strategy.allocation, candidate_pool=True)
+    if config.method == "envexplore":
+        if not config.evolution_patients:
+            raise ValueError("EnvExplore requires nonempty exploration patients")
+        if ("environment_explorer" not in config.runtime.models
+                or "environment_explorer" not in config.runtime.budgets):
+            raise ValueError("EnvExplore requires environment_explorer model and budget")
     evolution = set(config.evolution_patients)
     if evolution.intersection(config.evaluation_patients):
         raise ValueError("Evolution and evaluation patients must be disjoint")
@@ -155,8 +166,12 @@ async def run_experiment(config: ExperimentConfig) -> None:
 
         guidance = None
         if config.method == "medevolve":
+            exploration_patients = random.Random(config.random_seed).sample(
+                config.evolution_patients, math.ceil(len(config.evolution_patients) * 0.5)
+            )
+            _save(root / "data_exploration_patients.json", exploration_patients)
             data_run = await invoke("explore_data", explore_data,
-                                    [trajectories[p] for p in config.evolution_patients], config.runtime)
+                                    [trajectories[p] for p in exploration_patients], config.runtime)
             data = parse("explore_data", data_run, DataExploration)
             environment_run = await invoke("explore_environment", explore_environment,
                                            config.environment, config.evolution_patients, config.runtime)
@@ -167,20 +182,43 @@ async def run_experiment(config: ExperimentConfig) -> None:
                                            environment_guidance=environment.guidance)
             _save(root / "guidance.json", guidance.model_dump(mode="json"))
 
+        if config.method == "envexplore":
+            environment_run = await invoke(
+                "explore_environment", explore_environment,
+                config.environment, config.evolution_patients, config.runtime,
+            )
+            environment_guidance = parse("explore_environment", environment_run, EnvironmentExploration)
+            if environment_guidance is None or not environment_guidance.guidance.strip():
+                raise RuntimeError("EnvExplore environment exploration did not produce valid guidance")
+            _save(root / "environment_guidance.json", environment_guidance.model_dump(mode="json"))
+            method_generate = generator
+            fixed_strategy = config.initial_strategy.model_copy(deep=True)
+
+            async def bound_generator(trajectory, environment, directions, runtime):
+                return await method_generate(
+                    trajectory, environment, directions, runtime,
+                    environment_guidance=environment_guidance,
+                    strategy=fixed_strategy,
+                )
+
+            generator = bound_generator
+
         async def generate_and_evaluate(folder, patients, round_index, current):
             tasks, evaluations, attempts = [], [], []
             if config.method == "medevolve":
                 _save(folder / "strategy.json", current.model_dump(mode="json"))
-            sampling = random.Random(config.random_seed) if folder.name == "evaluation" else rng
-            allocation = config.initial_strategy.allocation if folder.name == "evaluation" else current.allocation
+            is_test = folder.name in {"evaluation", "initial_evaluation"}
+            sampling = random.Random(config.random_seed) if is_test else rng
+            allocation = config.initial_strategy.allocation if is_test else current.allocation
             free_selection = config.method == "singleshot"
             for patient_index, patient in enumerate(patients):
                 if free_selection:
                     task_types = list(get_args(TaskType))
                     selection_record = {"task_types": task_types}
                 else:
-                    directions = sampling.choices(allocation,
-                                                  weights=[d.weight for d in allocation], k=2)
+                    directions = (list(allocation) if config.method == "workflow" else
+                                  sampling.choices(allocation,
+                                                   weights=[d.weight for d in allocation], k=2))
                     selection_record = {"directions": [d.model_dump(mode="json") for d in directions]}
                 stage = f"{folder.name}/generate/{patient_index}"
                 async def generate_batch():
@@ -197,7 +235,8 @@ async def run_experiment(config: ExperimentConfig) -> None:
                         result = await generator(trajectories[patient], config.environment,
                                                  directions, config.runtime)
                     result = (validate_task_batch(result, task_types=task_types) if free_selection
-                              else validate_task_batch(result, directions))
+                              else validate_task_batch(result, directions,
+                                                       candidate_pool=config.method == "workflow"))
                     budget = config.runtime.budgets["generator"]
                     if (result.usage["model_turns"] > budget.max_model_turns or
                             result.usage["tool_calls"] > budget.max_tool_calls):
@@ -243,6 +282,10 @@ async def run_experiment(config: ExperimentConfig) -> None:
             _save(folder / "evaluations.json", [e.model_dump(mode="json") for e in evaluations])
             _save(folder / "attempts.json", attempts)
             return tasks, evaluations
+
+        if config.compare_initial_strategy:
+            await generate_and_evaluate(root / "initial_evaluation", config.evaluation_patients,
+                                        0, config.initial_strategy)
 
         if config.method == "medevolve":
             for index, patients in enumerate(config.round_patients, start=1):

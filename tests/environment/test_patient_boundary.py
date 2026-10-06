@@ -170,6 +170,34 @@ async def test_malformed_native_arguments_return_error_then_allow_retry(native_f
 
 
 @pytest.mark.asyncio
+async def test_tool_result_limit_truncates_fhir_results(native_fhir):
+    _, _, override = native_fhir
+    override["response"] = bundle(
+        [{"resourceType": "Observation", "id": f"obs-{n}",
+          "subject": {"reference": "Patient/a"}, "valueString": "x" * 200}
+         for n in range(80)]
+    )
+    suffix = "… [result truncated]"
+
+    async def raw(limit=None):
+        tools = (await get_tools(instance(), ["a"]) if limit is None else
+                 await get_tools(instance(), ["a"], tool_result_limit=limit))
+        tool = next(t for t in tools if t.name == "fhir_observation_search_labs")
+        arguments = json.dumps({"patient": "a"})
+        context = ToolContext(
+            context=None, tool_name=tool.name, tool_call_id="limit", tool_arguments=arguments
+        )
+        return await tool.on_invoke_tool(context, arguments)
+
+    default = await raw()
+    capped = await raw(500)
+    whole = await raw(200000)
+    assert default.endswith(suffix) and len(default) == 10000 + len(suffix)
+    assert capped.endswith(suffix) and len(capped) == 500 + len(suffix)
+    assert not whole.endswith(suffix) and json.loads(whole)["entries"][0]["id"] == "obs-0"
+
+
+@pytest.mark.asyncio
 async def test_native_reads_writes_state_and_instance_isolation(native_fhir):
     tools = await get_tools(instance(), ["a"])
     assert len(tools) == 13
@@ -235,50 +263,54 @@ async def test_disallowed_patient_queries_and_writes_never_reach_http(native_fhi
             },
         ),
     ]:
-        with pytest.raises(PatientAccessError):
-            await invoke(tools, name, **args)
+        denied = await invoke(tools, name, **args)
+        assert "PatientAccessError" in denied["error"]
+        assert "entries" not in denied
     assert not native_fhir[1]
+    corrected = await invoke(tools, "fhir_observation_search_labs", patient="a")
+    assert corrected["entries"][0]["id"] == "lab"
 
 
 @pytest.mark.asyncio
 async def test_foreign_linked_resources_block_queries_and_writes(native_fhir):
     tools = await get_tools(instance(), ["a"])
-    with pytest.raises(PatientAccessError):
-        await invoke(
-            tools,
-            "fhir_document_reference_search_clinical_notes",
-            encounter="Encounter/eb",
-        )
-    with pytest.raises(PatientAccessError):
-        await invoke(
-            tools,
-            "fhir_service_request_create",
-            patient_reference="Patient/a",
-            code_code="x",
-            code_display="x",
-            requester_reference="Practitioner/p",
-            encounter_reference="Encounter/eb",
-        )
+    denied = await invoke(
+        tools,
+        "fhir_document_reference_search_clinical_notes",
+        encounter="Encounter/eb",
+    )
+    assert "PatientAccessError" in denied["error"]
+    denied = await invoke(
+        tools,
+        "fhir_service_request_create",
+        patient_reference="Patient/a",
+        code_code="x",
+        code_display="x",
+        requester_reference="Practitioner/p",
+        encounter_reference="Encounter/eb",
+    )
+    assert "PatientAccessError" in denied["error"]
     assert all(r.method != "POST" for r in native_fhir[1])
     tools = await get_tools(instance(), ["a", "b"])
-    with pytest.raises(PatientAccessError):
-        await invoke(
-            tools,
-            "fhir_service_request_create",
-            patient_reference="Patient/a",
-            code_code="x",
-            code_display="x",
-            requester_reference="Practitioner/p",
-            encounter_reference="Encounter/eb",
-        )
+    denied = await invoke(
+        tools,
+        "fhir_service_request_create",
+        patient_reference="Patient/a",
+        code_code="x",
+        code_display="x",
+        requester_reference="Practitioner/p",
+        encounter_reference="Encounter/eb",
+    )
+    assert "PatientAccessError" in denied["error"]
 
 
 @pytest.mark.asyncio
 async def test_response_scope_and_pagination_are_checked(native_fhir):
     tools = await get_tools(instance(), ["a"])
     native_fhir[2]["response"] = bundle([native_fhir[0]["instance-one"]["Patient/b"]])
-    with pytest.raises(PatientAccessError):
-        await invoke(tools, "fhir_patient_search_demographics")
+    denied = await invoke(tools, "fhir_patient_search_demographics")
+    assert "PatientAccessError" in denied["error"]
+    assert "entries" not in denied
     native_fhir[2]["response"] = bundle(
         [
             {
@@ -288,11 +320,12 @@ async def test_response_scope_and_pagination_are_checked(native_fhir):
             }
         ]
     )
-    with pytest.raises(PatientAccessError):
-        await invoke(tools, "fhir_patient_search_demographics")
+    denied = await invoke(tools, "fhir_patient_search_demographics")
+    assert "PatientAccessError" in denied["error"]
+    assert "entries" not in denied
     native_fhir[2]["response"] = bundle([], "http://another-instance/fhir/Observation")
-    with pytest.raises(PatientAccessError, match="pagination"):
-        await invoke(tools, "fhir_observation_search_labs")
+    denied = await invoke(tools, "fhir_observation_search_labs")
+    assert "PatientAccessError" in denied["error"] and "pagination" in denied["error"]
 
 
 @pytest.mark.asyncio

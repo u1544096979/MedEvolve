@@ -1,3 +1,4 @@
+import ast
 """Cross-module experiment with only external HTTP services replaced."""
 
 import json
@@ -49,8 +50,8 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_rol
         if role == 'data_explorer':
             if not tools:
                 call = ('list_patients', {})
-            elif len(tools) < 3:
-                call = ('read_trajectory', {'patient_id': ['e1', 'e2'][len(tools)-1]})
+            elif len(tools) <= len(ast.literal_eval(tools[0]['content'])):
+                call = ('read_trajectory', {'patient_id': ast.literal_eval(tools[0]['content'])[len(tools)-1]})
             output = {'guidance': '按病程关联记录'}
         elif role == 'environment_explorer':
             if not tools:
@@ -73,8 +74,11 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_rol
                                         evidence=[dict(source_id=f'Patient/{pid}', statement='gender=female')])
                                     for d in payload['directions']]}
         elif role == 'quality':
-            output = {'dimensions': {d: {'judgment': 'supported', 'reason': '原始数据支持'}
-                                     for d in ['clinical_value', 'correctness', 'longitudinal_integration', 'clarity']}}
+            output = {d: {'score': 4, 'reason': '原始数据支持'}
+                      for d in ['factual_accuracy', 'clinical_soundness',
+                                'evidence_sufficiency', 'task_clarity']}
+        elif role == 'difficulty':
+            output = {'reasoning_depth': 2, 'reason': '跨记录整合'}
         elif role == 'completion':
             payload = json.loads(user)
             completions.append(payload)

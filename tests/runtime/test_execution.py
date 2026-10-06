@@ -5,7 +5,7 @@ import pytest
 from agents import function_tool
 from openai import AsyncOpenAI
 
-from contracts import Budget, ModelConfig, QualityReview, SolverAnswer
+from contracts import Budget, ModelConfig, SolverAnswer, Verification
 from runtime import call_llm, run_agent
 from runtime import execution
 
@@ -48,7 +48,7 @@ FINAL_MESSAGE = {"role": "assistant", "content": '{"answer":"patient found"}'}
 @pytest.mark.parametrize("instructions_role", ["system", "user"])
 @pytest.mark.parametrize("output_type,output", [
     (SolverAnswer, {"answer": "patient found"}),
-    (QualityReview, {"dimensions": {"correctness": {"judgment": "supported", "reason": "patient found"}}}),
+    (Verification, {"valid": True, "reason": "patient found"}),
 ])
 async def test_sdk_tool_loop(monkeypatch, output_type, output, instructions_role):
     requests = install_transport(monkeypatch, [TOOL_MESSAGE,
@@ -229,3 +229,12 @@ def test_opencode_still_rejects_wrong_schema_and_invalid_structure():
     for raw in ['{"answer":', '{"wrong":"field"}']:
         with pytest.raises(ModelBehaviorError):
             schema.validate_json(raw)
+
+
+@pytest.mark.asyncio
+async def test_single_call_respects_configured_output_limit(monkeypatch):
+    requests = install_transport(monkeypatch, [FINAL_MESSAGE])
+    result = await call_llm(instructions="Answer", input_text="patient", output_type=SolverAnswer,
+        model=MODEL.model_copy(update={"max_output_tokens": 512}))
+    assert result.status == "completed"
+    assert requests[0]["max_tokens"] == 512

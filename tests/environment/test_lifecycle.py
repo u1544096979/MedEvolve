@@ -39,6 +39,8 @@ def docker_backend(monkeypatch):
         if args[:2] == ("container", "rm"):
             containers.pop(args[-1], None)
             return args[-1]
+        if args[:2] in {("container", "ls"), ("volume", "ls"), ("network", "ls")}:
+            return ""
         raise AssertionError(args)
 
     async def ready(self, port):
@@ -125,7 +127,7 @@ async def test_medagentbench_manager_uses_requested_environment_and_pinned_image
 async def test_unavailable_adapter_and_foreign_container_not_modified(docker_backend):
     manager = DockerManager("host")
     config = EnvironmentConfig(
-        name="FHIR-AgentBench", manager_url="http://manager", seed_data="image"
+        name="UnknownBench", manager_url="http://manager", seed_data="image"
     )
     with pytest.raises(EnvironmentUnavailable):
         await manager.create(config)

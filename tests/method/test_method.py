@@ -85,7 +85,7 @@ async def test_data_exploration_reads_only_supplied_cache(method, runtime, monke
         assert held_out.patient_id not in kwargs["input_text"]
         assert supplied[0].text not in kwargs["input_text"]
         tools = {tool.name: tool for tool in kwargs["tools"]}
-        assert set(tools) == {"list_patients", "read_trajectory"}
+        assert set(tools) == {"list_patients", "read_trajectory", "compress_trajectory"}
         async def invoke(name, arguments):
             context = ToolContext(
                 context=None, tool_name=name, tool_call_id="test-call", tool_arguments=arguments
@@ -139,13 +139,14 @@ async def test_environment_exploration_releases_independent_instance(
     ):
         monkeypatch.setattr(method, name, substitute)
     if failure in ("tools", "agent"):
-        with pytest.raises(RuntimeError, match="unavailable"):
-            await method.explore_environment(config, ["evolution-1"], runtime)
+        failed = await method.explore_environment(config, ["evolution-1"], runtime)
+        assert failed.status == "failed" and failed.output is None
+        assert "unavailable" in failed.error
     else:
         assert await method.explore_environment(config, ["evolution-1"], runtime) is result
         assert agent.await_args.kwargs["output_type"] is EnvironmentExploration
     create.assert_awaited_once_with(config)
-    tools.assert_awaited_once_with(instance, ["evolution-1"])
+    tools.assert_awaited_once_with(instance, ["evolution-1"], tool_result_limit=config.tool_result_limit)
     release.assert_awaited_once_with(config, instance)
 
 
