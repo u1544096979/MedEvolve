@@ -18,6 +18,8 @@
 
 两轮进化生成 8/8 题，核验通过 8/8，解题完成 7/8；1 题因质量评价缺少 dimensions 字段记为 model_error。两轮反馈与策略更新均完成，运行故障未当作难度提升。独立患者生成 2/2 题，核验通过且解题完成 1/2；另一题答案包含未列入 evidence 的真实轨迹记录，被公共核验拒绝。不能据单名独立评测患者宣称进化收益成立。
 
+SelfRefine（配置键 selfgen）已实现并完成两个环境的公共验收：PhysicianBench 两名评测患者生成 4/4 题、核验通过 4/4、解题完成 4/4；MedAgentBench 生成 2/2 题、核验通过 2/2、解题完成 1/2。运行目录 outputs/physicianbench-selfgen-acceptance-2p-flash 与 outputs/medagentbench-selfgen-acceptance，详细结果见 [baselines/selfgen/RESULTS.md](baselines/selfgen/RESULTS.md)。
+
 ## 正式环境和模型
 
 PhysicianBench 本机管理服务 http://127.0.0.1:18084；种子 fhir-full:v1。镜像归档 /Users/guagua/data/physical_benchmark_data/physicianbench-fhir-v1.tar.gz，来源为 szu-hosp-4090 的 /gpfs/flash/home/gwh/data/physical_benchmark_data。Docker 服务已启动，单容器内存上限 4 GB，实验逐次创建、使用和释放环境，同时最多一个实例。容器内数据库自动整理关闭。
@@ -32,4 +34,4 @@ gpt-4o-mini 和 DeepSeek V4.1 Flash 已授权用于实验，其他旗舰或高�
 
 ## 当前优先任务
 
-主方法：依据已对齐口径检查答案全部事实的引用覆盖，保留公共核验拒绝与模型格式故障的真实记录。公共层：冻结方法入口并接入对比运行。TaskCraft：按作者源码制定医疗适配。Workflow、SingleShot、SelfRefine：按各自方向 SPEC 和 PRD 实现。EnvExplore：按 SPEC 和 PLAN 实现一次环境探索、固定策略单次生成及两个环境的公共评测接入。公共生成入口、预算与结果汇总约定冻结后，五个方法可分配独立 session 并行实现。
+主方法：依据已对齐口径检查答案全部事实的引用覆盖，保留公共核验拒绝与模型格式故障的真实记录。公共层：冻结方法入口并接入对比运行。TaskCraft：按作者源码制定医疗适配。Workflow、SingleShot：按各自方向 SPEC 和 PRD 实现。EnvExplore：按 SPEC 和 PLAN 实现一次环境探索、固定策略单次生成及两个环境的公共评测接入。公共生成入口、预算与结果汇总约定冻结后，五个方法可分配独立 session 并行实现。
