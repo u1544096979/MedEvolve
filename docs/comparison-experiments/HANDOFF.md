@@ -8,7 +8,7 @@
 
 本机运行实验流程，远程 Docker 提供隔离医疗环境。使用标准 OpenAI Agents SDK 的工具 Agent；主方法单次调用生成任务，初始数据探索与环境探索分别执行，策略自进化不训练模型参数。对比方法优先作者源码，其次论文或明确方向定义。
 
-公共边界见 common/SPEC.md，公共实验接入任务见 common/PRD.md。主方法见 main/SPEC.md 和 main/PRD.md。TaskCraft 见 baselines/taskcraft/SPEC.md 和 PRD.md。Workflow、SingleShot、SelfGen、EnvExplore 分别见 baselines/workflow/、singleshot/、selfgen/、envexplore/ 下的 SPEC.md 与 PRD.md。这四项按方向定义实现。
+公共边界见 common/SPEC.md，公共实验接入任务见 common/PRD.md。主方法见 main/SPEC.md 和 main/PRD.md。TaskCraft 见 baselines/taskcraft/SPEC.md 和 PRD.md。Workflow、SingleShot、EnvExplore 分别见 baselines/workflow/、singleshot/、envexplore/ 下的 SPEC.md 与 PRD.md。SelfGen 见 baselines/selfgen/SPEC.md 与 PLAN.md。这四项按方向定义实现。
 
 ## 已实现状态
 

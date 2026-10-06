@@ -45,4 +45,4 @@ directions 对应两个目标任务。成功输出 TaskBatch，最多两题；�
 
 ## 方法来源状态
 
-TaskCraft 为作者源码的医疗适配；Workflow、SingleShot、SelfGen、EnvExplore 为方法方向对比，分别对应固定阶段生成、单次生成、自生成与自答一致性、环境探索生成。后四项按本项目 SPEC 定义报告。
+TaskCraft 为作者源码的医疗适配；Workflow、SingleShot、SelfGen、EnvExplore 为方法方向对比，分别对应固定阶段生成、单次生成、SelfRefine：单患者自反馈迭代修订、环境探索生成。后四项按本项目 SPEC 定义报告。
