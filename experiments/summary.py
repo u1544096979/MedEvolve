@@ -90,6 +90,9 @@ def summarize_run(output_dir: str) -> JsonObject:
         "evolution": summarize_folders(sorted((root / "rounds").glob("*")),
                                         2 * sum(len(p) for p in config["round_patients"]) if config["method"] == "medevolve" else 0),
         "evaluation": summarize_folders([root / "evaluation"], 2 * len(config["evaluation_patients"])),
+        **({"initial_evaluation": summarize_folders([root / "initial_evaluation"],
+                                                   2 * len(config["evaluation_patients"]))}
+           if config.get("compare_initial_strategy") else {}),
         "model_runs": {"count": len(records),
                        "statuses": dict(Counter(r["result"]["status"] for r in records)),
                        "known_token_totals": dict(tokens),

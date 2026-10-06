@@ -175,3 +175,4 @@ class ExperimentConfig(BaseModel):
     initial_strategy: Strategy
     random_seed: int
     output_dir: str
+    compare_initial_strategy: bool = False

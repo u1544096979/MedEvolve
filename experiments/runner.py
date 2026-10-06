@@ -88,6 +88,8 @@ async def evaluate_task(*args):
 
 async def run_experiment(config: ExperimentConfig) -> None:
     generator = resolve_generator(config.method)
+    if config.compare_initial_strategy and config.method != "medevolve":
+        raise ValueError("Initial strategy comparison requires medevolve")
     if "generator" not in config.runtime.models or "generator" not in config.runtime.budgets:
         raise ValueError("runtime requires generator model and cumulative generator budget")
     if config.method == "workflow":
@@ -177,8 +179,9 @@ async def run_experiment(config: ExperimentConfig) -> None:
             tasks, evaluations, attempts = [], [], []
             if config.method == "medevolve":
                 _save(folder / "strategy.json", current.model_dump(mode="json"))
-            sampling = random.Random(config.random_seed) if folder.name == "evaluation" else rng
-            allocation = config.initial_strategy.allocation if folder.name == "evaluation" else current.allocation
+            is_test = folder.name in {"evaluation", "initial_evaluation"}
+            sampling = random.Random(config.random_seed) if is_test else rng
+            allocation = config.initial_strategy.allocation if is_test else current.allocation
             for patient_index, patient in enumerate(patients):
                 directions = (list(allocation) if config.method == "workflow" else
                               sampling.choices(allocation,
@@ -241,6 +244,10 @@ async def run_experiment(config: ExperimentConfig) -> None:
             _save(folder / "evaluations.json", [e.model_dump(mode="json") for e in evaluations])
             _save(folder / "attempts.json", attempts)
             return tasks, evaluations
+
+        if config.compare_initial_strategy:
+            await generate_and_evaluate(root / "initial_evaluation", config.evaluation_patients,
+                                        0, config.initial_strategy)
 
         if config.method == "medevolve":
             for index, patients in enumerate(config.round_patients, start=1):
