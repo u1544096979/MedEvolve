@@ -3,7 +3,9 @@
 import asyncio
 import importlib
 import json
+import random
 import re
+from collections import Counter
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +23,7 @@ from methods.taskcraft.agent import run_search_agent, step_kind
 from methods.taskcraft.environment import bind_generation_tools, is_native
 from methods.taskcraft import READ_ONLY_TOOLS, TaskCraftParameters, generate_tasks
 from methods.taskcraft.ledger import Ledger
+from methods.taskcraft.scheduling import derive_seed, select_candidates
 from methods.taskcraft.schemas import (
     AgentThought, AnswerList, AnswerScore, BackwardContext, CleanedQuestion,
     ConclusionList, DecompositionReport, InitialQuestion, KnowledgeAnswers,
@@ -517,28 +520,31 @@ async def test_depth_extension_depends_on_parent_and_keeps_sub_query_chain(patch
     result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
 
     assert result.status == "completed"
-    batch = TaskBatch.model_validate(result.output)
-    extended = [question for question in batch.questions
-                if "综合问题" in question.instruction]
-    assert len(extended) == 1
-    question = extended[0]
-    assert question.reference_answer == "5.9 mmol/L"
+    assert TaskBatch.model_validate(result.output).questions
     pool = pipeline_pool(result)
-    depth_entry = next(entry for entry in pool if entry["origin"] == "depth"
-                       and entry["instruction"] == question.instruction)
-    parent = next(entry for entry in pool if entry["origin"] == "atomic"
-                  and entry["instruction"] == depth_entry["parents"][0])
+    atomic = [entry for entry in pool if entry["origin"] == "atomic"]
+    # 每个深度题都挂在某道原子题下；第二道原子题的证据是 BLOCK_B。
+    depth = [entry for entry in pool if entry["origin"] == "depth"]
+    assert len(depth) == len(atomic) == 2
+    for entry in depth:
+        parent_entry = next(item for item in atomic
+                            if item["question"]["instruction"] == entry["parents"][0])
+        assert {record["source_id"] for record in parent_entry["question"]["evidence"]} <= {
+            record["source_id"] for record in entry["question"]["evidence"]}, "深度题必须继承父题证据"
+    depth_entry = next(entry for entry in depth
+                       if entry["parents"][0] == atomic[1]["question"]["instruction"])
+    question = GeneratedQuestion.model_validate(depth_entry["question"])
+    assert question.reference_answer == "5.9 mmol/L"
+    assert {item.source_id for item in question.evidence} == {BLOCK_B}
+    parent = atomic[1]
     # 子问题与中间标识属于 trace，不拼进最终答案。
     completed = next(entry for entry in stage_records(result, "depth/extension")
-                     if entry["status"] == "completed")
+                     if entry["status"] == "completed"
+                     and [item["answer"] for item in entry["chain"]] == [parent["locator"]])
     assert [item["query"] for item in completed["chain"]] == [
         "在该患者的高钾血症问题条目下，血钾结果是多少？"]
-    assert [item["answer"] for item in completed["chain"]] == [parent["locator"]]
-    assert {item.source_id for item in question.evidence} == {BLOCK_B}
-    pool = pipeline_pool(result)
-    depth = [candidate for candidate in pool if candidate["origin"] == "depth"]
-    assert depth and all(candidate["parents"] for candidate in depth), "深度扩展必须记录父任务"
-    assert {source for candidate in depth for source in candidate["evidence"]} == {BLOCK_A, BLOCK_B}
+    assert {record["source_id"] for entry in depth
+            for record in entry["question"]["evidence"]} == {BLOCK_A, BLOCK_B}
     # 顺序：反向检索 → superset 校验 → 生成问题 → 病历核验 → 合并检查。
     start = next(index for index, item in enumerate(fake.log) if item[0] == "llm"
                  and "Conduct divergent searches" in item[2])
@@ -575,14 +581,12 @@ async def test_width_extension_checks_decomposition_and_model_answering(patched,
     patched(fake)
     result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
 
-    batch = TaskBatch.model_validate(result.output)
-    merged = [question for question in batch.questions if "合并问题" in question.instruction]
-    assert len(merged) == 1
-    question = merged[0]
-    assert json.loads(question.reference_answer) == ["5.9 mmol/L", "5.9 mmol/L"]
-    assert {item.source_id for item in question.evidence} == {BLOCK_A, BLOCK_B}
     pool = pipeline_pool(result)
     width = next(candidate for candidate in pool if candidate["origin"] == "width")
+    question = GeneratedQuestion.model_validate(width["question"])
+    assert "合并问题" in question.instruction
+    assert json.loads(question.reference_answer) == ["5.9 mmol/L", "5.9 mmol/L"]
+    assert {item.source_id for item in question.evidence} == {BLOCK_A, BLOCK_B}
     assert len(width["parents"]) == 2
     assert stage_records(result, "width/decompose")[0]["kept"] == 1
     assert stage_records(result, "width/answer_score")[0]["llm_score"] == 0.0
@@ -1266,3 +1270,239 @@ def test_agent_prompts_render_without_jinja_leftovers():
     # 源码模板里的单花括号占位符保持逐字（Jinja 不替换），行为与作者一致。
     assert "{language}" in rendered["system_prompt"]
     assert "{remaining_steps}" in rendered["reflection.update_plan_post_messages"]
+
+
+# --------------------------------------------------------------- 固定种子调度与选题
+def qualified_candidates(count, *, origins=None, task_types=("诊断与解释", "治疗规划")):
+    """构造全部通过公共字段、患者来源与决策点校验的候选，来源标签可替换。"""
+    labels = list(origins) if origins is not None else ["atomic"] * count
+    types = list(task_types)
+    return [Candidate(
+        question=GeneratedQuestion(
+            instruction=f"该患者第 {index} 项记录说明了什么？",
+            task_type=types[index % len(types)],
+            reference_answer=f"答案 {index}",
+            evidence=[Evidence(source_id=BLOCK_A, statement=f"第 {index} 项记录")]),
+        origin=labels[index], locator=BLOCK_A)
+        for index in range(count)]
+
+
+class TrackingPipeline(Pipeline):
+    """记录分支入参的 Pipeline：原子阶段返回固定对象，分支不回写原子池。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.atomic_candidates = atomic_pool(3, task_types=["诊断与解释", "治疗规划"])
+        self.branch_inputs = {}
+
+    async def atomic(self):
+        return self.atomic_candidates
+
+    async def depth(self, atomic):
+        self.branch_inputs["depth"] = atomic
+        return [Candidate(
+            question=GeneratedQuestion(instruction="深度问题", task_type="诊断与解释",
+                                       reference_answer="深度答案",
+                                       evidence=[Evidence(source_id=BLOCK_A, statement="深度记录")]),
+            origin="depth", parents=["父题"], locator=BLOCK_A)]
+
+    async def width(self, atomic):
+        self.branch_inputs["width"] = atomic
+        return [Candidate(
+            question=GeneratedQuestion(instruction="宽度问题", task_type="治疗规划",
+                                       reference_answer="宽度答案",
+                                       evidence=[Evidence(source_id=BLOCK_B, statement="宽度记录")]),
+            origin="width", parents=["父题"], locator=BLOCK_B)]
+
+
+def scheduling_pipeline(random_seed):
+    return TrackingPipeline(trajectory(), [], directions(), TaskCraftParameters(),
+                            Ledger(GenerationBudget(runtime_config())), random_seed=random_seed)
+
+
+def test_seed_streams_are_stable_and_private():
+    before = random.getstate()
+    args = (42, "PhysicianBench", "patient-1")
+
+    assert derive_seed(*args, "branch-order") == derive_seed(*args, "branch-order")
+    assert derive_seed(*args, "branch-order") != derive_seed(*args, "output-selection")
+    assert derive_seed(*args, "branch-order") != derive_seed(43, args[1], args[2], "branch-order")
+    assert derive_seed(*args, "branch-order") != derive_seed(args[0], args[1], "patient-2", "branch-order")
+    assert derive_seed(*args, "branch-order") != derive_seed(args[0], "MedAgentBench", args[2],
+                                                            "branch-order")
+    assert random.getstate() == before
+
+
+def test_selection_leaves_the_global_random_state_untouched():
+    before = random.getstate()
+    selected = select_candidates(qualified_candidates(6), directions(), {BLOCK_A}, 42)
+
+    assert len(selected) == 2
+    assert random.getstate() == before
+
+
+@pytest.mark.asyncio
+async def test_branches_share_one_atomic_pool_with_a_seeded_order():
+    pipeline = scheduling_pipeline(7)
+    await pipeline.run()
+
+    atomic = pipeline.atomic_candidates
+    assert pipeline.branch_inputs["depth"] is atomic
+    assert pipeline.branch_inputs["width"] is atomic
+    assert sorted(pipeline.branch_order) == ["depth", "width"]
+    assert [entry["stage"] for entry in pipeline.records if entry.get("status") == "started"] == [
+        f"{pipeline.branch_order[0]}/branch", f"{pipeline.branch_order[1]}/branch"]
+    # 候选池固定为 atomic、depth、width 的各自生成顺序，与分支执行顺序无关。
+    assert [candidate.origin for candidate in pipeline.pool] == [
+        "atomic", "atomic", "atomic", "depth", "width"]
+
+
+@pytest.mark.asyncio
+async def test_branch_order_is_reproducible_for_one_seed():
+    first = scheduling_pipeline(5)
+    await first.run()
+    second = scheduling_pipeline(5)
+    await second.run()
+
+    assert first.branch_order == second.branch_order
+    assert tuple(first.branch_order) in {("depth", "width"), ("width", "depth")}
+
+
+@pytest.mark.asyncio
+async def test_exhausted_budget_skips_the_remaining_branches_without_adding_tasks():
+    pipeline = scheduling_pipeline(7)
+    pipeline.ledger.exhausted = True
+    await pipeline.run()
+
+    assert pipeline.branch_inputs == {}
+    assert [entry["reason"] for entry in pipeline.records if entry.get("status") == "skipped"] == [
+        "cumulative_budget_exhausted", "cumulative_budget_exhausted"]
+    assert len(pipeline.pool) == 3, "预算耗尽不丢弃已生成的候选"
+
+
+@pytest.mark.asyncio
+async def test_width_skips_with_a_real_reason_when_the_atomic_pool_is_short():
+    pipeline = scheduling_pipeline(7)
+    pipeline.atomic_candidates = atomic_pool(1)
+    await pipeline.run()
+
+    skipped = [entry for entry in pipeline.records if entry.get("reason") == "insufficient_parents"]
+    assert len(skipped) == 1 and skipped[0]["available"] == 1
+    assert "width" not in pipeline.branch_inputs
+    assert "depth" in pipeline.branch_inputs
+
+
+def test_selection_is_repeatable_capped_and_bound_by_the_clinical_quota():
+    candidates = qualified_candidates(6)
+    first = select_candidates(candidates, directions(), {BLOCK_A}, 9)
+    second = select_candidates(candidates, directions(), {BLOCK_A}, 9)
+
+    assert [candidate.question.instruction for candidate in first] == [
+        candidate.question.instruction for candidate in second]
+    assert len(first) == 2
+    assert Counter(candidate.question.task_type for candidate in first) == Counter(
+        direction.task_type for direction in directions())
+
+
+def test_selection_stops_at_the_direction_quota():
+    selected = select_candidates(qualified_candidates(5, task_types=("诊断与解释",)),
+                                 directions(), {BLOCK_A}, 3)
+
+    assert [candidate.question.task_type for candidate in selected] == ["诊断与解释"]
+
+
+def test_selection_ignores_incomplete_candidates_and_foreign_sources():
+    qualified = qualified_candidates(2)
+    unusable = [
+        Candidate(question=GeneratedQuestion(instruction="  ", task_type="诊断与解释",
+                                             reference_answer="答案",
+                                             evidence=[Evidence(source_id=BLOCK_A, statement="记录")]),
+                  origin="atomic", locator=BLOCK_A),
+        Candidate(question=GeneratedQuestion(instruction="问题", task_type="治疗规划",
+                                             reference_answer="   ",
+                                             evidence=[Evidence(source_id=BLOCK_A, statement="记录")]),
+                  origin="atomic", locator=BLOCK_A),
+        Candidate(question=GeneratedQuestion(instruction="问题", task_type="治疗规划",
+                                             reference_answer="答案", evidence=[]),
+                  origin="atomic", locator=BLOCK_A),
+        Candidate(question=GeneratedQuestion(instruction="问题", task_type="治疗规划",
+                                             reference_answer="答案", decision_point="2026-01-01",
+                                             evidence=[Evidence(source_id=BLOCK_A, statement="记录")]),
+                  origin="atomic", locator=BLOCK_A),
+        Candidate(question=GeneratedQuestion(instruction="问题", task_type="治疗规划",
+                                             reference_answer="答案",
+                                             evidence=[Evidence(source_id="Paper/unknown", statement="记录")]),
+                  origin="atomic", locator=BLOCK_A),
+        Candidate(question=GeneratedQuestion(instruction="问题", task_type="治疗规划",
+                                             reference_answer="答案",
+                                             evidence=[Evidence(source_id=BLOCK_A, statement="  ")]),
+                  origin="atomic", locator=BLOCK_A),
+    ]
+    selected = select_candidates([*unusable, *qualified], directions(), {BLOCK_A}, 4)
+
+    assert sorted(candidate.question.instruction for candidate in selected) == sorted(
+        candidate.question.instruction for candidate in qualified)
+
+
+def test_selection_does_not_read_the_generation_origin():
+    candidates = qualified_candidates(6)
+    relabelled = [Candidate(question=candidate.question, origin=f"origin-{index}",
+                            parents=list(candidate.parents), locator=candidate.locator,
+                            detail=dict(candidate.detail))
+                  for index, candidate in enumerate(candidates)]
+
+    assert [candidate.question.instruction
+            for candidate in select_candidates(candidates, directions(), {BLOCK_A}, 21)] == [
+        candidate.question.instruction
+        for candidate in select_candidates(relabelled, directions(), {BLOCK_A}, 21)]
+
+
+def test_selection_stream_is_separate_from_the_branch_stream():
+    pipeline = scheduling_pipeline(17)
+    assert pipeline.derived_seeds["branch-order"] != pipeline.derived_seeds["output-selection"]
+
+    pipeline.pool = qualified_candidates(4)
+    first = pipeline.select()
+    assert len(first) == len(pipeline.selected) == 2
+    assert pipeline.selection_records
+    # 分支流与该次选题无关：重新选题结果不变。
+    assert [candidate.question.instruction for candidate in pipeline.select()] == [
+        candidate.question.instruction for candidate in first]
+
+    other = scheduling_pipeline(17)
+    other.pool = qualified_candidates(4)
+    assert [candidate.question.instruction for candidate in other.select()] == [
+        candidate.question.instruction for candidate in first]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_trace_records_scheduling_and_selection(patched, environment):
+    fake = FakeRuntime()
+    patched(fake)
+    result = await generate_tasks(trajectory(), environment, directions(), runtime_config(),
+                                  random_seed=42)
+
+    entry = next(item for item in result.trace if item["stage"] == "taskcraft/pipeline")
+    assert entry["experiment_seed"] == 42
+    assert set(entry["derived_seeds"]) == {"branch-order", "output-selection"}
+    assert sorted(entry["branch_order"]) == ["depth", "width"]
+    assert entry["selection"]["selected"] and entry["selection"]["filtering"]
+    assert all(item["question"]["instruction"] for item in entry["pool"])
+    assert all("detail" in item and "origin" in item and "parents" in item and "locator" in item
+               for item in entry["pool"])
+    assert json.loads(json.dumps(entry)) == entry, "候选与调度记录必须可 JSON 序列化"
+    # 公共 runner 以 model_dump(mode="json") 持久化整条运行结果。
+    assert json.loads(result.model_dump_json()) == result.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_trajectory_environment_mismatch_fails_before_creating_an_instance(patched, environment):
+    fake = FakeRuntime()
+    state = patched(fake)
+    result = await generate_tasks(trajectory(), environment.model_copy(update={"name": "MedAgentBench"}),
+                                  directions(), runtime_config())
+
+    assert result.status == "failed" and result.output is None
+    assert "does not match" in result.error
+    assert state["created"] == state["released"] == 0
+    assert fake.llm_calls == []

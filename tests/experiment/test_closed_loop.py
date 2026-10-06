@@ -163,3 +163,43 @@ def test_patient_boundaries_and_failed_preparation_release(tmp_path, monkeypatch
     assert summary["status"] == "failed"
     assert summary["evolution"]["completion_among_generated"]["rate"] is None
     assert summary["model_runs"]["known_token_totals"] == {}
+
+
+def test_taskcraft_generation_receives_the_experiment_seed(tmp_path, monkeypatch):
+    """公共分派把实验种子绑定到 TaskCraft 入口，其他方法入口不变。"""
+    released, generated, trajectories = [], [], {}
+
+    async def create(config):
+        return EnvironmentInstance(instance_id="cache", endpoint="fake", environment="fake")
+
+    async def prepare(instance, patient):
+        trajectories[patient] = PatientTrajectory(patient_id=patient, environment="fake",
+                                                  text=patient, sources=[])
+        return trajectories[patient]
+
+    async def release(config, instance):
+        released.append(instance.instance_id)
+
+    async def generate(trajectory, environment, directions, runtime, *, random_seed=None):
+        assert trajectory is trajectories[trajectory.patient_id]
+        assert len(directions) == 2 and environment.name == "fake"
+        generated.append((trajectory.patient_id, random_seed))
+        return result({"questions": [{"instruction": "问题", "task_type": directions[0].task_type,
+                                      "reference_answer": "答案", "evidence": []}]})
+
+    async def evaluate(task, trajectory, environment, config):
+        return EvaluationResult(task_id=task.id, observed_state={}, status="invalid", runs=[])
+
+    for name, function in dict(create_environment=create, prepare_trajectory=prepare,
+                               release_environment=release, evaluate_task=evaluate).items():
+        monkeypatch.setattr(runner, name, function)
+    monkeypatch.setattr("methods.taskcraft.generate_tasks", generate)
+
+    config = config_for(tmp_path / "taskcraft")
+    config = config.model_copy(update={"method": "taskcraft", "evolution_patients": [],
+                                       "round_patients": []})
+    asyncio.run(runner.run_experiment(config))
+
+    assert generated == [("h1", config.random_seed)]
+    assert released == ["cache"]
+    assert (Path(config.output_dir) / "evaluation" / "tasks.json").exists()

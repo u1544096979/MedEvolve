@@ -28,9 +28,12 @@
 | `utils.py:run_llm_prompt`、`safe_json_loads` | 公共 `runtime.call_llm` + `ledger.llm` | 结构化输出替代文本 JSON 解析；`max_retries` 映射为调用点参数 `attempts`，每次尝试自行记账后才重试 |
 | `agent_tools.py:BaseAgent.capture_trajectory` | `verify._trajectory` | 按记忆步骤类型映射轨迹；原始模型响应、工具输入输出与每步计数保留在公共 `RunResult.trace` |
 | `data_processor.py:split_text_intelligently` | `stages.split_text` | 同分隔符优先级（`\n\n`、`\n`、`.`、空格、字符），无重叠 |
+| — | `scheduling.py`、`Pipeline.run`、`Pipeline.select` | 分支调度与最终两题选题；源码三个入口分别独立运行，没有编排器与选题规则，两项都不对应任何源码入口 |
 | `gen_atomic_task.py:gen_atomic_tasks`、`read_indentifier_language`、`polish_readed_context` | 无对应 | 入口由公共 `generate_tasks` 承担；文件、图片与 URL 读取不适用 |
 
-阶段顺序：原子 → 宽度 → 深度。源码三个入口是独立脚本，没有编排器；宽度先于深度执行，使单次调用的合并机制先于多跳 Agent 检索完成。
+阶段顺序：原子先生成并核验；深度与宽度随后按实验种子决定的顺序执行，两者读取同一原子池，互不消费对方输出。源码三个入口是独立脚本，没有编排器，也没有最终选题规则；分支调度与选题是公共对比实验的接入约定，不是作者行为。
+
+随机调度与选题。每患者种子为实验种子、环境名、患者标识与用途（`branch-order`、`output-selection`）的 SHA-256 稳定摘要，不使用内建 `hash()`，也不使用进程级随机状态。`["depth", "width"]` 由分支流置换；候选池在选题前固定为 atomic、depth、width 的各自生成顺序，选题流独立洗牌该列表，再按非空 `instruction` 与 `reference_answer`、`decision_point` 为 null、证据 `source_id` 在当前患者轨迹内且 `statement` 非空、以及请求的临床题型配额接纳，最多两题；不设生成来源配额，不按内置评分或公共评测结果排序。固定种子使同一候选列表与配置下的调度与选题可复现，不会让模型重新生成相同的文本。所有阶段共用 generator 总预算：原子池不足时宽度记 `insufficient_parents`，预算耗尽时后续分支记 `cumulative_budget_exhausted`，不补题；此时公共输出为 `None`，完整候选池与筛选记录仍保留在 trace 中。
 
 ## 3. 工具、输入与证据口径
 
@@ -66,7 +69,7 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 3. 宽度结果组装。源码最终映射（`gen_width_based_task.py:234-241`）引用循环外的 `golden_answers`、`original_questions`，与当前分组不一致；评分又用响应里的稳定 ID 直接索引过滤后的局部列表（`gen_width_based_task.py:252-253`）。适配按每题自身的答案、原始问题与原始索引组装，评分按稳定 ID 在已通过分解检查的集合里查找；父题索引保持模型给定的顺序与重复项，越界或缺少父题的分组按模型输出失败丢弃整次响应重试（`gen_width_based_task.py:190-200` 的异常分支），不修剪成更小的组。
 4. 宽度合并输入。源码把 `golden_answer` 一并送入合并提示词（`gen_width_based_task.py:184-188`，与注释 `without golden_answers` 不一致）。适配保持源码行为；合并结果由后续可分解性与作答检查把关。
 5. 参考答案组织。`TaskBatch` 只有单个 `reference_answer`。深度题的参考答案是源码 `solve_trajectory` 的原始最终答案（`full_results[-1]["answer"]`，即父题答案）；子问题、中间标识及其答案与 Agent 轨迹进入 `solve_trajectory` 和阶段 trace，不拼进参考答案。宽度题按每组自身的原始答案列表无损序列化（`json.dumps(..., ensure_ascii=False)`），顺序与重复项与分组一致。`Candidate.detail` 保存阶段来源：原子题为原结论、R、患者来源与清洗答案；宽度题为 `original_questions`、`golden_answers`、原始 `indexes` 与全部 `parent_types`；深度题为 `full_results`、`solve_trajectory`、辅助来源与失败尝试。
-6. 题型。源码没有题型采样。出题提示词追加题型约束，取值限于 `directions` 中的题型；扩展题继承父题题型，跨题型合并取第一父题的题型。批量输出按方向各取一题，同一方向内优先顺序为宽度、深度、原子。
+6. 题型。源码没有题型采样。出题提示词追加题型约束，取值限于 `directions` 中的题型；扩展题继承父题题型，跨题型合并取第一父题的题型。批量输出的选题规则见第 2 节：候选池顺序固定，选题流独立洗牌后按临床题型配额接纳，最多两题。
 7. 预算边界与 Agent 步数。`max_candiated_conclusions`、`max_candidate_atomic`、`judge_samples`、`question_attempts`、`query_attempts`、`merge_attempts`、`extended_attempts`、`max_hops`、`width_attempts` 以 `TaskCraftParameters` 显式给出，源码 SearchAgent 的 `max_step` 以 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10` 给出。阶段不设份额或预留轮数：共享生成预算是唯一上限，原子阶段逐个结论走到核验或预算耗尽，扩展阶段逐跳执行到 `max_hops` 或预算耗尽。
 8. Agent 步数与计数。源码 `ToolCallingAgent._run` 以 action step 计数（`max_step` 为 20，深度反向与深度核验为 10），第 1 步先规划、之后每 5 步反思；规划与反思不增加 action step，但每次都增加模型请求。适配保留该循环：`Ledger.agent(..., max_action_steps=)` 给出单次调用上限，规划与反思按 `run_search_agent` 的步骤调度执行，`usage.action_steps` 记录真实 action step 数，`verify.verify_query` 的 `agent_step_number` 取该值（不再取模型请求数）。源码 `traj_step_num()` 返回的 `self.step_number` 在终止时又递增一次，即实际 action step 数加一（达到上限时为 `max_step+1`），该串值与 `usage.step_number` 同时保留在运行结果中。
 9. 动作编码。公共单次调用入口返回结构化 JSON，无法使用 SDK 的工具调用字段；一次 action 的编码是 `{"tool_calls": [...], "final_answer": ...}`（原生协议为 `{"action": "GET …"}`）。源码 `step` 的 JSON 回退分支（agents.py:1507-1511）只支持一个 `{"name", "arguments"}` 对象，SDK 分支也只执行 `tool_calls[0]`（agents.py:1534）；适配把同一次响应里的多个工具调用依次执行、逐个计入 `tool_calls`，使台账计数与真实调用一致。
@@ -109,6 +112,7 @@ MedAgentBench 实测（同一脚本，患者 `S6534835`，同样预算）：
 | 运行目录 | `outputs/taskcraft-live-20261004-040400` |
 
 配置要求：生成预算低于该量级时，原子阶段的内置核验无法完成，输出为空批，失败原因保留在 `trace`。深度阶段按源码 `max_step=10` 限制单次检索的 action step 数，规划与反思的模型请求由累计预算承担；解题 Agent 在同类大 snapshot 患者上出现过 131k token 超过 128k 上下文，需在公共层收窄工具返回量。
+
 
 验证方式：`pytest tests/method/test_taskcraft.py`（替身运行层，覆盖阶段机制与共享边界）；`tests/method/test_taskcraft_live.py` 为可选端到端检查，配置 `MEDEVOLVE_TASKCRAFT_MANAGER`、`MEDEVOLVE_TASKCRAFT_PATIENT`、`MEDEVOLVE_TASKCRAFT_BUDGET` 后运行。
 

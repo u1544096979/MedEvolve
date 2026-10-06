@@ -11,6 +11,7 @@
 """
 
 import json
+import random
 import re
 from dataclasses import dataclass, field
 
@@ -20,6 +21,9 @@ from pydantic import BaseModel
 from . import prompts
 from .environment import NATIVE_FINISH_OBJECT, NATIVE_RULES, is_native
 from .ledger import Ledger
+from .scheduling import (
+    BRANCH_ORDER_PURPOSE, DEFAULT_SEED, OUTPUT_SELECTION_PURPOSE, derive_seed, select_candidates,
+)
 from .schemas import (
     AnswerList, BackwardContext, CleanedQuestion, ConclusionList, DecompositionReport,
     InitialQuestion, KnowledgeAnswers, MergedQuestions, NewQuery, QueryJudgement,
@@ -120,15 +124,25 @@ def _error(run) -> str | None:
 
 
 class Pipeline:
-    """单患者一次生成的阶段编排；阶段顺序为原子、宽度、深度。"""
+    """单患者一次生成的阶段编排：原子先生成并核验，扩展分支按种子顺序读取同一原子池。"""
 
     def __init__(self, trajectory: PatientTrajectory, tools: list,
-                 directions: list, parameters: TaskCraftParameters, ledger: Ledger):
+                 directions: list, parameters: TaskCraftParameters, ledger: Ledger,
+                 random_seed: int = DEFAULT_SEED):
         self.trajectory = trajectory
         self.tools = tools
         self.directions = directions
         self.parameters = parameters
         self.ledger = ledger
+        self.random_seed = random_seed
+        # 分支顺序与输出选择由同一实验种子按不同 purpose 派生，互不消费对方的流。
+        self.derived_seeds = {
+            purpose: derive_seed(random_seed, trajectory.environment, trajectory.patient_id, purpose)
+            for purpose in (BRANCH_ORDER_PURPOSE, OUTPUT_SELECTION_PURPOSE)
+        }
+        self.branch_order: list[str] = []
+        self.selection_records: list[dict] = []
+        self.selected: list[dict] = []
         self.native = is_native(tools)
         self.allowed_types = list(dict.fromkeys(direction.task_type for direction in directions))
         self.records: list[dict] = []
@@ -170,9 +184,32 @@ class Pipeline:
 
     async def run(self) -> None:
         atomic = await self.atomic()
-        width = await self.width(atomic)
-        depth = await self.depth(atomic)
-        self.pool = [*width, *depth, *atomic]
+        order = ["depth", "width"]
+        random.Random(self.derived_seeds[BRANCH_ORDER_PURPOSE]).shuffle(order)
+        self.branch_order = order
+        self.record("scheduling/branches", order=list(order),
+                    seed=self.derived_seeds[BRANCH_ORDER_PURPOSE], available=len(atomic))
+        branches = {"depth": self.depth, "width": self.width}
+        produced: dict[str, list[Candidate]] = {}
+        for name in order:
+            reason = self._branch_skip(name, atomic)
+            if reason is not None:
+                self.record(f"{name}/branch", status="skipped", reason=reason,
+                            available=len(atomic))
+                continue
+            self.record(f"{name}/branch", status="started", available=len(atomic))
+            produced[name] = await branches[name](atomic)
+            self.record(f"{name}/branch", status="completed", candidates=len(produced[name]))
+        # 候选池固定为 atomic、depth、width 的各自生成顺序，与分支执行顺序无关。
+        self.pool = [*atomic, *produced.get("depth", []), *produced.get("width", [])]
+
+    def _branch_skip(self, name: str, atomic: list[Candidate]) -> str | None:
+        """跳过的真实原因：共享预算已耗尽，或宽度缺少可合并的父题。"""
+        if self.ledger.exhausted:
+            return "cumulative_budget_exhausted"
+        if name == "width" and len(atomic) < 2:
+            return "insufficient_parents"
+        return None
 
     # ------------------------------------------------------------------ 原子生成
     async def atomic(self) -> list[Candidate]:
@@ -289,7 +326,7 @@ class Pipeline:
     # ------------------------------------------------------------------ 宽度扩展
     async def width(self, atomic: list[Candidate]) -> list[Candidate]:
         if len(atomic) < 2:
-            self.record("width/skip", reason="合并至少需要两道原子题", available=len(atomic))
+            self.record("width/skip", reason="insufficient_parents", available=len(atomic))
             return []
         source = [{"index": index, "question": item.question.instruction,
                    "content_identifier": item.locator,
@@ -692,13 +729,17 @@ class Pipeline:
 
     # ------------------------------------------------------------------ 输出选择
     def select(self) -> list[Candidate]:
-        """按请求方向各取一题；同一方向内优先顺序为宽度、深度、原子。"""
-        chosen: list[int] = []
-        for direction in self.directions:
-            for index, candidate in enumerate(self.pool):
-                if index in chosen:
-                    continue
-                if candidate.question.task_type == direction.task_type:
-                    chosen.append(index)
-                    break
-        return [self.pool[index] for index in chosen]
+        """选题流洗牌固定顺序候选池，按公共字段、患者来源与临床题型配额接纳。"""
+        self.selection_records = []
+        selected = select_candidates(self.pool, self.directions, self.source_ids,
+                                     self.derived_seeds[OUTPUT_SELECTION_PURPOSE],
+                                     records=self.selection_records)
+        positions = {id(candidate): index for index, candidate in enumerate(self.pool)}
+        self.selected = [{**_selection_identity(candidate), "index": positions[id(candidate)]}
+                         for candidate in selected]
+        return selected
+
+
+def _selection_identity(candidate: Candidate) -> dict:
+    return {"origin": candidate.origin, "task_type": candidate.question.task_type,
+            "instruction": candidate.question.instruction, "locator": candidate.locator}

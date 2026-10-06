@@ -14,9 +14,11 @@ from methods.common import GenerationBudget
 from .environment import READ_ONLY_TOOLS, bind_generation_tools, read_only_tools
 from .ledger import Ledger
 from .prompts import AUTHOR_COMMIT
+from .scheduling import DEFAULT_SEED
 from .stages import Pipeline, TaskCraftParameters
 
-__all__ = ["READ_ONLY_TOOLS", "TaskCraftParameters", "generate_tasks", "read_only_tools"]
+__all__ = ["READ_ONLY_TOOLS", "TaskCraftParameters", "bind_generator", "generate_tasks",
+           "read_only_tools"]
 
 
 def _with_pipeline(result: RunResult, pipeline: Pipeline, parameters: TaskCraftParameters,
@@ -26,14 +28,28 @@ def _with_pipeline(result: RunResult, pipeline: Pipeline, parameters: TaskCraftP
         "author_commit": AUTHOR_COMMIT,
         "parameters": parameters.model_dump(mode="json"),
         "directions": [direction.model_dump(mode="json") for direction in directions],
-        "pool": [{"origin": candidate.origin, "task_type": candidate.question.task_type,
-                  "instruction": candidate.question.instruction, "parents": candidate.parents,
+        "experiment_seed": pipeline.random_seed,
+        "derived_seeds": pipeline.derived_seeds,
+        "branch_order": pipeline.branch_order,
+        "pool": [{"origin": candidate.origin, "parents": candidate.parents,
                   "locator": candidate.locator,
-                  "evidence": [item.source_id for item in candidate.question.evidence]}
+                  "question": candidate.question.model_dump(mode="json"),
+                  "detail": candidate.detail}
                  for candidate in pipeline.pool],
+        "selection": {"filtering": pipeline.selection_records,
+                      "selected": pipeline.selected},
         "records": pipeline.records,
     }
     return result.model_copy(update={"trace": [*result.trace, entry]})
+
+
+def bind_generator(random_seed: int):
+    """把实验种子绑定到公共四参数入口；``RuntimeConfig`` 不承载方法私有字段。"""
+    async def bound(trajectory: PatientTrajectory, environment: EnvironmentConfig,
+                    directions: list[GenerationDirection], runtime: RuntimeConfig) -> RunResult:
+        return await generate_tasks(trajectory, environment, directions, runtime,
+                                    random_seed=random_seed)
+    return bound
 
 
 async def generate_tasks(
@@ -43,19 +59,29 @@ async def generate_tasks(
     runtime: RuntimeConfig,
     *,
     parameters: TaskCraftParameters | None = None,
+    random_seed: int = DEFAULT_SEED,
 ) -> RunResult:
-    """按 common/SPEC.md 的 generate_tasks 契约生成任务；阶段规模由 parameters 显式配置。"""
+    """按 common/SPEC.md 的 generate_tasks 契约生成任务；阶段规模由 parameters 显式配置。
+
+    公共调用保持四个位置参数；``random_seed`` 是实验入口绑定的可选关键字。
+    """
     if len(directions) != 2:
         raise ValueError("directions must contain exactly two generation positions")
     settings = parameters or TaskCraftParameters()
     budget = GenerationBudget(runtime)
     ledger = Ledger(budget)
+    pipeline = Pipeline(trajectory, [], directions, settings, ledger, random_seed)
+    if trajectory.environment != environment.name:
+        result = budget.finish(
+            directions, status="failed",
+            error=(f"Trajectory environment {trajectory.environment!r} does not match "
+                   f"the experiment environment {environment.name!r}"))
+        return _with_pipeline(result, pipeline, settings, directions)
     instance = None
-    pipeline = Pipeline(trajectory, [], directions, settings, ledger)
     try:
         instance = await create_environment(environment)
         tools = bind_generation_tools(await get_tools(instance, [trajectory.patient_id]))
-        pipeline = Pipeline(trajectory, tools, directions, settings, ledger)
+        pipeline = Pipeline(trajectory, tools, directions, settings, ledger, random_seed)
         await pipeline.run()
         if ledger.exhausted:
             result = budget.finish(directions, status="budget_exhausted",
