@@ -208,6 +208,14 @@ async def read_state(instance: EnvironmentInstance, task: Task) -> JsonObject:
     if task.environment != instance.environment:
         raise ValueError("Task environment does not match the instance")
     _check_decision_point(task.decision_point)
+    if instance.environment == "FHIR-AgentBench":
+        # 只读环境没有写后状态：完成判断依据 solver 检索 trace、答案与原始证据。
+        # 因此既不读全量病历，也不套用 PhysicianBench 的可写资源筛选。
+        return {
+            "patient_id": task.patient_id,
+            "environment": instance.environment,
+            "operation_semantics": {"read_only": True},
+        }
     client = FHIRClient(instance.endpoint, [task.patient_id])
     if instance.environment == "MedAgentBench":
         resources = await _snapshot(client, task.patient_id)

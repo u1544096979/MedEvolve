@@ -83,6 +83,9 @@ class ModelConfig(BaseModel):
     api_key_env: str
     instructions_role: Literal["system", "user"] = "system"
     parallel_tool_calls: bool = True
+    # 提供方声明的模型上限；只用于记录运行预算，未设置时不改动请求参数。
+    context_window: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
 
 
 class Budget(BaseModel):

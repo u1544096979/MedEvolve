@@ -1,0 +1,179 @@
+{
+  "run_id": "fhir-agentbench-flash",
+  "method": "medevolve",
+  "environment": {
+    "name": "FHIR-AgentBench",
+    "manager_url": "http://127.0.0.1:18086",
+    "seed_data": "/Users/guagua/data/mimic-iv-fhir-demo/2.1.0/seed"
+  },
+  "runtime": {
+    "models": {
+      "data_explorer": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true,
+        "context_window": 1048576,
+        "max_output_tokens": 65536
+      },
+      "environment_explorer": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true,
+        "context_window": 1048576,
+        "max_output_tokens": 65536
+      },
+      "generator": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true,
+        "context_window": 1048576,
+        "max_output_tokens": 65536
+      },
+      "feedback": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true,
+        "context_window": 1048576,
+        "max_output_tokens": 65536
+      },
+      "updater": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true,
+        "context_window": 1048576,
+        "max_output_tokens": 65536
+      }
+    },
+    "budgets": {
+      "data_explorer": {
+        "max_model_turns": 30,
+        "max_tool_calls": 200
+      },
+      "environment_explorer": {
+        "max_model_turns": 30,
+        "max_tool_calls": 200
+      },
+      "generator": {
+        "max_model_turns": 1,
+        "max_tool_calls": 0
+      }
+    }
+  },
+  "evaluation": {
+    "runtime": {
+      "models": {
+        "verifier": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true,
+          "context_window": 1048576,
+          "max_output_tokens": 65536
+        },
+        "quality": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true,
+          "context_window": 1048576,
+          "max_output_tokens": 65536
+        },
+        "solver": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true,
+          "context_window": 1048576,
+          "max_output_tokens": 65536
+        },
+        "completion": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true,
+          "context_window": 1048576,
+          "max_output_tokens": 65536
+        }
+      },
+      "budgets": {
+        "verifier": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "quality": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "solver": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "completion": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        }
+      }
+    }
+  },
+  "evolution_patients": [
+    "e232ee4d-3042-51c6-b730-a79eb8579d42",
+    "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0"
+  ],
+  "evaluation_patients": [
+    "42f0ed8f-d744-5edb-a05d-8e011c1fbd64"
+  ],
+  "round_patients": [
+    [
+      "e232ee4d-3042-51c6-b730-a79eb8579d42"
+    ],
+    [
+      "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0"
+    ]
+  ],
+  "initial_strategy": {
+    "generation_guidance": "依据患者纵向轨迹生成具有明确临床价值、依赖多条记录整合的医疗任务。每题明确作答要求，使用轨迹里实际存在的来源 ID 提供证据，给出有依据的参考答案。两题关注不同临床问题。难度来自跨就诊、跨时间的信息整合及合理临床判断，不来自歧义、缺失信息或环境故障。解题只使用两个原生检索工具，环境只读，不要求开立或修改资源；决策点为 null。",
+    "allocation": [
+      {
+        "task_type": "诊断与解释",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "检查与风险分层",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗规划",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "药物处方",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗重规划",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      }
+    ]
+  },
+  "random_seed": 42,
+  "output_dir": "outputs/fhir-agentbench-flash"
+}
