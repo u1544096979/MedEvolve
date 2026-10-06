@@ -166,6 +166,10 @@ async def get_tools(
 ) -> list[Tool]:
     _check_environment(instance.environment)
     _check_decision_point(decision_point)
+    if instance.environment == "FHIR-AgentBench":
+        from .fhir_agentbench import get_native_tools
+
+        return get_native_tools(instance, patient_ids)
     if instance.environment == "MedAgentBench":
         return NativeTools(instance.endpoint, patient_ids, load_functions())
     client = FHIRClient(instance.endpoint, patient_ids)
@@ -234,6 +238,10 @@ async def read_evidence(
     instance: EnvironmentInstance, patient_id: str, source_id: str
 ) -> JsonObject:
     _check_environment(instance.environment)
+    if instance.environment == "FHIR-AgentBench":
+        from .fhir_agentbench import read_source
+
+        return await read_source(instance, patient_id, source_id)
     client = FHIRClient(instance.endpoint, [patient_id])
     if instance.environment == "MedAgentBench":
         parts = source_id.split("/")
@@ -252,6 +260,10 @@ async def release_environment(
 ) -> None:
     if config.name != instance.environment:
         raise ValueError("Configuration environment does not match the instance")
+    if config.name == "FHIR-AgentBench":
+        from .fhir_agentbench import forget_instance
+
+        forget_instance(instance.instance_id)
     # 双容器实例要依次回收两个容器、数据库卷与私有网络。
     timeout = 180 if config.name == "FHIR-AgentBench" else 90
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
