@@ -18,6 +18,7 @@ from environments import (
     release_environment,
 )
 from environments.errors import PatientAccessError, UnsupportedDecisionPoint
+from environments.fhir import FHIRClient
 from environments.fhir_agentbench import (
     SUPPORTED_TYPES,
     get_native_tools,
@@ -128,6 +129,15 @@ def bundle(resources, next_url=None):
     return result
 
 
+def partial_bundle(resources, total):
+    """服务端声明 total 条匹配，却提前结束分页且不给 next 链接的 Bundle。"""
+    return {
+        "resourceType": "Bundle",
+        "total": total,
+        "entry": [{"resource": r} for r in resources],
+    }
+
+
 def owner(resource):
     return resource.get("subject", {}).get("reference")
 
@@ -218,6 +228,16 @@ async def invoke(tools, name, **params):
     )
     result = await tool.on_invoke_tool(context, arguments)
     return json.loads(result) if isinstance(result, str) else result
+
+
+async def invoke_raw(tools, name, **params):
+    """返回工具原始返回值，用于钉住字符串契约。"""
+    tool = next(t for t in tools if t.name == name)
+    arguments = json.dumps(params)
+    context = ToolContext(
+        context=None, tool_name=name, tool_call_id="test", tool_arguments=arguments
+    )
+    return await tool.on_invoke_tool(context, arguments)
 
 
 def paths(fake):
@@ -447,6 +467,69 @@ async def test_failing_second_page_yields_no_partial_result(fake):
             resource_type="Observation",
             patient_fhir_id="a",
         )
+
+
+@pytest.mark.asyncio
+async def test_search_all_rejects_a_total_it_did_not_deliver(fake):
+    store = fake.store_for("instance-one")
+    fake.override = lambda request: httpx.Response(
+        200,
+        json=partial_bundle([store["Observation/o1"], store["Observation/o2"]], 3),
+    )
+    client = FHIRClient(instance().endpoint, ["a"])
+    with pytest.raises(ValueError, match="total=3"):
+        await client.search_all("Observation", {"_count": 200, "patient": "a"}, {"a"})
+
+
+@pytest.mark.asyncio
+async def test_tool_refuses_a_bundle_that_delivers_fewer_records_than_its_total(fake):
+    store = fake.store_for("instance-one")
+    fake.override = lambda request: httpx.Response(
+        200,
+        json=partial_bundle([store["Observation/o1"], store["Observation/o2"]], 3),
+    )
+    tools = get_native_tools(instance(), ["a"])
+    with pytest.raises(ValueError, match="total=3"):
+        await invoke(
+            tools,
+            "get_resources_by_patient_fhir_id",
+            resource_type="Observation",
+            patient_fhir_id="a",
+        )
+
+
+@pytest.mark.asyncio
+async def test_tool_output_is_json_text_and_keeps_non_ascii_records(fake):
+    fake.override = lambda request: httpx.Response(
+        200,
+        json=bundle(
+            [
+                record(
+                    "Observation",
+                    "o-cn",
+                    subject={"reference": "Patient/a"},
+                    code={"text": "体温"},
+                    valueString="36.5 摄氏度",
+                )
+            ]
+        ),
+    )
+    tools = get_native_tools(instance(), ["a"])
+    raw = await invoke_raw(
+        tools,
+        "get_resources_by_patient_fhir_id",
+        resource_type="Observation",
+        patient_fhir_id="a",
+    )
+    assert isinstance(raw, str)
+    assert "体温" in raw
+    assert "36.5 摄氏度" in raw
+    assert "\\u" not in raw
+    decoded = json.loads(raw)
+    assert list(decoded) == ["Observation"]
+    assert decoded["Observation"][0]["code"]["text"] == "体温"
+    assert decoded["Observation"][0]["valueString"] == "36.5 摄氏度"
+    assert all("text" not in r and "meta" not in r for r in decoded["Observation"])
 
 
 def test_tool_names_descriptions_and_schemas_match_official(fake):

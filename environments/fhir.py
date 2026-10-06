@@ -238,10 +238,18 @@ class FHIRClient:
 
         本方法不补写 patient/subject，也不限制页数：分页一直跟随服务端 next 链接，
         链接离开当前实例时由 _collect 报错。逐条记录按 selected 核对患者范围。
+        服务端给出 Bundle.total 时，收到的记录数必须与之一致；否则说明服务端提前
+        结束分页，子集不能当成完整结果返回。
         """
         if params.get("_count", 1) < 1:
             raise ValueError("count must be positive")
         result = await self._collect(resource_type, dict(params), None, selected)
+        total = result["total"]
+        if total is not None and total != len(result["entries"]):
+            raise ValueError(
+                f"FHIR server reported total={total} for {resource_type} "
+                f"but returned {len(result['entries'])} records"
+            )
         return result["entries"]
 
     async def _collect(
