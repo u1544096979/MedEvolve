@@ -11,12 +11,13 @@
 ## 全局约束
 
 - 依据 [实验设计](design.md)。合成任务不另切测试集；固定轮次后取最终经验状态，原生 Benchmark 不参与版本选择。
+- 六种方法在两环境产出足量核验通过任务之前，只完成实现与组件验收；实现使用夹具数据，不等待真实任务集，正式运行以冻结任务集齐备为前置。
 - 四个基座全部纳入实施，不增加单独的“两组任务试点”实验。组件级验收仍须证明隔离、经验更新和冻结测试正确。
 - 不使用电脑上个人 OpenClaw、Hermes 的配置、技能、记忆、历史、登录缓存或服务端口。运行、暂停及清理只作用于本实验资源。
 - 同一来源的冻结任务集供四个基座共用；每个基座的初始状态在不同来源之间保持一致。保留原生执行循环，不用公共固定解题器替代四者。
 - 同组内任务按固定顺序进化，医疗数据每次尝试重置；最终测试每题从同一只读经验快照启动新会话。
 - API 模型权重固定；执行和辅助模型显式指定，关闭备用模型。所有前台、反思与后台学习请求纳入预算和用量。
-- 首版调度串行，每次仅保留一个活动 Agent 容器和一个解题医疗实例；评审所需数据实例顺序使用。二十四种组合是独立实验状态，不要求二十四个容器同时在线。
+- 首版调度串行，每次仅保留一个活动 Agent 容器和一个解题医疗实例；评审所需数据实例顺序使用。每环境 24 个进化组与 4 个基线，两环境共 48 个进化组与 8 个基线，均为独立实验状态，不要求同时在线。正式运行固定种子 42、重复次数 1。
 - 不依赖尚未实施的环境并发／共享租约方案，不修改其文件和接口。未来兼容变化集中在医疗工具桥中。
 - 当前实际名称为 SelfRefine，配置键仍为 `selfgen`，以 `docs/comparison-experiments/baselines/selfgen/SPEC.md` 为准。
 - 模型测试使用替代 API，不产生付费调用。真实联调只使用已授权的 DeepSeek V4.1 Flash 或 gpt-4o-mini，正式实验预算在执行前冻结。
@@ -31,9 +32,10 @@
 | `harnesses/adapters/{openclaw,hermes,ace,reflexion}.py`、`harnesses/workers/`、`docker/harnesses/` | 四个基座的启动、原生执行、学习、经验导出 |
 | `evaluation/evaluator.py`、`harnesses/feedback.py` | 提取已有完成评价，评价实际 Harness 执行轨迹 |
 | `harnesses/benchmarks/{common,physicianbench,medagentbench}.py` | 官方任务导入、原生判定与动作记录转换 |
+| `tests/harness/conftest.py` | 隔离、工具桥、适配器与矩阵测试的共享夹具 |
 | `experiments/harness_run.py`、`experiments/harness_runner.py`、`experiments/harness_summary.py` | 实验调度、产物与统计 |
 
-全部新增 Python 目录包含 `__init__.py`。`pyproject.toml` 的包发现增加 `harnesses*`，四个基座依赖放在各自镜像内，不合并进 MedEvolve 主环境。
+全部新增 Python 目录包含 `__init__.py`。`pyproject.toml` 的包发现增加 `harnesses*`，四个基座依赖放在各自镜像内，不合并进 MedEvolve 主环境。测试沿用仓库现有写法：异步测试标注 `@pytest.mark.asyncio`，需要真实资源的测试标注 `@pytest.mark.skipif` 并读取环境变量门控，不新增 pytest 配置或自定义标记。
 
 ## 任务 1：冻结输入、上游版本和公共契约
 
@@ -135,14 +137,14 @@ def test_task_sampling_is_shared_across_harnesses(tmp_path, source_files):
 
 ## 任务 2：Agent 隔离、医疗工具桥和完成反馈
 
-**文件：** 新增 `harnesses/isolation.py`、`harnesses/medical_bridge.py`、`harnesses/model_gateway.py`、`harnesses/feedback.py`、`tests/harness/test_isolation.py`、`tests/harness/test_medical_bridge.py`、`tests/harness/test_model_gateway.py`、`tests/harness/test_feedback.py`；修改 `evaluation/evaluator.py` 并扩展其原有测试。
+**文件：** 新增 `harnesses/isolation.py`、`harnesses/medical_bridge.py`、`harnesses/model_gateway.py`、`harnesses/feedback.py`、`tests/harness/conftest.py`、`tests/harness/test_isolation.py`、`tests/harness/test_medical_bridge.py`、`tests/harness/test_model_gateway.py`、`tests/harness/test_feedback.py`；修改 `evaluation/evaluator.py` 并扩展其原有测试。
 
 ### 2.1 固定两层隔离
 
 - [ ] 每组从基座初始快照复制独立状态卷，创建独立容器、工作目录和会话。首次实验初始状态包含相同的基座随附资源与医疗工具说明，不包含个人资料或已经学习的医疗经验。
 - [ ] OpenClaw 在容器内使用 `OPENCLAW_STATE_DIR=/state/openclaw`、`OPENCLAW_CONFIG_PATH=/state/openclaw/openclaw.json`；Hermes 使用 `HERMES_HOME=/state/hermes`。ACE、Reflexion 状态分别位于 `/state/ace`、`/state/reflexion`。这些是容器子进程配置，不修改宿主机的 HOME 或个人目录。
 - [ ] Agent 容器不挂载宿主机个人目录、项目数据集、医疗数据库或 Docker socket。网络仅连公共工具桥和模型网关；医疗 FHIR 地址仅工具桥可见，不给 Agent 直接绕过患者边界访问数据库的路径。
-- [ ] 每次 `execute()` 前调用既有 `create_environment()`，执行后读取状态并在 `finally` 释放；Reflexion 每次重试同样新建医疗实例。状态卷保留学习结果，环境实例不保留前题写入。
+- [ ] 每次 `execute()` 前调用既有 `create_environment()`；执行后保留当前实例并读取状态，完成训练评审或原生 Benchmark 评分后，在调度器的 `finally` 中关闭工具会话并释放实例。Reflexion 每次重试同样新建医疗实例。状态卷保留学习结果，环境实例不保留前题写入。
 - [ ] 测试容器将经验文件以只读方式投影到基座预期位置；会话、缓存、日志使用新的可写临时目录。每题从同一快照重新开始，禁止将整个状态目录只读挂载后误伤正常日志写入。
 
 容器操作使用 `asyncio.create_subprocess_exec` 参数数组，容器及卷带本运行 ID 标签；清理按记录的具体 ID 执行，不使用全局 prune。
@@ -163,7 +165,7 @@ async def close_tool_session(session_id: str) -> dict: ...
 
 - [ ] PhysicianBench 复用 `get_tools()` 返回的名称、参数 schema 和原生执行函数，调用前继续执行现有患者限制。每次调用记录 `tool_start/tool_output`、顺序、耗时和写入状态，预算在桥端扣减。
 - [ ] MedAgentBench 暴露 `medical_action(action: str)`，内部调用 `NativeTools.execute()`，保留 GET、POST、FINISH 原生文本与答案列表。POST 仍是接受但不持久化，不替换成 PhysicianBench 的写入工具；工具包装属于交互适配，在 manifest 标明。
-- [ ] 会话关闭时，先保存任务需要的 `read_state()` 结果与动作记录，再释放实例。超时、取消、启动失败和重复关闭均不遗留本运行资源。
+- [ ] 正常流程在训练评审或原生 Benchmark 评分结束后关闭工具会话；关闭时先保存任务需要的 `read_state()` 结果与动作记录，再释放实例。超时、取消、启动失败和重复关闭均不遗留本运行资源。
 
 ### 2.3 所有模型调用的预算与记录
 
@@ -201,6 +203,9 @@ async def make_training_feedback(
 先写用替代容器与 FHIR 服务的失败测试，再实现以上接口。夹具验证：
 
 ```python
+import pytest
+
+@pytest.mark.asyncio
 async def test_database_is_reset_but_group_memory_survives(rig):
     rig.group_state.write_text("查询前确认患者ID")
     first = await rig.open_session(patient="p1")
@@ -263,6 +268,7 @@ async def test_database_is_reset_but_group_memory_survives(rig):
 import pytest
 from contracts import SolverInput
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["openclaw", "hermes", "ace", "reflexion"])
 async def test_frozen_adapter_reads_without_learning(
     name, adapter_factory, clean_snapshot, group_factory, bridge
@@ -313,14 +319,14 @@ async def score_case(
 ) -> NativeScore: ...
 ```
 
-- [ ] 根据各环境官方任务文件导入 instruction、context、患者映射与任务 ID，必要背景拼入解题题面；原生参考解答和评分参数只留在评审进程。固定官方测试划分、任务 ID 顺序和数据哈希。
-- [ ] PhysicianBench 沿当前工具来源提交 `c7efa8fd5b1e4744ada50668efe4b7e84023cbb0` 核对任务与官方评分入口；工具来源不等于完整 Benchmark 已可用，预检独立检查任务、种子、参考评分器和许可证。
+- [ ] 按各环境官方任务导入 instruction、context、患者映射与任务 ID，必要背景拼入解题题面；原生参考解答和评分参数只留在评审进程。PhysicianBench 的患者映射位于每题 `tests/test_outputs.py`，导入时从测试源码解析并记入用例清单。固定官方任务 ID 顺序与数据哈希；PhysicianBench 使用官方 `tasks/v1` 全量任务，不声称存在官方测试划分。
+- [ ] PhysicianBench 沿当前工具来源提交 `c7efa8fd5b1e4744ada50668efe4b7e84023cbb0` 核对任务与官方评分入口；工具来源不等于完整 Benchmark 已可用，预检独立检查任务、种子、参考评分器和许可证。官方判定内的 LLM judge 通过模型网关转发，`LLM_JUDGE_BACKEND`、`LLM_JUDGE_MODEL` 与 base_url 显式指定为已授权模型，判定调用计入 Benchmark 预算；更换 judge 模型后分数只用于本实验内部比较。
 - [ ] MedAgentBench 固定提交 `99260117137b09f04837a8c18d18a1107efa55ae`，复用 `src/server/tasks/medagentbench/eval.py` 的 `eval(case_data, results, fhir_api_base)` 和对应官方 `refsol.py`。源码文档要求另行获取的参考函数必须实际存在才允许正式运行。
 - [ ] 缺数据、缺官方评分器或无法映射所需患者时，报 `benchmark_unavailable` 并停止该环境正式实验；不能改用模型判分冒充原生 Benchmark。
 
 ### 4.2 原生判定
 
-- [ ] PhysicianBench 判定所需写入状态在当前执行实例上读取；MedAgentBench `results` 按官方格式从 GET、POST、FINISH 记录构造，保留模拟提交语义。评分器运行结束后释放当前实例，不能在重置后评分。
+- [ ] PhysicianBench 判定按官方 pytest 入口执行，向评分进程注入 `JOB_DIR` 与指向当前实例的 `FHIR_BASE_URL`，并为每题产出官方目录结构与 `trajectory.log`；判定所需写入状态在同一个执行实例上读取。MedAgentBench `results` 按官方格式从 GET、POST、FINISH 记录构造，保留模拟提交语义。评分器运行结束后释放当前实例，不能在重置后评分。
 - [ ] 保存原生判定输入、原始判定输出和评分器版本。评分发生在 Agent 退出之后，结果不回传、不存入经验卷；Benchmark 不调用 `make_training_feedback()`。
 - [ ] 单题运行故障按官方协议进入统计，并单列故障类别；评分器本身故障单列为 `scoring_error`，不能把异常误当普通未完成成绩发布。
 
@@ -329,6 +335,9 @@ async def score_case(
 先以官方公开样例及可验证的人工动作夹具验证正确／错误答案和正确／错误提交。测试片段：
 
 ```python
+import pytest
+
+@pytest.mark.asyncio
 async def test_medagent_score_uses_native_submissions(
     benchmark_rig, native_case, good_run, bad_run
 ):
@@ -369,7 +378,7 @@ async def run_harness_experiment(config_path: str) -> None: ...
 ### 5.2 汇总
 
 - [ ] 按环境、基座、任务来源、重复种子输出 baseline 成绩、最终成绩、绝对提升；成功率差值使用百分点。另保存每题通过状态和原生分母，禁止只统计成功或正常返回的任务。
-- [ ] 聚合重复均值和标准差，按相同患者进行配对 bootstrap 得到提升的 95% 区间；无患者分组的任务按任务 ID 配对。重采样种子固定为 42，重复 1000 次；样本不足两组时区间留空并说明原因。
+- [ ] 重复次数为 1，报告单次数值，不虚构重复均值和标准差；按相同患者进行配对 bootstrap 得到提升的 95% 区间，无患者分组的任务按任务 ID 配对。重采样种子固定为 42，重复 1000 次；样本不足两组时区间留空并说明原因。
 - [ ] 保留任务质量、有效产量、实际训练量、经验更新与未触发次数、失败类别。生成成本从输入产物读取并单列，不因为同一数据被四基座复用而重复声称生成四次。
 - [ ] 执行、学习、完成评审、Benchmark 推理分阶段报告调用、输入／输出 token 与金额；缺价格或 usage 分别标识未知，不能用零补齐。无需新增图表、页面或独立报告系统。
 
@@ -378,8 +387,12 @@ async def run_harness_experiment(config_path: str) -> None: ...
 先写替代四基座、替代医疗实例和原生评分器的完整流程测试：
 
 ```python
-async def test_all_groups_start_clean_and_test_without_feedback(matrix_rig):
-    await matrix_rig.run(methods=6, harnesses=4, seeds=[42])
+import pytest
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("environment", ["PhysicianBench", "MedAgentBench"])
+async def test_all_groups_start_clean_and_test_without_feedback(matrix_rig, environment):
+    await matrix_rig.run(environment=environment, methods=6, harnesses=4, seeds=[42])
     assert len(matrix_rig.training_groups) == 24
     assert len(matrix_rig.baselines) == 4
     assert len(set(matrix_rig.state_paths)) == 24
@@ -390,23 +403,23 @@ async def test_all_groups_start_clean_and_test_without_feedback(matrix_rig):
     assert matrix_rig.active_containers == 0
 ```
 
-另测每题会话重置、环境重置、快照只读、超时清理、任务数量不足阻断、baseline 与进化结果配对、故障进入分母及成本未知情况。运行：
+另测每题会话重置、环境重置、快照只读、超时清理、任务数量不足阻断、baseline 与进化结果配对、故障进入分母及成本未知情况；并测两环境合计 48 个进化组与 8 个基线。运行：
 
 ```bash
-python -m pytest tests/harness -q -m 'not live'
-python -m pytest tests/evaluation tests/environment tests/experiment tests/integration -q -m 'not live'
+python -m pytest tests/harness -q
+python -m pytest tests/evaluation tests/environment tests/experiment tests/integration -q
 python -m experiments.harness_run --config configs/harness-evolution.json --check
 ```
 
 `--check` 只验证数据、镜像、版本、预算和评分器，不创建付费模型请求；调用 Docker inspect 可核对已有资源，不自动拉取环境镜像。
 
-真实接入验收针对四个基座分别完成工具调用、原生学习状态、保存重载与冻结执行；用公开或人工可核对任务验证机制，不将这些验收样例作为额外对比实验或正式收益证据。直接调用命令为：
+真实接入验收针对四个基座分别完成工具调用、原生学习状态、保存重载与冻结执行；用公开或人工可核对任务验证机制，不将这些验收样例作为额外对比实验或正式收益证据。直接调用命令为（live 测试默认按环境变量跳过，与现有 `tests/environment/test_*_live.py` 一致）：
 
 ```bash
 MEDEVOLVE_HARNESS_LIVE=1 python -m pytest tests/harness/test_live_harnesses.py -q
 ```
 
-仅在镜像、官方数据、授权模型和明确的验收预算齐备时运行；缺项返回未验证及具体原因。验收后按冻结正式配置运行二十四组组合及四个基线，每个环境和重复种子分别执行。真实结果不通过时定位所在基座和失败机制，不扩大任务或模型范围。
+仅在镜像、官方数据、授权模型和明确的验收预算齐备时运行；缺项返回未验证及具体原因。验收后按冻结正式配置运行四十八组组合及八个基线（每环境 24 组 + 4 基线），固定种子 42、重复次数 1。真实结果不通过时定位所在基座和失败机制，不扩大任务或模型范围。
 
 ### 5.4 提交与交付
 
