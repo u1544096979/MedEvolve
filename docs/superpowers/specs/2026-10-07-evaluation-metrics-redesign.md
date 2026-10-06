@@ -342,42 +342,42 @@ for judge in difficulty_judges:  # 每个裁判一次 DifficultyJudgment
 
 #### 4.1 summary.py新增函数
 
-输入为 evaluations.json 记录（dict）；缺少四个维度数值分数或难度字段的旧记录会被跳过。
+输入为 evaluations.json 记录（dict）。实现中会跳过结构早于数值评分的旧记录，以及缺少四个维度数值分数或难度字段的记录。
 
 ```python
 def summarize_quality(evaluations: list[dict]) -> dict:
     """汇总质量评分分布"""
-    valid_evals = [e for e in evaluations if e.quality is not None]
-    if not valid_evals:
+    reviews = [e["quality"] for e in evaluations if e.get("quality")]
+    if not reviews:
         return {}
-    
+
     dimensions = {}
     for dim_name in ["factual_accuracy", "clinical_soundness",
                      "evidence_sufficiency", "task_clarity"]:
-        scores = [getattr(e.quality, dim_name).score for e in valid_evals]
+        scores = [review[dim_name]["score"] for review in reviews]
         dimensions[dim_name] = {
             "mean": float(statistics.mean(scores)),
             "median": float(statistics.median(scores)),
-            "distribution": dict(Counter(scores)),  # {1: count, 2: count, ...}
+            "distribution": {str(score): count for score, count in sorted(Counter(scores).items())},
             "high_quality_rate": sum(s >= 4 for s in scores) / len(scores),
         }
-    
+
     return dimensions
 
 def summarize_difficulty(evaluations: list[dict]) -> dict:
     """汇总难度分布"""
-    valid_evals = [e for e in evaluations if e.difficulty is not None]
-    if not valid_evals:
+    scores = [e["difficulty"] for e in evaluations if e.get("difficulty")]
+    if not scores:
         return {}
-    
-    depths = [e.difficulty.reasoning_depth for e in valid_evals]
-    evidence_counts = [e.difficulty.complexity_metrics.evidence_count for e in valid_evals]
-    resource_counts = [e.difficulty.complexity_metrics.resource_type_count for e in valid_evals]
-    
+
+    depths = [score["reasoning_depth"] for score in scores]
+    evidence_counts = [score["complexity_metrics"]["evidence_count"] for score in scores]
+    resource_counts = [score["complexity_metrics"]["resource_type_count"] for score in scores]
+
     return {
         "reasoning_depth": {
             "mean": float(statistics.mean(depths)),
-            "distribution": dict(Counter(depths)),  # {1: count, 2: count, ...}
+            "distribution": {str(depth): count for depth, count in sorted(Counter(depths).items())},
         },
         "complexity_metrics": {
             "avg_evidence_count": float(statistics.mean(evidence_counts)),

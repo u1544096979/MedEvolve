@@ -940,3 +940,11 @@ body 说明：质量维度改名后旧提示词引用的维度已不存在，反
 **类型一致性：** `QualityJudgment`（裁判输出）/ `QualityReview`（聚合）与 `DifficultyJudgment` / `DifficultyScore` 的区分在 Task 1、3、4 中一致；`_compute_complexity`、`_aggregate_quality_scores`、`_aggregate_difficulty_scores` 的签名在 Task 3 定义并在该任务内使用；Task 4 读取的键名（`quality`、`difficulty`、`reasoning_depth`、`complexity_metrics`）与 Task 3 写出的字段一致。
 
 **已知取舍：** 汇总函数接收 `evaluations.json` 记录（dict），不是设计文档 4.1 注解里的 `EvaluationResult` 对象 —— 沿用该模块既有的按文件读取方式；`time_span_days` 不进汇总输出，按设计文档 4.2 的字段清单执行。
+
+## 执行结果
+
+五个任务与前后的文档同步提交全部落地，实现以代码为准：`contracts.py`、`evaluation/prompts.py`、`evaluation/evaluator.py`、`experiments/summary.py`、`configs/*.json`、`methods/medevolve/prompts.py`。
+
+终审后的修复轮在计划之外追加了四项内容：`summarize_run` 兼容旧结构的评测记录、裁判 reason 非空校验、平铺 `effectivePeriod` 等 period 字段的回归用例、汇总数值统一为浮点并跳过旧记录。
+
+最终测试：`PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q` → `214 passed, 3 skipped`。六个方法在评测患者上的全量重跑未在本次范围内执行。
