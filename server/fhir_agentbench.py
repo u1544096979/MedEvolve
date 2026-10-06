@@ -9,6 +9,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import re
 import secrets
 import time
@@ -40,14 +41,31 @@ INSTANCE_LABEL = "medevolve.instance"
 DATABASE_USER = "medevolve"
 DATABASE_NAME = "medevolve"
 DATABASE_PORT = "5432"
+HAPI_CONTAINER_PORT = "8080/tcp"
+
+# 内存预算只有一份来源：准备期（scripts/fhir_agentbench_data.py）与运行期共用下面的默认值
+# 与同名环境变量。两边各写一份时准备期可以被改小而运行期不变，design.md 的 4 GB 预算
+# 就没有任何一处保证。
 HAPI_MEMORY = "3g"
 POSTGRES_MEMORY = "1g"
-HAPI_CONTAINER_PORT = "8080/tcp"
+HAPI_MEMORY_ENV = "MEDEVOLVE_FHIR_HAPI_MEMORY"
+POSTGRES_MEMORY_ENV = "MEDEVOLVE_FHIR_PG_MEMORY"
 
 STARTUP_TIMEOUT = 300.0
 RESTORE_TIMEOUT = 1800.0
 READY_POLL_INTERVAL = 2.0
 HTTP_TIMEOUT = 60.0
+
+# 相位等待之外的固定开销上限：两次镜像校验、卷与网络创建、两次容器启动、一次宿主端口读取，
+# 以及两个等待循环在 deadline 判定之后各多跑的一轮。
+CREATE_FIXED_OVERHEAD_SECONDS = 300.0
+
+# 一次创建的真实最坏路径 = 数据库就绪等待 + 种子恢复 + HAPI 就绪等待 + 上面的固定开销。
+# 客户端等待上限必须严格大于它：客户端先放弃时管理器仍可能创建成功，实例 id 没有任何
+# 一方收到，容器、卷与网络会成为只能人工按 id 回收的孤儿。
+WORST_CASE_CREATE_SECONDS = (
+    STARTUP_TIMEOUT + RESTORE_TIMEOUT + STARTUP_TIMEOUT + CREATE_FIXED_OVERHEAD_SECONDS
+)
 
 HAPI_ENVIRONMENT = (
     "SPRING_DATASOURCE_DRIVERCLASSNAME=org.postgresql.Driver",
@@ -74,6 +92,18 @@ MANIFEST_FIELDS = (
 
 IMAGE_PATTERN = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def hapi_memory_limit() -> str:
+    """HAPI 容器内存上限；准备期与运行期读同一份默认值与同名环境变量。"""
+
+    return os.environ.get(HAPI_MEMORY_ENV, HAPI_MEMORY)
+
+
+def postgres_memory_limit() -> str:
+    """PostgreSQL 容器内存上限；准备期与运行期读同一份默认值与同名环境变量。"""
+
+    return os.environ.get(POSTGRES_MEMORY_ENV, POSTGRES_MEMORY)
 
 
 class SeedValidationError(ValueError):
@@ -258,18 +288,19 @@ class FhirAgentBenchManager:
         resources = instance_resources(str(uuid.uuid4()))
         password = secrets.token_urlsafe(32)
         try:
-            await self._verify_images(manifest)
-            await self._create_network(resources)
-            await self._create_volume(resources)
-            await self._start_database(resources, password)
-            await self._wait_for_database(resources)
-            await self._restore_seed(
-                resources, Path(config.seed_data) / "database.dump", password
+            # 单个 deadline 包住整个创建流程：客户端先放弃时不能留下未回收的实例。
+            endpoint = await asyncio.wait_for(
+                self._provision(resources, manifest, Path(config.seed_data), password),
+                timeout=WORST_CASE_CREATE_SECONDS,
             )
-            await self._start_hapi(resources, password)
-            port = await self._hapi_port(resources)
-            endpoint = f"http://{self.public_host}:{port}/fhir/"
-            await self._wait_until_ready(endpoint, manifest, password)
+        except asyncio.TimeoutError:
+            await self._reclaim(
+                resources,
+                FhirAgentBenchError(
+                    f"实例创建未在 {WORST_CASE_CREATE_SECONDS} 秒内完成"
+                ),
+                password,
+            )
         except BaseException as error:
             await self._reclaim(resources, error, password)
         return EnvironmentInstance(
@@ -277,6 +308,27 @@ class FhirAgentBenchManager:
             endpoint=endpoint,
             environment=ENVIRONMENT_NAME,
         )
+
+    async def _provision(
+        self,
+        resources: InstanceResources,
+        manifest: dict,
+        seed_data: Path,
+        password: str,
+    ) -> str:
+        """按依赖顺序创建一套实例并返回 FHIR 服务端点；失败与超时由 create 回收。"""
+
+        await self._verify_images(manifest)
+        await self._create_network(resources)
+        await self._create_volume(resources)
+        await self._start_database(resources, password)
+        await self._wait_for_database(resources)
+        await self._restore_seed(resources, seed_data / "database.dump", password)
+        await self._start_hapi(resources, password)
+        port = await self._hapi_port(resources)
+        endpoint = f"http://{self.public_host}:{port}/fhir/"
+        await self._wait_until_ready(endpoint, manifest, password)
+        return endpoint
 
     async def _verify_images(self, manifest: dict) -> None:
         """启动前确认本地镜像与种子清单记录的是同一摘要。"""
@@ -320,6 +372,7 @@ class FhirAgentBenchManager:
         await self.command("volume", "create", *self._labels(resources), resources.volume)
 
     async def _start_database(self, resources: InstanceResources, password: str) -> None:
+        memory = postgres_memory_limit()
         await self.command(
             "run",
             "--detach",
@@ -330,9 +383,9 @@ class FhirAgentBenchManager:
             "--network",
             resources.network,
             "--memory",
-            POSTGRES_MEMORY,
+            memory,
             "--memory-swap",
-            POSTGRES_MEMORY,
+            memory,
             "--env",
             f"POSTGRES_USER={DATABASE_USER}",
             "--env",
@@ -345,6 +398,7 @@ class FhirAgentBenchManager:
         )
 
     async def _start_hapi(self, resources: InstanceResources, password: str) -> None:
+        memory = hapi_memory_limit()
         await self.command(
             "run",
             "--detach",
@@ -357,9 +411,9 @@ class FhirAgentBenchManager:
             "--publish",
             f"{self.bind_host}::8080",
             "--memory",
-            HAPI_MEMORY,
+            memory,
             "--memory-swap",
-            HAPI_MEMORY,
+            memory,
             "--env",
             f"SPRING_DATASOURCE_URL=jdbc:postgresql://"
             f"{resources.database}:{DATABASE_PORT}/{DATABASE_NAME}",

@@ -33,6 +33,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server.fhir_agentbench import (  # noqa: E402 - 需先修正 sys.path
     HAPI_IMAGE,
     POSTGRES_IMAGE,
+    hapi_memory_limit,
+    postgres_memory_limit,
     resource_digest,
 )
 
@@ -72,11 +74,6 @@ MANAGED_LABEL = "medevolve.managed"
 ENVIRONMENT_LABEL = "medevolve.environment"
 ROLE_LABEL = "medevolve.role"
 ENVIRONMENT_NAME = "FHIR-AgentBench"
-
-DEFAULT_HAPI_MEMORY = "3g"
-DEFAULT_POSTGRES_MEMORY = "1g"
-HAPI_MEMORY_ENV = "MEDEVOLVE_FHIR_HAPI_MEMORY"
-POSTGRES_MEMORY_ENV = "MEDEVOLVE_FHIR_PG_MEMORY"
 
 DATABASE_USER = "medevolve"
 DATABASE_NAME = "medevolve"
@@ -757,6 +754,13 @@ async def _wait_for_database(
                 "exec",
                 names.database,
                 "pg_isready",
+                # 显式走 TCP：postgres 镜像入口在 initdb 阶段会临时启动一个只监听
+                # unix socket 的服务器，不带 -h 的探针会在该窗口误判就绪，随后
+                # 真正服务器重启会让导入连接被拒。
+                "-h",
+                "127.0.0.1",
+                "-p",
+                DATABASE_PORT,
                 "-U",
                 DATABASE_USER,
                 "-d",
@@ -900,8 +904,8 @@ async def prepare_dataset(
     factory = client_factory or _default_client_factory
     password = secrets.token_urlsafe(32)
     names = prepare_names()
-    hapi_memory = os.environ.get(HAPI_MEMORY_ENV, DEFAULT_HAPI_MEMORY)
-    postgres_memory = os.environ.get(POSTGRES_MEMORY_ENV, DEFAULT_POSTGRES_MEMORY)
+    hapi_memory = hapi_memory_limit()
+    postgres_memory = postgres_memory_limit()
     manifest: dict = {}
 
     try:

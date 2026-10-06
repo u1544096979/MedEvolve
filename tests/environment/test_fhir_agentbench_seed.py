@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from scripts import fhir_agentbench_data as data
+from server import fhir_agentbench
 from server.fhir_agentbench import SeedValidationError, load_seed
 
 
@@ -627,6 +628,107 @@ async def test_prepare_pins_images_and_memory_limits(tmp_path):
     database_name = database[database.index("--name") + 1]
     url = next(value for value in backend.env_values if value.startswith("SPRING_DATASOURCE_URL="))
     assert url == f"SPRING_DATASOURCE_URL=jdbc:postgresql://{database_name}:5432/medevolve"
+
+
+@pytest.mark.asyncio
+async def test_database_probe_uses_tcp_to_skip_initdb_temporary_server(tmp_path):
+    """postgres 镜像入口在 initdb 阶段会临时启动一个只监听 unix socket 的服务器。
+
+    不带 -h 的 pg_isready 会在那个窗口误判就绪，随后的真正服务重启会让导入连接被拒；
+    探针必须显式走 TCP，与管理器的就绪检查用同一种写法。
+    """
+
+    data_dir = minimal_data_dir(tmp_path)
+    backend = FakeBackend()
+    server = FakeFhir(
+        list(MINIMAL_FILES["MimicPatient.ndjson.gz"])
+        + list(MINIMAL_FILES["MimicObservation.ndjson.gz"])
+    )
+    await data.prepare_dataset(
+        data_dir,
+        tmp_path / "seed",
+        backend=backend,
+        client_factory=server.client,
+        require_published=False,
+        log=lambda message: None,
+    )
+
+    database_run = next(
+        command
+        for command in backend.commands
+        if command[0] == "run" and data.POSTGRES_IMAGE in command
+    )
+    database = database_run[database_run.index("--name") + 1]
+    probe = next(command for command in backend.commands if "pg_isready" in command)
+    assert probe == (
+        "exec",
+        database,
+        "pg_isready",
+        "-h",
+        "127.0.0.1",
+        "-p",
+        data.DATABASE_PORT,
+        "-U",
+        data.DATABASE_USER,
+        "-d",
+        data.DATABASE_NAME,
+    )
+
+
+@pytest.mark.asyncio
+async def test_container_memory_limits_follow_the_shared_environment_variables(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(fhir_agentbench.HAPI_MEMORY_ENV, "2g")
+    monkeypatch.setenv(fhir_agentbench.POSTGRES_MEMORY_ENV, "512m")
+    data_dir = minimal_data_dir(tmp_path)
+    backend = FakeBackend()
+    server = FakeFhir(
+        list(MINIMAL_FILES["MimicPatient.ndjson.gz"])
+        + list(MINIMAL_FILES["MimicObservation.ndjson.gz"])
+    )
+    await data.prepare_dataset(
+        data_dir,
+        tmp_path / "seed",
+        backend=backend,
+        client_factory=server.client,
+        require_published=False,
+        log=lambda message: None,
+    )
+    runs = [command for command in backend.commands if command and command[0] == "run"]
+    assert len(runs) == 2
+    database, hapi = runs
+    assert database[database.index("--memory") + 1] == "512m"
+    assert database[database.index("--memory-swap") + 1] == "512m"
+    assert hapi[hapi.index("--memory") + 1] == "2g"
+    assert hapi[hapi.index("--memory-swap") + 1] == "2g"
+
+
+@pytest.mark.asyncio
+async def test_memory_defaults_come_from_the_managers_constants(tmp_path, monkeypatch):
+    """默认值只有一份来源：准备期与管理器读同一组常量。"""
+
+    monkeypatch.delenv(fhir_agentbench.HAPI_MEMORY_ENV, raising=False)
+    monkeypatch.delenv(fhir_agentbench.POSTGRES_MEMORY_ENV, raising=False)
+    data_dir = minimal_data_dir(tmp_path)
+    backend = FakeBackend()
+    server = FakeFhir(
+        list(MINIMAL_FILES["MimicPatient.ndjson.gz"])
+        + list(MINIMAL_FILES["MimicObservation.ndjson.gz"])
+    )
+    await data.prepare_dataset(
+        data_dir,
+        tmp_path / "seed",
+        backend=backend,
+        client_factory=server.client,
+        require_published=False,
+        log=lambda message: None,
+    )
+    runs = [command for command in backend.commands if command and command[0] == "run"]
+    assert len(runs) == 2
+    database, hapi = runs
+    assert database[database.index("--memory") + 1] == fhir_agentbench.POSTGRES_MEMORY
+    assert hapi[hapi.index("--memory") + 1] == fhir_agentbench.HAPI_MEMORY
 
 
 @pytest.mark.asyncio

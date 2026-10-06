@@ -15,7 +15,11 @@ import httpx
 import pytest
 
 from contracts import EnvironmentConfig, EnvironmentInstance
-from environments import create_environment, release_environment
+from environments import (
+    FHIR_AGENTBENCH_CREATE_TIMEOUT,
+    create_environment,
+    release_environment,
+)
 from environments.errors import EnvironmentUnavailable
 from server import fhir_agentbench
 from server.docker import DockerCommandError, DockerManager
@@ -492,6 +496,50 @@ async def test_database_probe_uses_tcp_to_skip_initdb_temporary_server(
 
 
 @pytest.mark.asyncio
+async def test_create_stops_at_the_worst_case_deadline_and_reclaims(
+    fake_docker, fake_subprocess, seed, monkeypatch
+):
+    """超过最坏路径上限就终止本次创建，已建资源仍全部回收。"""
+
+    fake_docker.add_unrelated()
+    fake_subprocess.hang = True
+    monkeypatch.setattr(fhir_agentbench, "WORST_CASE_CREATE_SECONDS", 0.05)
+    manager = make_manager(fake_docker, FakeFhir(seed_manifest()), restore_timeout=30.0)
+
+    with pytest.raises(EnvironmentUnavailable, match="创建"):
+        await manager.create(config_for(seed))
+
+    assert fake_subprocess.processes[0].killed
+    assert_only_unrelated(fake_docker)
+
+
+def test_create_wait_limit_covers_the_managers_worst_case():
+    """客户端等待上限严格大于管理器最坏路径，最坏路径覆盖各相位上限之和。"""
+
+    phase_caps = fhir_agentbench.STARTUP_TIMEOUT * 2 + fhir_agentbench.RESTORE_TIMEOUT
+    assert fhir_agentbench.WORST_CASE_CREATE_SECONDS >= phase_caps
+    assert FHIR_AGENTBENCH_CREATE_TIMEOUT > fhir_agentbench.WORST_CASE_CREATE_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_container_memory_limits_follow_the_shared_environment_variables(
+    fake_docker, fake_subprocess, seed, monkeypatch
+):
+    """运行期容器内存预算与准备期读同一组同名环境变量。"""
+
+    monkeypatch.setenv(fhir_agentbench.HAPI_MEMORY_ENV, "2g")
+    monkeypatch.setenv(fhir_agentbench.POSTGRES_MEMORY_ENV, "512m")
+    manager = make_manager(fake_docker, FakeFhir(seed_manifest()))
+
+    instance = await manager.create(config_for(seed))
+
+    hapi = fake_docker.run_command(f"medevolve-{instance.instance_id}")
+    database = fake_docker.run_command(f"medevolve-{instance.instance_id}-db")
+    assert hapi[hapi.index("--memory") + 1] == "2g"
+    assert database[database.index("--memory") + 1] == "512m"
+
+
+@pytest.mark.asyncio
 async def test_create_rejects_image_digest_mismatch(fake_docker, fake_subprocess, seed):
     fake_docker.add_unrelated()
     fake_docker.image_ids[fhir_agentbench.POSTGRES_IMAGE] = {
@@ -841,12 +889,9 @@ async def test_create_environment_waits_for_seed_restore(monkeypatch, environmen
     assert len(calls) == 1
     assert calls[0]["trust_env"] is False
     if environment == "FHIR-AgentBench":
-        # 断言覆盖管理器最坏路径（数据库就绪等待 + 种子恢复 + HAPI 就绪等待），
-        # 而不是钉死具体秒数：内部上限调整后这条断言不会再次失配。
-        worst_case = (
-            fhir_agentbench.STARTUP_TIMEOUT * 2 + fhir_agentbench.RESTORE_TIMEOUT
-        )
-        assert calls[0]["timeout"] > worst_case
+        # 断言覆盖管理器真实最坏路径（见 WORST_CASE_CREATE_SECONDS），而不是
+        # 钉死具体秒数：内部上限调整后这条断言不会再次失配。
+        assert calls[0]["timeout"] > fhir_agentbench.WORST_CASE_CREATE_SECONDS
     else:
         assert calls[0]["timeout"] == 240
 
