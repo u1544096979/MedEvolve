@@ -12,7 +12,7 @@ __all__ = [
     "atomic_prompts", "depth_prompts", "width_prompts", "verify_prompts",
 ]
 
-# agent_tools.py:160-172 中 VerifyAgent.forward 直接拼接的求解指令，逐字保留。
+# agent_tools.py:138-144 中 VerifyAgent.forward 直接拼接的求解指令，逐字保留。
 AUGMENTED_QUERY = (
     "Please solve the following problem and return as many relevant results as possible that "
     "meet the query requirements. Ensure responses are as concise as possible, focusing only "
@@ -29,7 +29,7 @@ LLM_ONLY_INSTRUCTIONS = (
     "不要臆造无法确证的事实。"
 )
 
-# 由 agent_tools.py:27-45 的 SearchAgent 描述改写：检索范围由互联网改为当前患者病历。
+# 由 agent_tools.py:33-62 的 SearchAgent 描述改写：检索范围由互联网改为当前患者病历。
 MEDICAL_RECORD_AGENT = (
     "你是一名通过病历工具检索事实的成员。"
     "你只能使用本次提供的病历工具检索当前患者的事实，不能使用外部知识、网络或其他患者的数据。"

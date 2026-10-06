@@ -68,11 +68,11 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 
 1. 原子过滤判据。源码 `filter_question`（`gen_atomic_task.py:418-444`）仅在核验返回 `error` 时拒绝，更严格的 `llm_score`、`agent_score` 判断在 `425-433` 被注释掉。适配保持该分支：无工具回答评分达到 1 分及以上或核验出错才拒绝，`agent_score` 只记录不用于拒绝。患者私有事实本就不在模型自身的知识内，该判据在病历域很少触发，实际筛选由「病历 Agent 能否作答」承担。
 2. superset 校验。源码把返回的 JSON 字典与字符串 `"invalid"` 比较（`gen_depth_based_task.py:67`），字典与该字符串不相等。适配按提示词声明的 `{"new_query": "valid"|"invalid"}` 判断，仅显式 `invalid` 时拒绝。
-3. 宽度结果组装。源码最终映射（`gen_width_based_task.py:234-241`）引用循环外的 `golden_answers`、`original_questions`，与当前分组不一致；评分又用响应里的稳定 ID 直接索引过滤后的局部列表（`gen_width_based_task.py:252-253`）。适配按每题自身的答案、原始问题与原始索引组装，评分按稳定 ID 在已通过分解检查的集合里查找；父题索引保持模型给定的顺序与重复项，越界或缺少父题的分组按模型输出失败丢弃整次响应重试（`gen_width_based_task.py:190-200` 的异常分支），不修剪成更小的组。
+3. 宽度结果组装。源码最终映射（`gen_width_based_task.py:234-241`）引用循环外的 `golden_answers`、`original_questions`，与当前分组不一致；评分又用响应里的稳定 ID 直接索引过滤后的局部列表（`gen_width_based_task.py:142`）。适配按每题自身的答案、原始问题与原始索引组装，评分按稳定 ID 在已通过分解检查的集合里查找；父题索引保持模型给定的顺序与重复项，越界或缺少父题的分组按模型输出失败丢弃整次响应重试（`gen_width_based_task.py:190-200` 的异常分支），不修剪成更小的组。
 4. 宽度合并输入。源码把 `golden_answer` 一并送入合并提示词（`gen_width_based_task.py:184-188`，与注释 `without golden_answers` 不一致）。适配保持源码行为；合并结果由后续可分解性与作答检查把关。
 5. 参考答案组织。`TaskBatch` 只有单个 `reference_answer`。深度题的参考答案是源码 `solve_trajectory` 的原始最终答案（`full_results[-1]["answer"]`，即父题答案）；子问题、中间标识及其答案与 Agent 轨迹进入 `solve_trajectory` 和阶段 trace，不拼进参考答案。宽度题按每组自身的原始答案列表无损序列化（`json.dumps(..., ensure_ascii=False)`），顺序与重复项与分组一致。`Candidate.detail` 保存阶段来源：原子题为原结论、R、患者来源与清洗答案；宽度题为 `original_questions`、`golden_answers`、原始 `indexes` 与全部 `parent_types`；深度题为 `full_results`、`solve_trajectory`、辅助来源与失败尝试。
 6. 题型。源码没有题型采样。出题提示词追加题型约束，取值限于 `directions` 中的题型；扩展题继承父题题型，跨题型合并取第一父题的题型。批量输出的选题规则见第 2 节：候选池顺序固定，选题流独立洗牌后按临床题型配额接纳，最多两题。
-7. 预算边界与 Agent 步数。`max_candiated_conclusions`、`max_candidate_atomic`、`judge_samples`、`question_attempts`、`query_attempts`、`merge_attempts`、`extended_attempts`、`max_hops`、`width_attempts` 以 `TaskCraftParameters` 显式给出，源码 SearchAgent 的 `max_step` 以 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10` 给出。阶段不设份额或预留轮数：共享生成预算是唯一上限，原子阶段逐个结论走到核验或预算耗尽，扩展阶段逐跳执行到 `max_hops` 或预算耗尽。
+7. 预算边界与 Agent 步数。`max_candiated_conclusions`、`max_candidate_atomic`、`judge_samples`、`question_attempts`、`query_attempts`、`merge_attempts`、`extended_attempts`、`max_hops`、`width_attempts`、`request_attempts` 以 `TaskCraftParameters` 显式给出，源码 SearchAgent 的 `max_step` 以 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10` 给出。阶段不设份额或预留轮数：共享生成预算是唯一上限，原子阶段逐个结论走到核验或预算耗尽，扩展阶段逐跳执行到 `max_hops` 或预算耗尽。
 8. Agent 步数与计数。源码 `ToolCallingAgent._run` 以 action step 计数（`max_step` 为 20，深度反向与深度核验为 10），第 1 步先规划、之后每 5 步反思；规划与反思不增加 action step，但每次都增加模型请求。适配保留该循环：`Ledger.agent(..., max_action_steps=)` 给出单次调用上限，规划与反思按 `run_search_agent` 的步骤调度执行，`usage.action_steps` 记录真实 action step 数，`verify.verify_query` 的 `agent_step_number` 取该值（不再取模型请求数）。源码 `traj_step_num()` 返回的 `self.step_number` 在终止时又递增一次，即实际 action step 数加一（达到上限时为 `max_step+1`），该串值与 `usage.step_number` 同时保留在运行结果中。
 9. 动作编码。公共单次调用入口返回结构化 JSON，无法使用 SDK 的工具调用字段；一次 action 的编码是 `{"tool_calls": [...], "final_answer": ...}`（原生协议为 `{"action": "GET …"}`）。源码 `step` 的 JSON 回退分支（agents.py:1507-1511）只支持一个 `{"name", "arguments"}` 对象，SDK 分支也只执行 `tool_calls[0]`（agents.py:1534）；适配把同一次响应里的多个工具调用依次执行、逐个计入 `tool_calls`，使台账计数与真实调用一致。
 10. 工具调用响应里的终答字段。源码在 `tool_calls` 非空时不解析消息内容，只执行 `tool_calls[0]` 并继续循环（agents.py:1500-1536）；内容解析与终答回退都只在 `tool_calls` 为空时发生（agents.py:1507-1528）。适配同样只在同一次响应不含工具调用时接受 `final_answer` 作为终答；该响应带工具调用时，工具调用全部执行并继续下一步。
@@ -89,12 +89,27 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 21. 原生接口范围。MedAgentBench 声明含 6 个 GET 与 3 个 POST，没有病历文书检索接口；依赖文书内容的结论在该环境下候选更少，机制不变。
 22. 强制终答的答案字段类型。达到 action step 上限后的终答请求按源码要求返回 `<think>/<answer>`，适配与规划、反思共用 `AgentThought`：`think` 与 `answer` 接受任意 JSON 值，由 `thought_text` 取文本形态（字符串保持原样，对象等取 JSON 文本）；`answer` 对应源码 `FinalAnswerTool` 的 `inputs = {"answer": {"type": "any"}}` 与 `output_type = "any"`。`agent._finish` 在源码 `safe_json_loads` 的位置把该文本解析为 JSON，再映射到本次调用声明的输出结构，JSON 对象与 JSON 文本两种形态都接受。
 23. 规划与反思的答案字段类型。规划的（事实、计划）与反思的（事实、计划）在源码里由 `extract_think_and_answer` 从 `<think>/<answer>` 标签抽出，都是自由文本，不解析 JSON。适配的 `AgentThought.think`、`answer` 按同一文本口径承载任意 JSON 值：模型把任务要求的对象直接放进 `answer` 时（反向检索任务给出 `{"identifier": ..., "relation": ...}`；核验任务因 `AUGMENTED_QUERY` 要求 `answer_list` 键而给出 `{"answer_list": [...]}`），`thought_text` 取其 JSON 文本进入记忆与后续解析。
+24. 单次请求的重试。源码 `utils.py:run_llm_prompt(max_retries=3)` 与 `gen_width_based_task.py:retry_predict`（`MAX_RETRIES=3`）在一次调用内最多尝试 3 次，作者再把它嵌进自己的外层循环。适配保留两层：调用点参数 `attempts=request_attempts` 取源码内层次数，外层循环次数沿用源码参数，每次尝试单独记账。
+
+| 调用点 | 源码位置 | 源码内层 / 外层 | 实现内层 / 外层 |
+|---|---|---|---|
+| `depth/superset` | `gen_depth_based_task.py:64` | `max_retries=3` / 每跳 1 次 | `attempts=3` / 每跳 1 次 |
+| `depth/query` | `gen_depth_based_task.py:82` | `max_retries=3` / `for _ in range(3)` | `attempts=3` / `query_attempts=3` |
+| `depth/merge` | `gen_depth_based_task.py:174`（`for _ in range(5)` 内，`:166`） | `max_retries=3` / `for _ in range(5)` | `attempts=3` / `merge_attempts=5` |
+| `depth/merge_judge` | `gen_depth_based_task.py:188`（同一循环内） | `max_retries=3` / `for _ in range(5)` | `attempts=3` / `merge_attempts=5` |
+| `width/merge` | `gen_width_based_task.py:195-197` | `retry_predict`(3) / `for _ in range(3)` | `attempts=3` / `width_attempts=3` |
+| `width/decompose` | `gen_width_based_task.py:101-103` | `retry_predict`(3) / `for _ in range(3)` | `attempts=3` / `width_attempts=3` |
+| `width/answer` | `gen_width_based_task.py:135-137` | `retry_predict`(3) / `for _ in range(3)` | `attempts=3` / `width_attempts=3` |
+
+核验内部的无工具作答与评分请求按源码 `agent_tools.py:195` 的 `max_retries=1` 保持单次尝试；`VerifyAgent.forward` 的外层三次重试不变。
+25. 候选处理顺序。源码在两个入口各开多个 `ThreadPoolExecutor` 并发处理候选：结论抽取按块、原子过滤与出题按结论、核验按问题、评分判定按采样（`gen_atomic_task.py:175`、`404`、`465`，`agent_tools.py:193`）。适配全部顺序执行，并在两处提前结束：结论数达到 `max_candidate_conclusions`、生成问题数达到 `max_candidate_atomic` 后不再继续，预算耗尽时立即停止后续候选。效果是同一预算下完成的候选更少、顺序固定可复现，且提前终止与并发完成的候选集合可能不同；代价是单次运行的墙钟更长。
+26. 出题与清洗的拒绝分支。原子出题返回的 `task_type` 不在本次请求的 `directions` 内时，按拒绝记录 `atomic/question`，该结论不进入清洗与核验；`clean_qa` 返回空问题或空参考答案时，按拒绝记录 `atomic/clean`，该结论同样不生成候选。源码没有这两项判断（题型来自适配追加的约束，`clean_qa` 也不检查空值），因此效果是相同输入下适配的原子候选数可能少于源码，原因保留在 trace。
 
 ## 5. 预算口径与真实运行结果
 
-本节全部运行在分支 `codex/taskcraft-baseline` 上产生，撰写本节时该分支头为 `c6cf92f`。每个运行目录对应的实现提交按 `git log --format='%h %cI %s'` 与目录内产物的写入时间比对确定，逐项列在 5.1–5.3；运行目录里的四份产物由 `41fe367` 引入，在该提交落库（2026-10-07T01:29:04）之前开始的两个运行带的是它的工作区改动。运行目录内 `pipeline.json` 的 `author_commit` 是所适配的作者源码基线，与实现提交不同。
+本节全部运行在分支 `codex/taskcraft-baseline` 上产生，该分支基于公共层提交 `fb76770`；两组运行都早于 main 当前的公共层，合并时需按该基线核对。每个运行目录对应的实现提交按 `git log --format='%h %cI %s'` 与目录内产物的写入时间比对确定，逐项列在 5.1–5.3。四份产物（`report.json`、`pipeline.json`、`result.json`、`config.json`）只出现在机制运行目录（5.1、5.2），由 `41fe367` 引入，在该提交落库（2026-10-07T01:29:04）之前开始的两个运行带的是它的工作区改动；公共比较目录（5.3）由公共实验入口写入，不含这四份文件。运行目录内 `pipeline.json` 的 `author_commit` 是所适配的作者源码基线，与实现提交不同。
 
-`TaskCraftParameters` 默认值取自源码签名：`chunk_size=16384`、`max_candidate_conclusions=20`、`max_candidate_atomic=10`、`judge_samples=3`、`question_attempts=3`、`query_attempts=3`、`merge_attempts=5`、`extended_attempts=4`、`max_hops=2`、`width_attempts=3`；Agent 步数上限为 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10`。`max_candidate_atomic` 与共享生成预算共同决定单批候选数。
+`TaskCraftParameters` 默认值取自源码签名：`chunk_size=16384`、`max_candidate_conclusions=20`、`max_candidate_atomic=10`、`judge_samples=3`、`question_attempts=3`、`query_attempts=3`、`merge_attempts=5`、`extended_attempts=4`、`max_hops=2`、`width_attempts=3`、`request_attempts=3`；Agent 步数上限为 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10`。`max_candidate_atomic` 与共享生成预算共同决定单批候选数。
 
 机制验收与公共比较各用一组配置，预算口径不混用：
 
@@ -126,7 +141,7 @@ MEDEVOLVE_TASKCRAFT_LIVE_CONFIG=<机制配置> pytest tests/method/test_taskcraf
 | 分支顺序 | `["width", "depth"]`（派生种子决定） |
 | 原子阶段 | 4 块文本、54 708 字符；chunk 0 抽到 46 条结论，出题 20 次，核验接纳 6 题；11 次出题因模型返回空 `task_type` 被拒；9 次核验中 2 次返回 `LLM can solve this task`、1 次 `action response carries no tool call` |
 | 宽度阶段 | 合并 3 组，可分解性检查保留 3 组，产出 3 题，父题各 2 道 |
-| 深度阶段 | 6 道父题各 4 次尝试全部失败；反向检索 14 次运行、40 次 action 请求中 11 次为空 action 响应，13 次 superset 提案中 10 次被 `is_superset_valid` 拒绝，3 个辅助问题全部未通过核验；`depth/result.extended=0` |
+| 深度阶段 | 6 道父题各 4 次尝试全部失败；反向检索 24 次：3 次成功、10 次 superset 校验拒绝、11 次硬失败（`depth/backward` 记录 14 条 = 3 成功 + 11 失败，另 10 次在 superset 处被拒）；40 次 action 请求中 11 次为空 action 响应，13 次 superset 提案中 10 次被 `is_superset_valid` 拒绝，3 个辅助问题全部未通过核验；`depth/result.extended=0` |
 | 候选证据 | 原子题 `Condition/2571`、`Condition/2572`、`Condition/2573`、`Condition/2570`、`Condition/2566`、`Condition/2568`；宽度题分别合并 `Condition/2571`+`Condition/2572`、`Condition/2573`+`Condition/2570`、`Condition/2566`+`Condition/2568`，各带两道父题 |
 | 最终选题 | 1 题（请求方向为药物处方与诊断与解释；候选均为诊断与解释，其余 8 题按 `task_type_quota_exhausted` 未进入） |
 | 无已知 token 的请求 | 0 次（`runs_without_known_tokens=0`） |
@@ -189,16 +204,17 @@ PhysicianBench 保留的运行目录：
 
 ```
 pytest -q tests/method tests/runtime tests/experiment tests/environment tests/evaluation -W error
-→ 143 passed, 4 skipped
+→ 147 passed, 4 skipped
 
 pytest -q experiments -W error
-→ 4 passed, 3 failed
+→ 3 passed, 4 failed
   FAILED experiments/test_common.py::test_unimplemented_method_is_explicit[workflow]
+  FAILED experiments/test_common.py::test_unimplemented_method_is_explicit[singleshot]
   FAILED experiments/test_common.py::test_unimplemented_method_is_explicit[selfgen]
   FAILED experiments/test_common.py::test_unimplemented_method_is_explicit[envexplore]
 ```
 
-`experiments` 的三项失败来自 venv 的 editable 安装把主检出 `/Users/guagua/code/MedEvolve/methods` 命名空间并入本工作区：主检出里已有 `workflow`、`selfgen`、`envexplore` 三个方法包，于是「未实现方法应显式报错」的断言不成立。它们与本方法无关，也不随本次改动变化。未给出 `MEDEVOLVE_TASKCRAFT_LIVE_CONFIG` 时 `tests/method/test_taskcraft_live.py` 跳过且不发起调用。
+`experiments` 的失败来自 venv 的 editable 安装把主检出 `/Users/guagua/code/MedEvolve/methods` 命名空间并入本工作区：主检出里已有 `workflow`、`singleshot`、`selfgen`、`envexplore` 四个方法包，于是「未实现方法应显式报错」的断言不成立。失败项数随主检出当前有哪些方法包变化，本次记录的是上述四项；它们与本方法无关，也不随本次改动变化。未给出 `MEDEVOLVE_TASKCRAFT_LIVE_CONFIG` 时 `tests/method/test_taskcraft_live.py` 跳过且不发起调用。
 
 
 ## 6. 未映射能力与影响
