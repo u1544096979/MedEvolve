@@ -1,0 +1,678 @@
+"""FHIR-AgentBench 种子校验、双容器实例生命周期与就绪检查。
+
+种子目录包含 `manifest.json` 与 `database.dump`。清单记录固定的数据版本、镜像摘要、
+源数据与数据库备份校验值、按类型资源数量，以及用于启动就绪检查的原始资源探针。
+每个实例由一套 HAPI 服务、PostgreSQL 数据库、私有网络与独立数据卷组成，
+从同一份种子恢复，互不共享可写数据库。
+"""
+
+import asyncio
+import hashlib
+import json
+import os
+import re
+import secrets
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+
+from contracts import EnvironmentConfig, EnvironmentInstance
+from environments.errors import EnvironmentUnavailable
+
+SEED_SCHEMA_VERSION = 1
+SEED_DATA_VERSION = "2.1.0"
+SEED_PATIENT_COUNT = 100
+
+HAPI_IMAGE = (
+    "hapiproject/hapi@sha256:4d59628d42b3556b2dcd274d26054a43ba53697ebdae0fd71e6a5475065ed22d"
+)
+POSTGRES_IMAGE = (
+    "postgres@sha256:6b0faa930dc29e5af5af9b50081ad496fad106b85a88ad66aea01f11d4494733"
+)
+
+ENVIRONMENT_NAME = "FHIR-AgentBench"
+MANAGED_LABEL = "medevolve.managed"
+ENVIRONMENT_LABEL = "medevolve.environment"
+INSTANCE_LABEL = "medevolve.instance"
+
+DATABASE_USER = "medevolve"
+DATABASE_NAME = "medevolve"
+DATABASE_PORT = "5432"
+HAPI_CONTAINER_PORT = "8080/tcp"
+
+# 内存预算只有一份来源：准备期（scripts/fhir_agentbench_data.py）与运行期共用下面的默认值
+# 与同名环境变量。两边各写一份时准备期可以被改小而运行期不变，design.md 的 4 GB 预算
+# 就没有任何一处保证。
+HAPI_MEMORY = "3g"
+POSTGRES_MEMORY = "1g"
+HAPI_MEMORY_ENV = "MEDEVOLVE_FHIR_HAPI_MEMORY"
+POSTGRES_MEMORY_ENV = "MEDEVOLVE_FHIR_PG_MEMORY"
+
+STARTUP_TIMEOUT = 300.0
+RESTORE_TIMEOUT = 1800.0
+READY_POLL_INTERVAL = 2.0
+HTTP_TIMEOUT = 60.0
+
+# 相位等待之外的固定开销上限：两次镜像校验、卷与网络创建、两次容器启动、一次宿主端口读取，
+# 以及两个等待循环在 deadline 判定之后各多跑的一轮。
+CREATE_FIXED_OVERHEAD_SECONDS = 300.0
+
+# 一次创建的真实最坏路径 = 数据库就绪等待 + 种子恢复 + HAPI 就绪等待 + 上面的固定开销。
+# 客户端等待上限必须严格大于它：客户端先放弃时管理器仍可能创建成功，实例 id 没有任何
+# 一方收到，容器、卷与网络会成为只能人工按 id 回收的孤儿。
+WORST_CASE_CREATE_SECONDS = (
+    STARTUP_TIMEOUT + RESTORE_TIMEOUT + STARTUP_TIMEOUT + CREATE_FIXED_OVERHEAD_SECONDS
+)
+
+HAPI_ENVIRONMENT = (
+    "SPRING_DATASOURCE_DRIVERCLASSNAME=org.postgresql.Driver",
+    "SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT="
+    "ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect",
+    "HAPI_FHIR_FHIR_VERSION=R4",
+    "HAPI_FHIR_ENFORCE_REFERENTIAL_INTEGRITY_ON_WRITE=false",
+    "HAPI_FHIR_VALIDATION_REQUESTS_ENABLED=false",
+    "HAPI_FHIR_VALIDATION_RESPONSES_ENABLED=false",
+    "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60.0",
+)
+
+MANIFEST_FIELDS = (
+    "schema_version",
+    "data_version",
+    "hapi_image",
+    "postgres_image",
+    "database_sha256",
+    "source_sha256",
+    "resource_counts",
+    "probe_source_id",
+    "probe_sha256",
+)
+
+IMAGE_PATTERN = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def hapi_memory_limit() -> str:
+    """HAPI 容器内存上限；准备期与运行期读同一份默认值与同名环境变量。"""
+
+    return os.environ.get(HAPI_MEMORY_ENV, HAPI_MEMORY)
+
+
+def postgres_memory_limit() -> str:
+    """PostgreSQL 容器内存上限；准备期与运行期读同一份默认值与同名环境变量。"""
+
+    return os.environ.get(POSTGRES_MEMORY_ENV, POSTGRES_MEMORY)
+
+
+class SeedValidationError(ValueError):
+    """种子清单或种子文件不满足固定约定。"""
+
+
+class FhirAgentBenchError(EnvironmentUnavailable):
+    """实例的镜像、恢复、启动或就绪检查失败。"""
+
+
+def file_digest(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def resource_digest(resource: dict) -> str:
+    """服务端生成的顶层 meta 不参与比较，其余字段按规范化 JSON 计算 sha256。"""
+
+    normalized = {key: value for key, value in resource.items() if key != "meta"}
+    payload = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _require_image(manifest: dict, field: str) -> None:
+    image = manifest[field]
+    if not isinstance(image, str) or not IMAGE_PATTERN.match(image):
+        raise SeedValidationError(
+            f"{field} 必须为 repository@sha256:digest 形式，实际为 {image!r}"
+        )
+
+
+def _require_digest(manifest: dict, field: str) -> None:
+    digest = manifest[field]
+    if not isinstance(digest, str) or not DIGEST_PATTERN.match(digest):
+        raise SeedValidationError(f"{field} 必须为 sha256 十六进制摘要，实际为 {digest!r}")
+
+
+def _require_resource_counts(manifest: dict) -> None:
+    counts = manifest["resource_counts"]
+    if not isinstance(counts, dict) or not counts:
+        raise SeedValidationError("resource_counts 必须为非空对象")
+    for resource_type, count in counts.items():
+        if not isinstance(resource_type, str) or not resource_type:
+            raise SeedValidationError(f"resource_counts 键必须为资源类型，实际为 {resource_type!r}")
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise SeedValidationError(
+                f"resource_counts[{resource_type}] 必须为正整数，实际为 {count!r}"
+            )
+    patients = counts.get("Patient")
+    if patients != SEED_PATIENT_COUNT:
+        raise SeedValidationError(
+            f"resource_counts.Patient 必须为 {SEED_PATIENT_COUNT}，实际为 {patients!r}"
+        )
+
+
+def _require_probe_source_id(manifest: dict) -> None:
+    probe_source_id = manifest["probe_source_id"]
+    if not isinstance(probe_source_id, str) or "/" not in probe_source_id:
+        raise SeedValidationError(
+            f"probe_source_id 必须为 ResourceType/id，实际为 {probe_source_id!r}"
+        )
+    resource_type, _, resource_id = probe_source_id.partition("/")
+    if not resource_type or not resource_id:
+        raise SeedValidationError(
+            f"probe_source_id 必须为 ResourceType/id，实际为 {probe_source_id!r}"
+        )
+
+
+def load_seed(path: str) -> dict:
+    """读取并校验种子目录，返回固定字段的清单；任一校验失败即抛错。"""
+
+    seed_dir = Path(path)
+    manifest_path = seed_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise SeedValidationError(f"种子清单不存在：{manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SeedValidationError(f"种子清单不是合法 JSON：{manifest_path}") from exc
+    if not isinstance(manifest, dict):
+        raise SeedValidationError(f"种子清单必须为对象：{manifest_path}")
+
+    missing = [field for field in MANIFEST_FIELDS if field not in manifest]
+    if missing:
+        raise SeedValidationError(f"种子清单缺少字段：{', '.join(missing)}")
+
+    if manifest["schema_version"] != SEED_SCHEMA_VERSION:
+        raise SeedValidationError(
+            f"schema_version 必须为 {SEED_SCHEMA_VERSION}，实际为 {manifest['schema_version']!r}"
+        )
+    if manifest["data_version"] != SEED_DATA_VERSION:
+        raise SeedValidationError(
+            f"data_version 必须为 {SEED_DATA_VERSION}，实际为 {manifest['data_version']!r}"
+        )
+    _require_image(manifest, "hapi_image")
+    _require_image(manifest, "postgres_image")
+    for field in ("database_sha256", "source_sha256", "probe_sha256"):
+        _require_digest(manifest, field)
+    _require_resource_counts(manifest)
+    _require_probe_source_id(manifest)
+
+    dump_path = seed_dir / "database.dump"
+    if not dump_path.is_file():
+        raise SeedValidationError(f"数据库备份不存在：{dump_path}")
+    if file_digest(dump_path) != manifest["database_sha256"]:
+        raise SeedValidationError(
+            f"database_sha256 与 database.dump 实际内容不一致：{dump_path}"
+        )
+
+    return {field: manifest[field] for field in MANIFEST_FIELDS}
+
+
+@dataclass(frozen=True)
+class InstanceResources:
+    """同一实例的四类资源共用一个 UUID。"""
+
+    instance_id: str
+    hapi: str
+    database: str
+    volume: str
+    network: str
+
+
+def instance_resources(instance_id: str) -> InstanceResources:
+    """规范化实例标识，并派生 HAPI、数据库、卷与网络名称。"""
+
+    if str(uuid.UUID(instance_id)) != instance_id:
+        raise ValueError("instance_id must be a canonical UUID")
+    prefix = f"medevolve-{instance_id}"
+    return InstanceResources(
+        instance_id=instance_id,
+        hapi=prefix,
+        database=f"{prefix}-db",
+        volume=f"{prefix}-data",
+        network=f"{prefix}-net",
+    )
+
+
+def _digest_of(reference: str) -> str:
+    """取出镜像引用或镜像 ID 中的 sha256 摘要。"""
+
+    return reference.rsplit("sha256:", 1)[-1]
+
+
+class FhirAgentBenchManager:
+    """FHIR-AgentBench 实例：HAPI 与 PostgreSQL 成对容器，从种子恢复。"""
+
+    def __init__(
+        self,
+        command,
+        public_host: str,
+        bind_host: str,
+        *,
+        startup_timeout: float = STARTUP_TIMEOUT,
+        restore_timeout: float = RESTORE_TIMEOUT,
+        poll_interval: float = READY_POLL_INTERVAL,
+        client_factory=None,
+    ):
+        self.command = command
+        self.public_host = public_host
+        self.bind_host = bind_host
+        self.startup_timeout = startup_timeout
+        self.restore_timeout = restore_timeout
+        self.poll_interval = poll_interval
+        self.client_factory = client_factory
+
+    # --- 创建 ---------------------------------------------------------------
+
+    async def create(self, config: EnvironmentConfig) -> EnvironmentInstance:
+        if config.name != ENVIRONMENT_NAME:
+            raise EnvironmentUnavailable(f"{config.name} is unavailable")
+        if not config.seed_data or config.seed_data.startswith("-"):
+            raise ValueError(
+                "seed_data must be the absolute path of a prepared seed directory"
+            )
+        manifest = load_seed(config.seed_data)
+        resources = instance_resources(str(uuid.uuid4()))
+        password = secrets.token_urlsafe(32)
+        try:
+            # 单个 deadline 包住整个创建流程：客户端先放弃时不能留下未回收的实例。
+            endpoint = await asyncio.wait_for(
+                self._bounded_provision(resources, manifest, Path(config.seed_data), password),
+                timeout=WORST_CASE_CREATE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            await self._reclaim(
+                resources,
+                FhirAgentBenchError(
+                    f"实例创建未在 {WORST_CASE_CREATE_SECONDS} 秒内完成"
+                ),
+                password,
+            )
+        except BaseException as error:
+            await self._reclaim(resources, error, password)
+        return EnvironmentInstance(
+            instance_id=resources.instance_id,
+            endpoint=endpoint,
+            environment=ENVIRONMENT_NAME,
+        )
+
+    async def _bounded_provision(
+        self,
+        resources: InstanceResources,
+        manifest: dict,
+        seed_dir: Path,
+        password: str,
+    ) -> str:
+        """把 docker 命令自身的超时与本次创建的整体 deadline 区分开。
+
+        ``docker_command`` 的短命令超时同样是 ``asyncio.TimeoutError``；如果让它冒到外层的
+        ``wait_for`` 分支，一条卡住的 docker 命令会被误报成「整个创建超时」，掩盖真实原因。
+        因此这里先把它换成带命令信息的实例创建失败。
+        """
+
+        try:
+            return await self._provision(resources, manifest, seed_dir, password)
+        except asyncio.TimeoutError as error:
+            raise FhirAgentBenchError(
+                f"准备实例时 docker 命令超时：{error or '命令未在限定时间内结束'}"
+            ) from error
+
+    async def _provision(
+        self,
+        resources: InstanceResources,
+        manifest: dict,
+        seed_data: Path,
+        password: str,
+    ) -> str:
+        """按依赖顺序创建一套实例并返回 FHIR 服务端点；失败与超时由 create 回收。"""
+
+        await self._verify_images(manifest)
+        await self._create_network(resources)
+        await self._create_volume(resources)
+        await self._start_database(resources, password)
+        await self._wait_for_database(resources)
+        await self._restore_seed(resources, seed_data / "database.dump", password)
+        await self._start_hapi(resources, password)
+        port = await self._hapi_port(resources)
+        endpoint = f"http://{self.public_host}:{port}/fhir/"
+        await self._wait_until_ready(endpoint, manifest, password)
+        return endpoint
+
+    async def _verify_images(self, manifest: dict) -> None:
+        """启动前确认本地镜像与种子清单记录的是同一摘要。"""
+
+        for field in ("hapi_image", "postgres_image"):
+            reference = manifest[field]
+            try:
+                result = await self.command("image", "inspect", reference)
+            except EnvironmentUnavailable as exc:
+                raise FhirAgentBenchError(
+                    f"镜像不可用，请先在本机加载：{reference}"
+                ) from exc
+            try:
+                inspected = json.loads(result)[0]
+            except (ValueError, IndexError) as exc:
+                raise FhirAgentBenchError(f"无法读取本地镜像信息：{reference}") from exc
+            pinned = {inspected.get("Id"), *(inspected.get("RepoDigests") or [])}
+            if not any(
+                entry and _digest_of(entry) == _digest_of(reference) for entry in pinned
+            ):
+                raise FhirAgentBenchError(
+                    f"本地镜像与种子清单摘要不一致：{reference}"
+                )
+
+    def _labels(self, resources: InstanceResources) -> list[str]:
+        return [
+            "--label",
+            f"{MANAGED_LABEL}=true",
+            "--label",
+            f"{ENVIRONMENT_LABEL}={ENVIRONMENT_NAME}",
+            "--label",
+            f"{INSTANCE_LABEL}={resources.instance_id}",
+        ]
+
+    async def _create_network(self, resources: InstanceResources) -> None:
+        await self.command(
+            "network", "create", *self._labels(resources), resources.network
+        )
+
+    async def _create_volume(self, resources: InstanceResources) -> None:
+        await self.command("volume", "create", *self._labels(resources), resources.volume)
+
+    async def _start_database(self, resources: InstanceResources, password: str) -> None:
+        memory = postgres_memory_limit()
+        await self.command(
+            "run",
+            "--detach",
+            "--pull=never",
+            "--name",
+            resources.database,
+            *self._labels(resources),
+            "--network",
+            resources.network,
+            "--memory",
+            memory,
+            "--memory-swap",
+            memory,
+            "--env",
+            f"POSTGRES_USER={DATABASE_USER}",
+            "--env",
+            f"POSTGRES_DB={DATABASE_NAME}",
+            "--env",
+            f"POSTGRES_PASSWORD={password}",
+            "--volume",
+            f"{resources.volume}:/var/lib/postgresql/data",
+            POSTGRES_IMAGE,
+        )
+
+    async def _start_hapi(self, resources: InstanceResources, password: str) -> None:
+        memory = hapi_memory_limit()
+        await self.command(
+            "run",
+            "--detach",
+            "--pull=never",
+            "--name",
+            resources.hapi,
+            *self._labels(resources),
+            "--network",
+            resources.network,
+            "--publish",
+            f"{self.bind_host}::8080",
+            "--memory",
+            memory,
+            "--memory-swap",
+            memory,
+            "--env",
+            f"SPRING_DATASOURCE_URL=jdbc:postgresql://"
+            f"{resources.database}:{DATABASE_PORT}/{DATABASE_NAME}",
+            "--env",
+            f"SPRING_DATASOURCE_USERNAME={DATABASE_USER}",
+            "--env",
+            f"SPRING_DATASOURCE_PASSWORD={password}",
+            *(
+                argument
+                for setting in HAPI_ENVIRONMENT
+                for argument in ("--env", setting)
+            ),
+            HAPI_IMAGE,
+        )
+
+    async def _wait_for_database(self, resources: InstanceResources) -> None:
+        deadline = time.monotonic() + self.startup_timeout
+        while True:
+            try:
+                await self.command(
+                    "exec",
+                    resources.database,
+                    "pg_isready",
+                    # 显式走 TCP：postgres 镜像入口在 initdb 阶段会临时启动一个只监听
+                    # unix socket 的服务器，不带 -h 的探针会在该窗口误判就绪，随后
+                    # 真正服务器重启会让 pg_restore 连接被拒。
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    DATABASE_PORT,
+                    "-U",
+                    DATABASE_USER,
+                    "-d",
+                    DATABASE_NAME,
+                )
+                return
+            except EnvironmentUnavailable as exc:
+                if time.monotonic() >= deadline:
+                    raise FhirAgentBenchError(
+                        f"数据库未在 {self.startup_timeout} 秒内就绪"
+                    ) from exc
+                await asyncio.sleep(self.poll_interval)
+
+    async def _restore_seed(
+        self, resources: InstanceResources, dump_path: Path, password: str
+    ) -> None:
+        """从 stdin 流式送入种子备份；不用普通命令结果承载二进制内容。"""
+
+        args = (
+            "docker",
+            "exec",
+            "-i",
+            resources.database,
+            "pg_restore",
+            "--no-owner",
+            "--no-acl",
+            "--no-password",
+            "-U",
+            DATABASE_USER,
+            "-d",
+            DATABASE_NAME,
+        )
+        with dump_path.open("rb") as dump:
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=dump,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                _, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=self.restore_timeout
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.communicate()
+                raise FhirAgentBenchError(
+                    f"数据库恢复超过 {self.restore_timeout} 秒"
+                ) from None
+            except asyncio.CancelledError:
+                process.kill()
+                await process.communicate()
+                raise
+        if process.returncode:
+            detail = _redact(stderr.decode(errors="replace").strip(), password)
+            raise FhirAgentBenchError(f"数据库种子恢复失败：{detail}")
+
+    async def _hapi_port(self, resources: InstanceResources) -> int:
+        try:
+            inspected = json.loads(
+                await self.command("container", "inspect", resources.hapi)
+            )[0]
+        except (ValueError, IndexError) as exc:
+            raise FhirAgentBenchError("无法读取 FHIR 服务容器信息") from exc
+        bindings = (inspected.get("NetworkSettings", {}).get("Ports") or {}).get(
+            HAPI_CONTAINER_PORT
+        )
+        if not bindings:
+            raise FhirAgentBenchError("FHIR 服务容器没有映射宿主端口")
+        return int(bindings[0]["HostPort"])
+
+    # --- 就绪检查 -----------------------------------------------------------
+
+    async def _wait_until_ready(
+        self, endpoint: str, manifest: dict, password: str
+    ) -> None:
+        deadline = time.monotonic() + self.startup_timeout
+        async with self._client() as client:
+            while True:
+                try:
+                    await self._check_ready(client, endpoint, manifest)
+                    return
+                except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                    if time.monotonic() >= deadline:
+                        raise FhirAgentBenchError(
+                            f"FHIR 服务未在 {self.startup_timeout} 秒内就绪："
+                            f"{_redact(str(exc), password)}"
+                        ) from exc
+                    await asyncio.sleep(self.poll_interval)
+
+    def _client(self):
+        if self.client_factory is not None:
+            return self.client_factory()
+        return httpx.AsyncClient(timeout=HTTP_TIMEOUT, trust_env=False)
+
+    async def _check_ready(self, client, endpoint: str, manifest: dict) -> None:
+        """三条检查：R4 能力声明、种子患者数量、固定探针的原始字段校验值。"""
+
+        response = await client.get(
+            endpoint + "metadata", headers={"Accept": "application/fhir+json"}
+        )
+        response.raise_for_status()
+        capability = response.json()
+        if capability.get("resourceType") != "CapabilityStatement":
+            raise ValueError("服务未返回能力声明")
+        version = str(capability.get("fhirVersion", ""))
+        if not version.startswith("4."):
+            raise ValueError(f"FHIR 版本不是 R4：{version!r}")
+
+        response = await client.get(
+            endpoint + "Patient?_summary=count",
+            headers={"Accept": "application/fhir+json"},
+        )
+        response.raise_for_status()
+        expected = manifest["resource_counts"]["Patient"]
+        total = response.json().get("total")
+        if total != expected:
+            raise ValueError(f"患者数量不一致：服务端 {total!r}，种子 {expected!r}")
+
+        response = await client.get(
+            endpoint + manifest["probe_source_id"],
+            headers={"Accept": "application/fhir+json"},
+        )
+        response.raise_for_status()
+        if resource_digest(response.json()) != manifest["probe_sha256"]:
+            raise ValueError(f"探针资源与种子不一致：{manifest['probe_source_id']}")
+
+    # --- 回收 ---------------------------------------------------------------
+
+    async def _reclaim(
+        self, resources: InstanceResources, error: BaseException, password: str
+    ) -> None:
+        """清理失败也要保留原始错误，交给调用方判断实例创建失败原因。
+
+        清理异常本身挂进原因链会把 Docker 侧文本与上下文带出来，其中可能含有容器
+        环境里的凭据，因此只追加一条脱敏后的说明；在 except 之外重新抛出原始异常，
+        清理异常也不会成为它的 __cause__ 或 __context__。
+        """
+
+        cleanup_note = None
+        try:
+            await asyncio.shield(self.release(resources.instance_id))
+        except BaseException as cleanup_error:
+            cleanup_note = (
+                f"清理失败：{type(cleanup_error).__name__}："
+                f"{_redact(str(cleanup_error), password)}"
+            )
+        if cleanup_note is not None:
+            error.add_note(cleanup_note)
+        raise error
+
+    async def release(self, instance_id: str) -> None:
+        resources = instance_resources(instance_id)
+        for name in await self._managed_containers(resources):
+            await self.command("container", "rm", "--force", "--volumes", name)
+        for name in await self._managed_volumes(resources):
+            await self.command("volume", "rm", "--force", name)
+        for name in await self._managed_networks(resources):
+            await self.command("network", "rm", name)
+
+    def _filters(self, resources: InstanceResources) -> list[str]:
+        return [
+            "--filter",
+            f"label={MANAGED_LABEL}=true",
+            "--filter",
+            f"label={ENVIRONMENT_LABEL}={ENVIRONMENT_NAME}",
+            "--filter",
+            f"label={INSTANCE_LABEL}={resources.instance_id}",
+        ]
+
+    @staticmethod
+    def _owns(labels: dict, resources: InstanceResources) -> bool:
+        return (
+            labels.get(MANAGED_LABEL) == "true"
+            and labels.get(ENVIRONMENT_LABEL) == ENVIRONMENT_NAME
+            and labels.get(INSTANCE_LABEL) == resources.instance_id
+        )
+
+    async def _managed_containers(self, resources: InstanceResources) -> list[str]:
+        identifiers = (
+            await self.command(
+                "container", "ls", "--all", "--quiet", *self._filters(resources)
+            )
+        ).split()
+        names = []
+        for identifier in identifiers:
+            inspected = json.loads(
+                await self.command("container", "inspect", identifier)
+            )[0]
+            labels = (inspected.get("Config", {}).get("Labels") or {})
+            if self._owns(labels, resources):
+                names.append(str(inspected.get("Name") or identifier).lstrip("/"))
+        return names
+
+    async def _managed_volumes(self, resources: InstanceResources) -> list[str]:
+        listing = await self.command(
+            "volume", "ls", "--quiet", *self._filters(resources)
+        )
+        return [name for name in listing.split() if name]
+
+    async def _managed_networks(self, resources: InstanceResources) -> list[str]:
+        listing = await self.command(
+            "network", "ls", "--quiet", *self._filters(resources)
+        )
+        return [name for name in listing.split() if name]
+
+
+def _redact(message: str, password: str) -> str:
+    """容器凭据只存在于创建进程内，任何对外文本都不得携带它。"""
+
+    return message.replace(password, "***") if password else message

@@ -1,8 +1,12 @@
 """Docker lifecycle for supported benchmark environments.
 
-seed_data is a locally loaded, pre-populated image (upstream: fhir-full:v1).
-Docker creates an independent writable layer and independent anonymous volumes
-from that image for every instance. No host or named data volumes are mounted.
+PhysicianBench and MedAgentBench use seed_data as a locally loaded, pre-populated
+image (upstream: fhir-full:v1). Docker creates an independent writable layer and
+independent anonymous volumes from that image for every instance. No host or named
+data volumes are mounted.
+
+FHIR-AgentBench uses seed_data as the path of a prepared seed directory and is
+delegated to its paired HAPI and PostgreSQL lifecycle.
 """
 
 import asyncio
@@ -14,8 +18,13 @@ import httpx
 
 from contracts import EnvironmentConfig, EnvironmentInstance
 from environments.errors import EnvironmentUnavailable
+from server.fhir_agentbench import (
+    ENVIRONMENT_LABEL,
+    ENVIRONMENT_NAME,
+    FhirAgentBenchManager,
+)
 
-SUPPORTED_DOCKER_ENVIRONMENTS = {"PhysicianBench", "MedAgentBench"}
+SUPPORTED_DOCKER_ENVIRONMENTS = {"PhysicianBench", "MedAgentBench", ENVIRONMENT_NAME}
 
 
 class DockerCommandError(EnvironmentUnavailable):
@@ -94,6 +103,8 @@ class DockerManager:
             await asyncio.wait_for(poll(), timeout=self.startup_timeout)
 
     async def create(self, config: EnvironmentConfig) -> EnvironmentInstance:
+        if config.name == ENVIRONMENT_NAME:
+            return await self._fhir_agentbench().create(config)
         if config.name not in SUPPORTED_DOCKER_ENVIRONMENTS:
             raise EnvironmentUnavailable(
                 f"{config.name} is unavailable"
@@ -160,9 +171,17 @@ class DockerManager:
     async def release(self, instance_id: str) -> None:
         name = self._name(instance_id)
         container = await self._inspect(name)
-        if container is None:
+        labels = (container or {}).get("Config", {}).get("Labels", {}) or {}
+        if labels.get(ENVIRONMENT_LABEL) == ENVIRONMENT_NAME:
+            await self._fhir_agentbench().release(instance_id)
             return
-        labels = container.get("Config", {}).get("Labels", {}) or {}
+        if container is None:
+            # HAPI 容器可能已消失而数据库、卷或网络残留，按标签回收整套资源。
+            await self._fhir_agentbench().release(instance_id)
+            return
         if labels.get("medevolve.managed") != "true":
             raise ValueError("Container is not managed by MedEvolve")
         await self._remove(name)
+
+    def _fhir_agentbench(self) -> FhirAgentBenchManager:
+        return FhirAgentBenchManager(docker_command, self.public_host, self.bind_host)
