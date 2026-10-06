@@ -1,0 +1,151 @@
+{
+  "run_id": "harness-evolution",
+  "execute": false,
+  "output_root": "outputs/harness-evolution",
+  "run_dir_template": "outputs/harness-evolution/<run_id>/<environment>/<harness>/<source_method>/<seed>",
+  "frozen_root": "outputs/harness-evolution/frozen",
+  "harnesses": ["openclaw", "hermes", "ace", "reflexion"],
+  "source_methods": ["medevolve", "taskcraft", "workflow", "singleshot", "selfgen", "envexplore"],
+  "tasks_per_group": 1,
+  "evolution_rounds": 1,
+  "seeds": [42],
+  "reference_answer_policy": "training_and_review_only",
+  "experience_limit": {
+    "max_entries": 3,
+    "max_context_tokens": 2000
+  },
+  "fallback_models": [],
+  "limits": {
+    "execution": {"max_model_turns": 30, "max_tool_calls": 200},
+    "learning": {"max_model_turns": 10, "max_tool_calls": 0},
+    "max_input_tokens": 600000,
+    "max_output_tokens": 60000,
+    "max_total_tokens": 660000,
+    "timeout_seconds": 900,
+    "learning_timeout_seconds": 300
+  },
+  "models": {
+    "execution": {
+      "model": "deepseek-v4.1-flash",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "OPENCODE_API_KEY",
+      "instructions_role": "system",
+      "parallel_tool_calls": true,
+      "context_window": 1000000,
+      "max_output_tokens": 131072
+    },
+    "auxiliary": {
+      "model": "deepseek-v4.1-flash",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "OPENCODE_API_KEY",
+      "instructions_role": "system",
+      "parallel_tool_calls": false,
+      "context_window": 1000000,
+      "max_output_tokens": 131072
+    },
+    "learning": {
+      "model": "deepseek-v4.1-flash",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "OPENCODE_API_KEY",
+      "instructions_role": "system",
+      "parallel_tool_calls": false,
+      "context_window": 1000000,
+      "max_output_tokens": 131072
+    },
+    "completion_review": {
+      "model": "gpt-4o-mini",
+      "base_url": "https://api.openlux.ai/v1",
+      "api_key_env": "OPENLUX_API_KEY",
+      "instructions_role": "system",
+      "parallel_tool_calls": true
+    },
+    "benchmark_judge": {
+      "model": "gpt-4o-mini",
+      "base_url": "https://api.openlux.ai/v1",
+      "api_key_env": "OPENLUX_API_KEY",
+      "backend": "openai",
+      "instructions_role": "system",
+      "parallel_tool_calls": false
+    }
+  },
+  "environments": {
+    "PhysicianBench": {
+      "name": "PhysicianBench",
+      "manager_url": "http://10.7.0.15:18084",
+      "seed_data": "fhir-full:v1",
+      "benchmark": {
+        "name": "physicianbench",
+        "repository": "https://github.com/HealthRex/PhysicianBench",
+        "commit": "c7efa8fd5b1e4744ada50668efe4b7e84023cbb0",
+        "license": "Apache-2.0",
+        "task_path": "tasks/v1",
+        "case_path": "tasks/v1/<task>/tests/test_outputs.py",
+        "entrypoint": "pytest tasks/v1/<task>/tests/test_outputs.py",
+        "unverified": []
+      },
+      "sources": {
+        "medevolve": {
+          "tasks": "outputs/physicianbench-gpt4omini-all-20261005-212938/tasks.json"
+        },
+        "taskcraft": {
+          "tasks": "outputs/taskcraft-live-20261003-094909/tasks.json"
+        },
+        "workflow": {
+          "tasks": null,
+          "missing_reason": "PhysicianBench 尚无 Workflow 生成产物"
+        },
+        "singleshot": {
+          "tasks": null,
+          "missing_reason": "PhysicianBench 尚无 SingleShot 生成产物"
+        },
+        "selfgen": {
+          "tasks": "outputs/physicianbench-selfgen-acceptance-2p-flash/evaluation/tasks.json"
+        },
+        "envexplore": {
+          "tasks": "outputs/envexplore-smoke-20261005-125349/tasks.json"
+        }
+      }
+    },
+    "MedAgentBench": {
+      "name": "MedAgentBench",
+      "manager_url": "http://127.0.0.1:18084",
+      "seed_data": "jyxsu6/medagentbench@sha256:3fb83d7ed71c5476f9eb6212bd440a909ef7505922bbc757dc488a8fc0701966",
+      "benchmark": {
+        "name": "medagentbench",
+        "repository": "https://github.com/stanfordmlgroup/MedAgentBench",
+        "commit": "99260117137b09f04837a8c18d18a1107efa55ae",
+        "license": "MIT",
+        "task_config": "configs/tasks/medagentbench.yaml",
+        "data_paths": [
+          "data/medagentbench/funcs_v1.json",
+          "data/medagentbench/test_data_v1.json",
+          "data/medagentbench/test_data_v2.json"
+        ],
+        "entrypoint": "src/server/tasks/medagentbench/eval.py",
+        "unverified": ["上游提交内没有 refsol.py，参考解答来源待核对"]
+      },
+      "sources": {
+        "medevolve": {
+          "tasks": "outputs/two-environment-expanded-20261004-150045/MedAgentBench/run/evaluation/tasks.json"
+        },
+        "taskcraft": {
+          "tasks": "outputs/taskcraft-live-20261004-040400/tasks.json"
+        },
+        "workflow": {
+          "tasks": "outputs/workflow-medagentbench-multi-20261006-01/evaluation/tasks.json"
+        },
+        "singleshot": {
+          "tasks": null,
+          "missing_reason": "MedAgentBench 尚无 SingleShot 生成产物"
+        },
+        "selfgen": {
+          "tasks": "outputs/medagentbench-selfgen-acceptance/evaluation/tasks.json"
+        },
+        "envexplore": {
+          "tasks": "outputs/envexplore-v2-acceptance/medagentbench-envexplore-smallpatient-solverfix/evaluation/tasks.json"
+        }
+      }
+    }
+  },
+  "upstreams_lock": "docker/harnesses/upstreams.lock.json"
+}

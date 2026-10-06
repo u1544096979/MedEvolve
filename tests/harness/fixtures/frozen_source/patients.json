@@ -1,0 +1,4 @@
+{
+  "environment": "PhysicianBench",
+  "patients": ["P1", "P2", "P3"]
+}

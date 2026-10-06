@@ -1,0 +1,36 @@
+[
+  {
+    "instruction": "汇总该患者当前的用药记录并说明是否存在需要调整的用药风险。",
+    "task_type": "治疗规划",
+    "reference_answer": "患者当前使用药物 m1，无记录的不良反应，无需调整。",
+    "evidence": [
+      {
+        "source_id": "MedicationRequest/m1",
+        "statement": "2024-01-05 起使用药物 m1"
+      }
+    ],
+    "decision_point": null,
+    "id": "valid-task",
+    "patient_id": "P1",
+    "environment": "PhysicianBench",
+    "round_index": 0,
+    "source_method": "medevolve"
+  },
+  {
+    "instruction": "解释该患者本次就诊的检查结果。",
+    "task_type": "诊断与解释",
+    "reference_answer": "检查结果需要结合既往病史判断。",
+    "evidence": [
+      {
+        "source_id": "Observation/o1",
+        "statement": "2024-01-06 检出异常指标"
+      }
+    ],
+    "decision_point": null,
+    "id": "invalid-task",
+    "patient_id": "P2",
+    "environment": "PhysicianBench",
+    "round_index": 0,
+    "source_method": "medevolve"
+  }
+]
