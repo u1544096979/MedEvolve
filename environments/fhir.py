@@ -216,6 +216,42 @@ class FHIRClient:
         self._check_resource(resource, set(self.patient_ids))
         return decode_document_notes(resource)
 
+    async def read_shared(self, source_id: str) -> JsonObject:
+        """读取没有患者归属的原始记录，不改动返回字段。
+
+        共享类型（如 Medication、Location）没有 subject/patient 所有者，调用方必须先
+        确认该记录由开放患者引用可达；这里只核对记录身份，并确认没有引入其他患者的引用。
+        """
+        parts = source_id.split("/")
+        if len(parts) != 2 or not parts[0].isalnum() or not FHIR_ID.fullmatch(parts[1]):
+            raise PatientAccessError("Evidence must be a local ResourceType/id reference")
+        resource = await self._request("GET", source_id)
+        if resource.get("resourceType") != parts[0] or resource.get("id") != parts[1]:
+            raise PatientAccessError("FHIR server returned a different evidence resource")
+        self._check_resource(resource, set(self.patient_ids), require_owner=False)
+        return resource
+
+    async def search_all(
+        self, resource_type: str, params: dict, selected: set[str]
+    ) -> list[dict]:
+        """按调用方给出的检索参数读取全部页面。
+
+        本方法不补写 patient/subject，也不限制页数：分页一直跟随服务端 next 链接，
+        链接离开当前实例时由 _collect 报错。逐条记录按 selected 核对患者范围。
+        服务端给出 Bundle.total 时，收到的记录数必须与之一致；否则说明服务端提前
+        结束分页，子集不能当成完整结果返回。
+        """
+        if params.get("_count", 1) < 1:
+            raise ValueError("count must be positive")
+        result = await self._collect(resource_type, dict(params), None, selected)
+        total = result["total"]
+        if total is not None and total != len(result["entries"]):
+            raise ValueError(
+                f"FHIR server reported total={total} for {resource_type} "
+                f"but returned {len(result['entries'])} records"
+            )
+        return result["entries"]
+
     async def _collect(
         self,
         path: str,
