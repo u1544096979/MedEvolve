@@ -9,8 +9,8 @@
 - 官方 ``fhir_client.py`` 删除记录里的 ``text``、``meta`` 后仍用 ``id=`` 检索并按固定
   Google Cloud 端点连接；本地服务用 FHIR R4 支持的 ``_id``，客户端连接当前实例地址。
 - 官方 ``except Exception: return {"error": str(e)}`` 会把失败变成看起来成功的返回；
-  这里只有不可预知的参数错误（资源类型不在允许范围内）按官方形状交回模型纠正，
-  其余失败抛异常，交给既有运行错误通道，空结果仍是 ``{}``。
+  这里只有模型可自行纠正的调用错误（资源类型不在允许范围内，患者或共享记录越界）
+  按官方形状交回模型纠正，其余失败抛异常，交给既有运行错误通道，空结果仍是 ``{}``。
 - 官方磁盘缓存会在实例之间共享结果；本适配不写磁盘，读取缓存只在实例内生效。
 - 官方不核对分页链接归属与患者范围；这里分页必须留在当前实例内，共享资源只能读到
   开放患者引用可达的记录。
@@ -118,6 +118,19 @@ class UnsupportedResourceType(ValueError):
     """``resource_type`` 不在官方允许范围内：这是模型可自行纠正的参数错误。"""
 
 
+class PatientOutOfScope(PatientAccessError):
+    """请求的患者或共享记录不在本次运行的开放范围内。
+
+    同样是可以交回模型纠正的调用错误：被拒绝的请求既不返回数据，也不泄漏任何记录。
+    分页离开当前实例、服务端交回不匹配的记录等数据完整性问题不是这个类型，
+    它们继续走运行错误通道。
+    """
+
+
+# 工具把这两类错误交回模型：调用参数或范围被拒，重试即可，不必终止整个运行。
+CORRECTABLE_ERRORS = (UnsupportedResourceType, PatientOutOfScope)
+
+
 def _check_resource_type(resource_type: str) -> None:
     if resource_type not in SUPPORTED_TYPES:
         raise UnsupportedResourceType(
@@ -152,7 +165,7 @@ class ScopedReader:
             return set(self.patient_ids)
         selected = {patient_id(identifier)}
         if not selected <= self.patient_ids:
-            raise PatientAccessError(
+            raise PatientOutOfScope(
                 f"Patient {identifier} is outside the allowed patient scope"
             )
         return selected
@@ -182,7 +195,7 @@ class ScopedReader:
             allowed = await self._reachable_ids(resource_type, selected)
             for identifier in identifiers:
                 if identifier not in allowed:
-                    raise PatientAccessError(
+                    raise PatientOutOfScope(
                         f"{resource_type}/{identifier} is not referenced by an allowed patient"
                     )
         if resource_type == "Patient":
@@ -291,7 +304,7 @@ class ScopedReader:
         if resource_type in SHARED_RESOURCE_TYPES:
             allowed = await self._reachable_ids(resource_type, self._scope(patient))
             if identifier not in allowed:
-                raise PatientAccessError(
+                raise PatientOutOfScope(
                     f"{source_id} is not referenced by an allowed patient"
                 )
             return await self.client.read_shared(source_id)
@@ -473,8 +486,9 @@ def get_native_tools(
     async def get_resources_by_resource_id(resource_type: str, resource_id: str) -> dict:
         try:
             records = await reader.by_id(resource_type, resource_id)
-        except UnsupportedResourceType as error:
-            # 官方 description 固定，模型无法预知允许的类型；只有这类参数错误可纠正。
+        except CORRECTABLE_ERRORS as error:
+            # 官方 description 固定，模型无法预知允许的类型与开放患者；被拒的参数与越界
+            # 请求不返回数据也不泄漏记录，按官方形状交回模型纠正。
             return json.dumps({"error": str(error)}, ensure_ascii=False)
         return json.dumps(_grouped_tool_output(records), ensure_ascii=False)
 
@@ -483,7 +497,7 @@ def get_native_tools(
     ) -> dict:
         try:
             records = await reader.by_patient(resource_type, patient_fhir_id)
-        except UnsupportedResourceType as error:
+        except CORRECTABLE_ERRORS as error:
             return json.dumps({"error": str(error)}, ensure_ascii=False)
         return json.dumps(_grouped_tool_output(records), ensure_ascii=False)
 

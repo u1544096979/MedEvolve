@@ -24,8 +24,10 @@ from environments.errors import (
 )
 from environments.fhir import FHIRClient
 from environments.fhir_agentbench import (
+    CORRECTABLE_ERRORS,
     REFERENCE_ROUNDS,
     SUPPORTED_TYPES,
+    PatientOutOfScope,
     UnsupportedResourceType,
     _check_resource_type,
     get_native_tools,
@@ -191,6 +193,9 @@ class FakeFHIR:
         self.requests.append(request)
         if self.override is not None:
             return self.override(request)
+        return self.respond(request)
+
+    def respond(self, request):
         store = self.store_for(request.url.host)
         path = request.url.path.removeprefix("/fhir/")
         if path.endswith("/$everything"):
@@ -301,33 +306,56 @@ async def test_empty_result_is_an_empty_object(fake):
 
 
 @pytest.mark.asyncio
-async def test_other_patient_is_refused(fake):
+async def test_out_of_scope_patient_is_reported_as_a_correctable_error(fake):
+    """越界患者既要报错，也不能终止整轮运行：模型换一个开放患者就能继续。"""
     tools = get_native_tools(instance(), ["a"])
-    with pytest.raises(PatientAccessError):
-        await invoke(
+    for patient_fhir_id in ("b", "nonexistent-patient-id"):
+        raw = await invoke_raw(
             tools,
             "get_resources_by_patient_fhir_id",
             resource_type="Observation",
-            patient_fhir_id="b",
+            patient_fhir_id=patient_fhir_id,
+        )
+        assert isinstance(raw, str)
+        payload = json.loads(raw)
+        assert set(payload) == {"error"}
+        assert (
+            f"Patient {patient_fhir_id} is outside the allowed patient scope"
+            in payload["error"]
         )
     assert not fake.requests
-    with pytest.raises(PatientAccessError):
+
+
+@pytest.mark.asyncio
+async def test_record_outside_the_patient_scope_is_still_raised(fake):
+    """服务端交回的患者外记录是数据完整性问题，仍走运行错误通道。"""
+    tools = get_native_tools(instance(), ["a"])
+    with pytest.raises(PatientAccessError) as failure:
         await invoke(
             tools, "get_resources_by_resource_id", resource_type="Observation", resource_id="ob"
         )
+    assert "patient scope" in str(failure.value)
+    assert not isinstance(failure.value, PatientOutOfScope)
     assert paths(fake) == ["/fhir/Observation"]
 
 
 @pytest.mark.asyncio
-async def test_unreferenced_shared_resources_are_refused(fake):
+async def test_unreferenced_shared_resources_are_reported_as_a_correctable_error(fake):
+    """与开放患者无关的共享记录：只报错，且不按被拒 ID 取数。"""
     tools = get_native_tools(instance(), ["a"])
-    with pytest.raises(PatientAccessError):
-        await invoke(
-            tools, "get_resources_by_resource_id", resource_type="Medication", resource_id="m2"
+    for resource_type, identifier in (("Medication", "m2"), ("Location", "loc-b")):
+        raw = await invoke_raw(
+            tools,
+            "get_resources_by_resource_id",
+            resource_type=resource_type,
+            resource_id=identifier,
         )
-    with pytest.raises(PatientAccessError):
-        await invoke(
-            tools, "get_resources_by_resource_id", resource_type="Location", resource_id="loc-b"
+        assert isinstance(raw, str)
+        payload = json.loads(raw)
+        assert set(payload) == {"error"}
+        assert (
+            f"{resource_type}/{identifier} is not referenced by an allowed patient"
+            in payload["error"]
         )
     # 展开可达闭包只读取开放患者可达的记录，从不按被拒 ID 取数。
     requested = {
@@ -478,19 +506,61 @@ def test_check_resource_type_raises_a_dedicated_value_error():
     assert "Expected one of" in str(failure.value)
 
 
+def test_only_correctable_errors_are_handed_back_to_the_model():
+    """可纠正的错误自成一支：分页越界、记录不匹配等仍抛给运行错误通道。"""
+    assert issubclass(PatientOutOfScope, PatientAccessError)
+    assert not issubclass(UnsupportedResourceType, PatientAccessError)
+    assert set(CORRECTABLE_ERRORS) == {UnsupportedResourceType, PatientOutOfScope}
+
+
+@pytest.mark.asyncio
+async def test_tool_refuses_a_shared_record_returned_for_an_unrequested_id(fake):
+    """服务端返回的记录 ID 与请求不符：不得当成完整结果交回模型。"""
+    store = fake.store_for("instance-one")
+    requested = "m1,mi,mii"
+
+    def overreaching(request):
+        if request.url.params.get("_id") == requested:
+            return httpx.Response(
+                200,
+                json=bundle(
+                    [
+                        store["Medication/m1"],
+                        store["Medication/mi"],
+                        store["Medication/mii"],
+                        store["Medication/m2"],
+                    ]
+                ),
+            )
+        return fake.respond(request)
+
+    fake.override = overreaching
+    tools = get_native_tools(instance(), ["a"])
+    with pytest.raises(PatientAccessError) as failure:
+        await invoke(
+            tools,
+            "get_resources_by_patient_fhir_id",
+            resource_type="Medication",
+            patient_fhir_id="a",
+        )
+    assert "unreachable Medication record" in str(failure.value)
+    assert not isinstance(failure.value, PatientOutOfScope)
+
+
 @pytest.mark.asyncio
 async def test_pagination_link_leaving_the_instance_is_refused(fake):
     fake.override = lambda request: httpx.Response(
         200, json=bundle([], "http://another-instance/fhir/Observation?page=2")
     )
     tools = get_native_tools(instance(), ["a"])
-    with pytest.raises(PatientAccessError, match="pagination"):
+    with pytest.raises(PatientAccessError, match="pagination") as failure:
         await invoke(
             tools,
             "get_resources_by_patient_fhir_id",
             resource_type="Observation",
             patient_fhir_id="a",
         )
+    assert not isinstance(failure.value, PatientOutOfScope)
 
 
 @pytest.mark.asyncio
