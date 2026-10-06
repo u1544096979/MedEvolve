@@ -145,13 +145,16 @@ async def test_exploration_prompt_requires_guidance_in_finish_answers(monkeypatc
     assert result.status == "completed", result.error
     prompt = requests[0]["messages"][1]["content"]
     assert "没有待回答的题目" in prompt and "不能提交空列表" in prompt
+    assert "本任务是解题" not in prompt
     assert prompt.index("FINISH([answer1, answer2, ...])") < prompt.index("没有待回答的题目")
 
     requests = install_transport(monkeypatch, [{"role": "assistant", "content": 'FINISH(["a"])'}])
     solution = await run_agent(instructions="Solve", input_text="patient", tools=tools,
         output_type=SolverAnswer, model=MODEL, budget=Budget(max_model_turns=1, max_tool_calls=1))
     assert solution.status == "completed", solution.error
-    assert "没有待回答的题目" not in requests[0]["messages"][1]["content"]
+    solution_prompt = requests[0]["messages"][1]["content"]
+    assert "没有待回答的题目" not in solution_prompt
+    assert "本任务是解题" in solution_prompt and "不能提交空列表" in solution_prompt
 
 
 @pytest.mark.asyncio

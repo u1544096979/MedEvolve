@@ -72,6 +72,11 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
         "不能提交空列表，也不能把未验证的能力写成已可用。\n\n"
         if output_type is EnvironmentExploration else ""
     )
+    solution_delivery = (
+        "本任务是解题：用 FINISH 提交时，必须把最终答案文本作为 answers 里的文本项提交，"
+        "写明你执行的操作、依据与结论，不能提交空列表。\n\n"
+        if output_type is SolverAnswer else ""
+    )
     native_prompt = (
         "You are an expert in using FHIR functions to assist medical professionals. "
         "Based on the task and available functions, make one or more function calls to achieve it.\n\n"
@@ -82,6 +87,7 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
         "3. When all questions are answered and all requested tasks are finished, you MUST call FINISH "
         "in this format (the list must be JSON loadable):\nFINISH([answer1, answer2, ...])\n\n"
         + exploration_delivery
+        + solution_delivery
         + "Your response must be exactly one of these three cases. You can call only one function/action "
         "each time and SHOULD NOT include any other text in the response.\n\n"
         f"Here is a list of functions in JSON format that you can invoke. Use {api_base} as the api_base.\n"
