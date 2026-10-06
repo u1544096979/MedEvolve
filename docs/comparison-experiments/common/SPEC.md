@@ -2,7 +2,7 @@
 
 ## 实验目标
 
-比较 MedEvolve、TaskCraft、Workflow、SingleShot、SelfGen、EnvExplore 在相同医疗环境中的任务生成质量、任务难度表现及生成成本。TaskCraft 以作者源码作为算法依据；Workflow、SingleShot、SelfGen、EnvExplore 按明确的方向定义实现。具有论文来源的方法优先作者源码，其次论文。
+比较 MedEvolve、TaskCraft、Workflow、SingleShot、SelfRefine、EnvExplore 在相同医疗环境中的任务生成质量、任务难度表现及生成成本。TaskCraft 以作者源码作为算法依据；Workflow、SingleShot、SelfRefine、EnvExplore 按明确的方向定义实现。具有论文来源的方法优先作者源码，其次论文。
 
 ## 公共边界
 
@@ -45,4 +45,4 @@ directions 对应两个目标任务。成功输出 TaskBatch，最多两题；�
 
 ## 方法来源状态
 
-TaskCraft 为作者源码的医疗适配；Workflow、SingleShot、SelfGen、EnvExplore 为方法方向对比，分别对应固定阶段生成、单次生成、自生成与自答一致性、环境探索生成。后四项按本项目 SPEC 定义报告。
+TaskCraft 为作者源码的医疗适配；Workflow、SingleShot、SelfRefine、EnvExplore 为方法方向对比，分别对应固定阶段生成、单次生成、单患者自反馈迭代修订、环境探索生成。后四项按本项目 SPEC 定义报告。
