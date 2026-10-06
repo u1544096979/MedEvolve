@@ -15,13 +15,18 @@ from contracts import (
 from environments import get_tools
 from environments.errors import EnvironmentUnavailable, PatientAccessError
 from environments.medagentbench import NativeTools
+from methods.common import GenerationBudget
+from methods.taskcraft.agent import run_search_agent, step_kind
 from methods.taskcraft.environment import bind_generation_tools, is_native
 from methods.taskcraft import READ_ONLY_TOOLS, TaskCraftParameters, generate_tasks
+from methods.taskcraft.ledger import Ledger
 from methods.taskcraft.schemas import (
-    AnswerList, AnswerScore, BackwardContext, CleanedQuestion, ConclusionList,
-    DecompositionReport, InitialQuestion, KnowledgeAnswers, MergedQuestions, NewQuery,
-    QueryJudgement, QueryMerge, SupersetCheck,
+    AgentThought, AnswerList, AnswerScore, BackwardContext, CleanedQuestion,
+    ConclusionList, DecompositionReport, InitialQuestion, KnowledgeAnswers,
+    MergedQuestions, NativeAction, NewQuery, QueryJudgement, QueryMerge,
+    SearchAction, SupersetCheck, TrajectoryScore,
 )
+from methods.taskcraft.verify import score_recall, verify_query
 from methods.taskcraft.stages import split_text
 from tests.environment.test_patient_boundary import native_fhir  # noqa: F401
 
@@ -80,13 +85,33 @@ def completed(output, *, model_turns=1, tool_calls=0):
                      status="completed")
 
 
+class FakeTool:
+    """替身病历检索工具：保留工具名并记录每次调用参数。"""
+
+    def __init__(self, name):
+        self.name = name
+        self.description = f"{name} 病历检索"
+        self.params_json_schema = {"type": "object", "properties": {}}
+        self.calls = []
+
+    async def on_invoke_tool(self, context, arguments):
+        self.calls.append((context.tool_name, arguments))
+        return json.dumps({"resourceType": "Observation", "id": "lab-77"})
+
+
 class FakeRuntime:
     """按阶段输出结构返回固定结果的运行层替身，并记录每次调用。"""
+
+    AGENT_TOOL = "fhir_observation_search_labs"
+    BACKWARD_MARK = "Conduct divergent searches"
+    FINAL_OBJECT_MARK = '"identifier"'
 
     def __init__(self, *, task_types=("诊断与解释", "治疗规划"), conclusions=None,
                  llm_answer="无工具无法确定", agent_answer="5.9 mmol/L",
                  superset_state="valid", off_type=None, merge_valid=True,
-                 decompose_states=None, width_answer="无法确定", backward_failure=False):
+                 decompose_states=None, width_answer="无法确定", backward_failure=False,
+                 agent_action_rounds=1, tool_calls_per_action=1, fail_agent_runs=0,
+                 score_failures=()):
         self.task_types = list(task_types)
         self.conclusions = conclusions if conclusions is not None else [
             {"conclusion": "2024-03-05 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
@@ -102,17 +127,102 @@ class FakeRuntime:
         self.decompose_states = decompose_states or {}
         self.width_answer = width_answer
         self.backward_failure = backward_failure
+        # 首次检索前发出几次工具调用；检索步数达到 agent_action_rounds 后给出答案。
+        self.agent_action_rounds = agent_action_rounds
+        self.tool_calls_per_action = tool_calls_per_action
+        self.fail_agent_runs = fail_agent_runs
+        self.score_failures = set(score_failures)
         self.llm_calls = []
         self.agent_calls = []
         self.agent_instructions = []
         self.agent_inputs = []
         self.agent_output_types = []
+        self.llm_instructions = []
+        self.agent_steps = {}
+        self.agent_runs = 0
+        self.score_requests = 0
+        self.action_requests = []
         self.log = []
         self.question_index = 0
 
+    def _task(self, input_text):
+        """取记忆里的任务文本：任务块之后是规划、反思与 action 块。"""
+        head = re.split(r"\n\n(?=\[FACTS RESULT LIST\]:|\[HISTORY TRAJECTORY ANALYSIS\]:|"
+                        r"Calling tool)", input_text, maxsplit=1)[0]
+        return head
+
+    def _final_answer(self, text, *, as_list: bool):
+        """按调用方声明的输出结构给出答案：text 用于识别单对象关系题。"""
+        if self.FINAL_OBJECT_MARK in text:
+            answer = {"identifier": BLOCK_B, "relation": "该问题条目下的检验结果",
+                      "source_ids": [BLOCK_B]}
+            return [answer] if as_list else answer
+        return [self.agent_answer] if as_list else {"answer_list": [self.agent_answer]}
+
+    def _agent_action(self, instructions, input_text, *, native):
+        """返回一次 action 响应；None 表示本次检索运行失败。"""
+        task = self._task(input_text)
+        if self.backward_failure and self.BACKWARD_MARK in task:
+            return None
+        served = self.agent_steps.get(task, 0)
+        if served == 0:
+            self.agent_runs += 1
+            if self.agent_runs <= self.fail_agent_runs:
+                return None
+        self.agent_steps[task] = served + 1
+        if served < self.agent_action_rounds:
+            if native:
+                return {"action": "GET http://unused/fhir/Observation?code=2823-3"}
+            return {"tool_calls": [{"name": self.AGENT_TOOL,
+                                    "arguments": {"patient": PATIENT}}
+                                   for _ in range(self.tool_calls_per_action)],
+                    "final_answer": None}
+        if native:
+            answers = self._final_answer(instructions + input_text, as_list=True)
+            return {"action": f"FINISH({json.dumps(answers, ensure_ascii=False)})"}
+        return {"tool_calls": [],
+                "final_answer": self._final_answer(instructions, as_list=False)}
+
     async def call_llm(self, *, model, instructions, input_text, output_type):
         self.llm_calls.append(output_type.__name__)
+        self.llm_instructions.append(instructions)
         self.log.append(("llm", output_type.__name__, input_text))
+        if output_type in (SearchAction, NativeAction):
+            native = output_type is NativeAction
+            self.agent_calls.append(output_type.__name__)
+            self.agent_instructions.append(instructions)
+            self.agent_inputs.append(input_text)
+            self.agent_output_types.append(output_type.__name__)
+            self.action_requests.append(input_text)
+            self.log.append(("agent", output_type.__name__, input_text))
+            action = self._agent_action(instructions, input_text, native=native)
+            if action is None:
+                return RunResult(trace=[{"type": "run_error",
+                                         "error": "AgentGenerationError: action response missing"}],
+                                 usage={"model_turns": 1, "tool_calls": 0},
+                                 status="failed",
+                                 error="AgentGenerationError: action response missing")
+            return completed(action)
+        if output_type is AgentThought:
+            if "An agent tried to answer a user query" in instructions:
+                # 源码 provide_final_answer：返回 <think>/<answer> 文本，answer 里是答案 JSON。
+                answer = self._final_answer(instructions + input_text, as_list=False)
+                return completed({"think": "按记忆给出答案",
+                                  "answer": json.dumps(answer, ensure_ascii=False)})
+            if "Below I will present you a task." in input_text:
+                return completed({"think": "先核对该片段已知事实",
+                                  "answer": "### 1. Facts given in the task\n病历片段"})
+            if "You are a world expert at making efficient plans" in input_text:
+                return completed({"think": "先检索后作答",
+                                  "answer": "1. 用病历工具检索该记录"})
+            if "We previously constructed a fact list" in input_text:
+                return completed({"think": "保留已学到的事实",
+                                  "answer": "### 1. Facts given in the task\n病历片段"})
+            if "You are now tasked with updating the action plan" in input_text:
+                return completed({"think": "继续检索", "answer": "1. 继续用病历工具检索"})
+            raise AssertionError(f"unexpected AgentThought input: {input_text[:80]}")
+        if output_type is TrajectoryScore:
+            return completed({"analysis": "轨迹仍在推进", "score": 8})
         if output_type is ConclusionList:
             return completed({"conclusions": self.conclusions})
         if output_type is InitialQuestion:
@@ -128,6 +238,11 @@ class FakeRuntime:
         if output_type is AnswerList:
             return completed({"answer_list": [self.llm_answer]})
         if output_type is AnswerScore:
+            self.score_requests += 1
+            if self.score_requests in self.score_failures:
+                return RunResult(trace=[{"type": "run_error", "error": "model_error: judge failed"}],
+                                 usage={"model_turns": 1, "tool_calls": 0}, status="failed",
+                                 error="model_error: judge failed")
             other_answer = input_text.split("Other Answer:")[-1]
             score = 2 if "5.9" in other_answer else 0
             return completed({"answer_analysis": "judged", "answer_score": score})
@@ -156,42 +271,7 @@ class FakeRuntime:
         raise AssertionError(f"unexpected output type: {output_type}")
 
     async def run_agent(self, *, model, instructions, input_text, tools, output_type, budget):
-        if is_native(tools):
-            assert instructions
-        else:
-            names = [tool.name for tool in tools]
-            assert names and all(name in READ_ONLY_TOOLS for name in names), names
-        self.agent_instructions.append(instructions)
-        self.agent_inputs.append(input_text)
-        self.agent_output_types.append(output_type.__name__)
-        self.agent_calls.append(output_type.__name__)
-        self.log.append(("agent", output_type.__name__, input_text))
-        trace = [{"type": "tool_start", "name": "fhir_observation_search_labs",
-                  "call_id": "call-1", "arguments": "{}"},
-                 {"type": "tool_output", "name": "fhir_observation_search_labs",
-                  "call_id": "call-1", "output": "{}"}]
-        if output_type is SolverAnswer:
-            return RunResult(output={"answer": json.dumps([self.agent_answer], ensure_ascii=False)},
-                             trace=trace,
-                             usage={"model_turns": 2, "tool_calls": 1, "input_tokens": 30,
-                                    "output_tokens": 10, "total_tokens": 40},
-                             status="completed")
-        if output_type is AnswerList:
-            return RunResult(output={"answer_list": [self.agent_answer]}, trace=trace,
-                             usage={"model_turns": 2, "tool_calls": 1, "input_tokens": 30,
-                                    "output_tokens": 10, "total_tokens": 40},
-                             status="completed")
-        if output_type is BackwardContext and self.backward_failure:
-            return RunResult(trace=[{"type": "run_error", "error": "UserError: mis-scoped patient"}],
-                             usage={"model_turns": 1, "tool_calls": 1}, status="failed",
-                             error="UserError: mis-scoped patient")
-        if output_type is BackwardContext:
-            return RunResult(output={"identifier": BLOCK_B, "relation": "该问题条目下的检验结果",
-                                     "source_ids": [BLOCK_B]}, trace=trace,
-                             usage={"model_turns": 2, "tool_calls": 1, "input_tokens": 30,
-                                    "output_tokens": 10, "total_tokens": 40},
-                             status="completed")
-        raise AssertionError(f"unexpected agent output type: {output_type}")
+        raise AssertionError("检索 Agent 不再走公共一次性 Agent 运行入口")
 
 
 @pytest.fixture
@@ -205,11 +285,21 @@ def patched(monkeypatch):
     """接入替身运行层与环境，返回 (fake, 记录表)。"""
 
     def install(fake, *, tools_fail=False, native=False):
-        state = {"created": 0, "released": 0, "patients": None}
-        tools = [SimpleNamespace(name=name) for name in READ_ONLY_TOOLS]
-        tools.append(SimpleNamespace(name="fhir_medication_request_create"))
+        state = {"created": 0, "released": 0, "patients": None, "actions": []}
+        tools = [FakeTool(name) for name in READ_ONLY_TOOLS]
+        tools.append(FakeTool("fhir_medication_request_create"))
         if native:
             tools = NativeTools("http://unused/fhir/", [PATIENT], [])
+
+            async def execute(self, action):
+                normalized = action.replace("```tool_code", "").replace("```", "").strip()
+                state["actions"].append(normalized)
+                if normalized.startswith("FINISH("):
+                    return {"kind": "FINISH",
+                            "answers": json.loads(normalized[len("FINISH("):-1])}
+                return {"kind": "GET", "request": {"action": action}, "reply": "{}"}
+
+            monkeypatch.setattr(NativeTools, "execute", execute)
 
         async def create(config):
             state["created"] += 1
@@ -230,6 +320,7 @@ def patched(monkeypatch):
         monkeypatch.setattr("methods.taskcraft.release_environment", release)
         monkeypatch.setattr("runtime.call_llm", fake.call_llm)
         monkeypatch.setattr("runtime.run_agent", fake.run_agent)
+        state["tools"] = tools
         return state
 
     return install
@@ -245,11 +336,14 @@ async def test_atomic_stage_filters_scores_and_binds_patient_evidence(patched, e
     batch = TaskBatch.model_validate(result.output)
     assert state["patients"] == [PATIENT]
     assert state["created"] == state["released"] == 1
-    # 内置核验：每题先做无工具回答判断，再交给病历工具 Agent 回答。
+    # 内置核验：每题先做无工具回答判断，再交给病历工具 Agent 检索并作答。
     atomic = "该患者第 1 项记录"
     assert len([item for item in fake.log if item == ("llm", "AnswerList", item[2])
                 and atomic in item[2] and "Please solve" in item[2]]) == 1
-    assert len([item for item in fake.log if item[0] == "agent" and atomic in item[2]]) == 1
+    # 源码循环：首个 action 发出检索工具调用，第二个 action 用 final_answer 给出答案。
+    actions = [item for item in fake.log if item[0] == "agent" and atomic in item[2]]
+    assert len(actions) == 2
+    assert "Observation:" not in actions[0][2] and "Observation:" in actions[1][2]
     assert len(stage_records(result, "atomic/verify")) == 2
     assert len(stage_records(result, "atomic/result")) == 1
     verifications = stage_records(result, "atomic/verify")
@@ -266,16 +360,17 @@ async def test_atomic_stage_filters_scores_and_binds_patient_evidence(patched, e
 @pytest.mark.asyncio
 async def test_native_environment_keeps_native_actions_and_parses_finish_answers(patched, environment):
     fake = FakeRuntime()
-    patched(fake, native=True)
+    state = patched(fake, native=True)
     result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
 
     assert result.status == "completed", result.error
     assert TaskBatch.model_validate(result.output).questions
-    # 原生协议：整份工具对象透传，Agent 用 FINISH 答案列表返回，说明里禁止 POST。
-    assert fake.agent_output_types.count("SolverAnswer") >= 1
-    assert "AnswerList" not in fake.agent_output_types
+    # 原生协议：工具对象透传只读视图，Agent 用 FINISH 答案列表返回，说明里禁止 POST。
+    assert fake.agent_output_types.count("NativeAction") >= 1
+    assert "SearchAction" not in fake.agent_output_types
     assert all("只发送 GET" in text for text in fake.agent_instructions)
-    assert any("FINISH([{" in text for text in fake.agent_inputs)
+    assert any("FINISH([" in text for text in fake.agent_inputs)
+    assert any(action.startswith("GET ") for action in state["actions"])
     # FINISH 的答案列表进入评分提示词，说明答案已从原生协议解析出来。
     scored = [text for kind, _, text in fake.log if kind == "llm" and "Other Answer:" in text]
     assert any("Other Answer: ['5.9 mmol/L']" in text for text in scored)
@@ -286,12 +381,16 @@ async def test_native_environment_keeps_native_actions_and_parses_finish_answers
 @pytest.mark.asyncio
 async def test_function_tool_environment_keeps_physicianbench_answers(patched, environment):
     fake = FakeRuntime()
-    patched(fake)
+    state = patched(fake)
     result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
 
     assert result.status == "completed"
-    assert "AnswerList" in fake.agent_output_types
+    assert "SearchAction" in fake.agent_output_types
     assert all("只发送 GET" not in text for text in fake.agent_instructions)
+    # 函数工具协议：Agent 直接调用病历工具，参数保留患者范围。
+    calls = [call for tool in state["tools"] for call in tool.calls]
+    assert calls and all(name in READ_ONLY_TOOLS for name, _ in calls)
+    assert any(PATIENT in arguments for _, arguments in calls)
 
 
 @pytest.mark.asyncio
@@ -351,14 +450,15 @@ async def test_depth_extension_depends_on_parent_and_keeps_sub_query_chain(patch
     depth = [candidate for candidate in pool if candidate["origin"] == "depth"]
     assert depth and all(candidate["parents"] for candidate in depth), "深度扩展必须记录父任务"
     assert {source for candidate in depth for source in candidate["evidence"]} == {BLOCK_A, BLOCK_B}
-    # 顺序：反向检索 → superset 校验 → 生成问题 → 核验 → 合并检查。
     # 顺序：反向检索 → superset 校验 → 生成问题 → 病历核验 → 合并检查。
-    start = next(index for index, item in enumerate(fake.log) if item[1] == "BackwardContext")
-    depth_order = [name for _, name, _ in fake.log[start:] if name in {
-        "BackwardContext", "SupersetCheck", "NewQuery", "AnswerList", "QueryMerge", "QueryJudgement"}]
-    assert depth_order[:7] == ["BackwardContext", "SupersetCheck", "NewQuery",
-                               "AnswerList", "AnswerList",
-                               "QueryMerge", "QueryJudgement"]
+    start = next(index for index, item in enumerate(fake.log) if item[0] == "llm"
+                 and "Conduct divergent searches" in item[2])
+    depth_order = [name for kind, name, _ in fake.log[start:] if kind == "llm" and name in {
+        "SearchAction", "SupersetCheck", "NewQuery", "AnswerList", "QueryMerge", "QueryJudgement"}]
+    # 反向检索的两个 action step → superset → 新问题 → 无工具作答 → 核验检索 → 合并判定。
+    assert depth_order[:7] == ["SearchAction", "SearchAction", "SupersetCheck", "NewQuery",
+                               "AnswerList", "SearchAction", "SearchAction"]
+    assert "QueryMerge" in depth_order[7:] and "QueryJudgement" in depth_order[7:]
     assert stage_records(result, "depth/extension")[0]["status"] == "completed"
 
 
@@ -630,3 +730,245 @@ def test_json_payloads_are_python_literals_in_stages():
     """阶段拼接的输入必须是 JSON 文本，便于在运行记录中核对。"""
     payload = json.dumps({"question": "q", "original_answer": "a"}, ensure_ascii=False)
     assert payload.startswith("{\"question\"")
+
+
+# --------------------------------------------------------------- 源码执行与重试
+def agent_ledger(monkeypatch, fake, *, turns=100, tool_calls=40):
+    """直接驱动一次检索 Agent：替身运行层 + 公共累计预算 + 替身病历工具。"""
+    monkeypatch.setattr("runtime.call_llm", fake.call_llm)
+    budget = GenerationBudget(runtime_config(max_model_turns=turns, max_tool_calls=tool_calls))
+    tools = [FakeTool(name) for name in READ_ONLY_TOOLS]
+    return Ledger(budget), budget, tools
+
+
+def failed_run(error="model_error: format"):
+    return RunResult(trace=[{"type": "run_error", "error": error}],
+                     usage={"model_turns": 1, "tool_calls": 0}, status="failed", error=error)
+
+
+def test_source_planning_and_reflection_schedule():
+    assert [step_kind(i, 5) for i in range(1, 12)] == [
+        "planning", "action", "action", "action", "action",
+        "reflection", "action", "action", "action", "action", "reflection",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ledger_retry_bills_every_attempt(monkeypatch):
+    """首次调用失败、第二次成功：两次真实请求都进入同一账本。"""
+    calls = []
+
+    async def call_llm(*, model, instructions, input_text, output_type):
+        calls.append(output_type.__name__)
+        if len(calls) == 1:
+            return failed_run()
+        return completed({"answer_list": ["5.9 mmol/L"]})
+
+    monkeypatch.setattr("runtime.call_llm", call_llm)
+    ledger = Ledger(GenerationBudget(runtime_config()))
+    run = await ledger.llm("width/answer", instructions="i", input_text="t",
+                           output_type=AnswerList, attempts=2)
+
+    assert run.status == "completed"
+    assert [stage for stage, _ in ledger.budget.records] == [
+        "width/answer/attempt-1", "width/answer/attempt-2"]
+    assert [record.status for _, record in ledger.budget.records] == ["failed", "completed"]
+    assert ledger.exhausted is False
+    assert ledger.used_turns() == 2
+
+
+@pytest.mark.asyncio
+async def test_format_failure_does_not_mark_the_batch_exhausted(monkeypatch):
+    """格式失败只结束本次调用，账本仍有剩余预算时不标成累计耗尽。"""
+    async def call_llm(*, model, instructions, input_text, output_type):
+        return failed_run("model_error: invalid json")
+
+    monkeypatch.setattr("runtime.call_llm", call_llm)
+    ledger = Ledger(GenerationBudget(runtime_config()))
+    run = await ledger.llm("atomic/clean", instructions="i", input_text="t",
+                           output_type=AnswerList, attempts=3)
+
+    assert run.status == "failed"
+    assert len(ledger.budget.records) == 3
+    assert ledger.exhausted is False
+    assert ledger.remaining_turns() == 160 - 3
+
+
+@pytest.mark.asyncio
+async def test_score_samples_skip_a_failed_judgement(monkeypatch):
+    """一次评分失败，其余有效采样继续求平均。"""
+    fake = FakeRuntime(score_failures={1})
+    monkeypatch.setattr("runtime.call_llm", fake.call_llm)
+    ledger = Ledger(GenerationBudget(runtime_config()))
+
+    score = await score_recall(ledger, "5.9 mmol/L", ["5.9 mmol/L"],
+                               samples=3, stage="atomic/verify/llm_score")
+
+    assert score == 2.0
+    assert fake.score_requests == 3
+    assert [record.status for _, record in ledger.budget.records] == [
+        "failed", "completed", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_search_agent_keeps_planning_reflection_and_action_steps_apart(monkeypatch):
+    """规划与反思增加模型轮数，但不增加 action step；真实计数进入账本。"""
+    fake = FakeRuntime(agent_action_rounds=6)
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    run = await run_search_agent(
+        ledger=ledger, stage="depth/backward", instructions="只使用当前患者的病历工具",
+        input_text="该患者 2024-03-05 的血钾结果是多少？", tools=tools,
+        output_type=AnswerList, max_action_steps=20)
+
+    assert run.status == "completed", run.error
+    assert AnswerList.model_validate(run.output).answer_list == ["5.9 mmol/L"]
+    assert run.usage["action_steps"] == 7
+    assert run.usage["tool_calls"] == 6
+    # 规划 2 次请求 + 第 6 步反思 3 次请求 + 7 个 action step 各 1 次请求。
+    assert run.usage["model_turns"] == 12
+    steps = [(item["type"], item.get("step")) for item in run.trace
+             if item["type"] in {"planning", "reflection", "action"}]
+    assert steps[0] == ("planning", 1) and steps[1] == ("action", 1)
+    assert ("reflection", 6) in steps
+    assert [kind for kind, _ in steps].count("action") == 7
+    assert fake.agent_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_action_response_with_several_tool_calls_counts_each(monkeypatch):
+    """一个 action 响应的多个工具调用分别计数，并各自进入公共账本。"""
+    fake = FakeRuntime(tool_calls_per_action=2)
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    run = await run_search_agent(
+        ledger=ledger, stage="depth/backward", instructions="只使用当前患者的病历工具",
+        input_text="该患者 2024-03-05 的血钾结果是多少？", tools=tools,
+        output_type=AnswerList, max_action_steps=20)
+
+    assert run.status == "completed", run.error
+    assert run.usage["tool_calls"] == 2
+    assert [item["type"] for item in run.trace].count("tool_start") == 2
+    tool_records = [record for _, record in budget.records if record.usage["tool_calls"] == 1]
+    assert len(tool_records) == 2
+    assert [item["name"] for item in run.trace if item["type"] == "tool_start"] == [
+        FakeRuntime.AGENT_TOOL, FakeRuntime.AGENT_TOOL]
+    called = next(tool for tool in tools if tool.name == FakeRuntime.AGENT_TOOL)
+    assert len(called.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_post_cap_provide_final_answer_is_billed(monkeypatch):
+    """达到 action 上限后源码仍发起 provide_final_answer，该请求计费。"""
+    fake = FakeRuntime(agent_action_rounds=99)
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    run = await run_search_agent(
+        ledger=ledger, stage="depth/backward", instructions="只使用当前患者的病历工具",
+        input_text="该患者 2024-03-05 的血钾结果是多少？", tools=tools,
+        output_type=AnswerList, max_action_steps=2)
+
+    assert run.status == "completed", run.error
+    assert run.usage["action_steps"] == 2
+    assert run.usage["model_turns"] == 5          # 规划 2 + action 2 + 强制终答 1
+    assert [item["kind"] for item in run.trace if item["type"] == "final_answer"] == ["forced_final"]
+    assert AnswerList.model_validate(run.output).answer_list == ["5.9 mmol/L"]
+    # 局部 action 上限不等于累计预算耗尽。
+    assert ledger.exhausted is False
+    assert [stage for stage, _ in budget.records][-1] == "depth/backward/forced_final/attempt-1"
+
+
+@pytest.mark.asyncio
+async def test_forced_final_answer_is_blocked_by_cumulative_budget(monkeypatch):
+    """累计预算不足时禁止源码的 provide_final_answer 请求。"""
+    fake = FakeRuntime(agent_action_rounds=99)
+    ledger, budget, tools = agent_ledger(monkeypatch, fake, turns=4)
+    run = await run_search_agent(
+        ledger=ledger, stage="depth/backward", instructions="只使用当前患者的病历工具",
+        input_text="该患者 2024-03-05 的血钾结果是多少？", tools=tools,
+        output_type=AnswerList, max_action_steps=2)
+
+    assert run.status == "budget_exhausted"
+    assert run.usage["model_turns"] == 4
+    assert run.output is None
+    assert not [item for item in run.trace if item.get("kind") == "forced_final"]
+    assert "forced_final" not in "".join(stage for stage, _ in budget.records)
+    assert ledger.exhausted is True
+
+
+@pytest.mark.asyncio
+async def test_verify_agent_retries_the_whole_sequence_and_reports_action_steps(monkeypatch):
+    """VerifyAgent 外层重试重新走一遍流程；步数取真实 action step 数。"""
+    fake = FakeRuntime(fail_agent_runs=1)
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    outcome = await verify_query(
+        ledger, "该患者 2024-03-05 的血钾结果是多少？", "5.9 mmol/L", tools,
+        samples=3, stage="atomic/verify", instructions="只使用当前患者的病历工具")
+
+    assert outcome.error is None
+    assert outcome.llm_score == 0.0 and outcome.agent_score == 2.0
+    assert outcome.llm_answer == ["无工具无法确定"]
+    assert outcome.agent_answer == ["5.9 mmol/L"]
+    assert outcome.agent_step_number == 2
+    assert [item["name"] for item in outcome.agent_trajectory] == [
+        "facts", "plan", "action", "action"]
+    assert [record.status for _, record in budget.records].count("failed") == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_stops_without_retry_when_the_model_answers_alone(monkeypatch):
+    """无工具回答满分立即拒绝，不用外层重试绕过该判据。"""
+    fake = FakeRuntime(llm_answer="5.9 mmol/L")
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    outcome = await verify_query(
+        ledger, "该患者 2024-03-05 的血钾结果是多少？", "5.9 mmol/L", tools,
+        samples=3, stage="atomic/verify", instructions="只使用当前患者的病历工具")
+
+    assert outcome.error == "LLM can solve this task"
+    assert fake.agent_calls == []
+    assert fake.score_requests == 3
+    assert len(budget.records) == 4
+
+
+@pytest.mark.asyncio
+async def test_verify_keeps_the_source_branch_when_the_agent_score_is_unavailable(monkeypatch):
+    """Agent 评分样本全部无效时按源码分支返回空分数，不用外层重试重走流程。"""
+    fake = FakeRuntime(score_failures={4, 5, 6})
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    outcome = await verify_query(
+        ledger, "该患者 2024-03-05 的血钾结果是多少？", "5.9 mmol/L", tools,
+        samples=3, stage="atomic/verify", instructions="只使用当前患者的病历工具")
+
+    assert outcome.error is None
+    assert outcome.llm_score == 0.0
+    assert outcome.agent_score is None
+    assert outcome.agent_answer == ["5.9 mmol/L"]
+    assert outcome.agent_step_number == 2
+    # 外层没有重试：无工具作答只请求一次。
+    assert fake.llm_calls.count("AnswerList") == 1
+
+
+def test_agent_prompts_render_without_jinja_leftovers():
+    """检索 Agent 的提示词按 SearchAgent 的实际取值渲染：工具清单就位、无未替换的占位符。"""
+    from methods.taskcraft import agent
+
+    catalog = "- fhir_observation_search_labs: 检索当前患者的检验记录"
+    variables = {"task": "任务文本", "answer_facts": "已知事实", "facts_update": "更新后事实",
+                 "tools": catalog, "trajectory_score": 8, "trajectory_analysis": "分析",
+                 "remaining_steps": 3, "standard_answer": None}
+    rendered = {name: agent._populate(text, variables)
+                for name, text in agent.AGENT_PROMPTS.items()}
+    rendered["final_answer.note"] = agent._populate(agent.FUNCTION_ACTION_NOTE,
+                                                   {"output_schema": '{"type": "object"}'})
+    rendered["native_action.note"] = agent._populate(agent.NATIVE_ACTION_NOTE,
+                                                    {"output_schema": '{"type": "object"}'})
+
+    for name, text in rendered.items():
+        assert "{{" not in text and "{%" not in text, name
+        assert "managed_agents" not in text, name
+    assert catalog in rendered["system_prompt"]
+    assert catalog in rendered["planning.initial_plan"]
+    assert catalog in rendered["reflection.update_plan_post_messages"]
+    assert "任务文本" in rendered["planning.initial_facts"]
+    assert "任务文本" in rendered["final_answer.post_messages"]
+    assert '{"type": "object"}' in rendered["final_answer.note"]
+    # 源码模板里的单花括号占位符保持逐字（Jinja 不替换），行为与作者一致。
+    assert "{language}" in rendered["system_prompt"]
+    assert "{remaining_steps}" in rendered["reflection.update_plan_post_messages"]

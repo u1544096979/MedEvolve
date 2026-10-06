@@ -25,7 +25,9 @@ from .schemas import (
     InitialQuestion, KnowledgeAnswers, MergedQuestions, NewQuery, QueryJudgement,
     QueryMerge, SupersetCheck,
 )
-from .verify import score_recall, verify_query
+from .verify import (
+    ATOMIC_MAX_ACTION_STEPS, DEPTH_MAX_ACTION_STEPS, score_recall, verify_query,
+)
 
 __all__ = ["Candidate", "Pipeline", "TaskCraftParameters", "split_text"]
 
@@ -222,6 +224,7 @@ class Pipeline:
                 self.ledger, item["question"], item["answer"], self.tools,
                 samples=self.parameters.judge_samples, stage="atomic/verify",
                 instructions=self.agent_instructions(),
+                max_action_steps=ATOMIC_MAX_ACTION_STEPS,
             )
             self.record("atomic/verify", question=item["question"], **outcome.record())
             if outcome.error is not None:
@@ -483,7 +486,8 @@ class Pipeline:
             now_query = backward["query"]
             verify = await verify_query(self.ledger, now_query, last_identifier, self.tools,
                                         samples=self.parameters.judge_samples, stage="depth/verify",
-                                        instructions=self.agent_instructions())
+                                        instructions=self.agent_instructions(),
+                                        max_action_steps=DEPTH_MAX_ACTION_STEPS)
             self.record("depth/verify", attempt=attempt, question=now_query, **verify.record())
             if verify.error is not None or not verify.agent_score:
                 continue
@@ -526,7 +530,9 @@ class Pipeline:
         if self.native:
             payload += f"\n{NATIVE_FINISH_OBJECT}"
         run = await self.ledger.agent("depth/backward", instructions=self.agent_instructions(),
-                                     input_text=payload, tools=self.tools, output_type=BackwardContext)
+                                      input_text=payload, tools=self.tools,
+                                      output_type=BackwardContext,
+                                      max_action_steps=DEPTH_MAX_ACTION_STEPS)
         if run is None or run.status != "completed":
             self.record("depth/backward", status=_status(run), error=_error(run), element=element)
             return None

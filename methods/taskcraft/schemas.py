@@ -1,12 +1,13 @@
 """各阶段模型输出结构，对应源码提示词声明的 JSON 约定。"""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 __all__ = [
-    "AnswerList", "AnswerScore", "BackwardContext", "CleanedQuestion", "Conclusion",
-    "ConclusionList", "DecompositionReport", "DecompositionState", "InitialQuestion",
-    "KnowledgeAnswer", "KnowledgeAnswers", "MergedQuestion", "MergedQuestions",
-    "NewQuery", "QueryJudgement", "QueryMerge", "SupersetCheck",
+    "AgentThought", "AnswerList", "AnswerScore", "BackwardContext", "CleanedQuestion",
+    "Conclusion", "ConclusionList", "DecompositionReport", "DecompositionState",
+    "InitialQuestion", "KnowledgeAnswer", "KnowledgeAnswers", "MergedQuestion",
+    "MergedQuestions", "NativeAction", "NewQuery", "QueryJudgement", "QueryMerge",
+    "SearchAction", "SupersetCheck", "ToolCall", "TrajectoryScore",
 ]
 
 
@@ -94,3 +95,34 @@ class KnowledgeAnswer(BaseModel):
 
 class KnowledgeAnswers(BaseModel):
     answers: list[KnowledgeAnswer]
+
+
+# 检索 Agent 的请求结构：源码 oagents 的提示词要求 <think>/<answer> 两段，
+# 公共运行层使用结构化输出承载同一语义。
+class AgentThought(BaseModel):
+    think: str = ""
+    answer: str = ""
+
+
+# 源码 reflection_step 的 process reward model 输出。
+class TrajectoryScore(BaseModel):
+    analysis: str = ""
+    score: int
+
+
+# 源码 ToolCall（oagents.agent_types）：工具名加参数。
+class ToolCall(BaseModel):
+    name: str
+    arguments: JsonValue = None
+
+
+# 函数工具协议的动作编码：一次响应可携带多个工具调用，
+# final_answer 对应源码的 FinalAnswerTool 收尾分支。
+class SearchAction(BaseModel):
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    final_answer: JsonValue = None
+
+
+# 原生协议的动作编码：GET 检索或 FINISH 收尾的文本动作。
+class NativeAction(BaseModel):
+    action: str

@@ -18,10 +18,15 @@
 | `gen_depth_based_task.py:DepthExtend.backward` | `stages.Pipeline._backward` | 反向检索 superset、`is_superset_valid` 校验、生成新问题 |
 | `gen_depth_based_task.py:DepthExtend.verify`、`process_single_task`、`depth_extend` | `stages.Pipeline._extend_depth`、`_merge` | 逐跳核验、合并、`valid_hop` 与 `max_hops` 控制 |
 | `gen_width_based_task.py:width_extend`、`check_queries` | `stages.Pipeline.width`、`_check_merged` | 合并问题、可分解性检查、无工具作答检查 |
-| `agent_tools.py:VerifyAgent.forward`、`recall_score` | `verify.verify_query`、`score_recall` | 无工具回答判原子性 + 病历工具 Agent 回答评分 |
+| `agent_tools.py:VerifyAgent.forward`、`recall_score` | `verify.verify_query`、`score_recall` | 无工具回答判原子性 + 病历工具 Agent 回答评分；外层重试 3 次重走整段流程，评分取有效采样平均 |
 | `agent_tools.py:SearchAgent` 描述 | `prompts.MEDICAL_RECORD_AGENT` | 检索范围由网络改为当前患者病历 |
-| `agent_tools.py:BaseAgent.capture_trajectory` | `verify._trajectory` | 阶段内保留紧凑轨迹；完整运行记录在公共 `RunResult.trace` |
-| `utils.py:run_llm_prompt`、`safe_json_loads` | 公共 `runtime.call_llm`、`run_agent` | 结构化输出替代文本 JSON 解析与重试 |
+| `oagents/agents.py:ToolCallingAgent._run`、`step`、`provide_final_answer` | `agent.run_search_agent`、`step_kind` | 第 1 步规划、每 `reflection_interval=5` 步反思、action 上限后仍发起强制终答；步骤类型与真实计数写入 trace |
+| `oagents/agents.py:planning_step`、`reflection_step`（`prompts_type=w_think_reflect`） | `agent._SearchRun.planning`、`reflection` | 首次规划 2 次请求、反思 3 次请求（PRM 评分、事实更新、计划更新），两者都不占 action step |
+| `oagents/memory.py:TaskStep/PlanningStep/ReflectionStep/ActionStep.to_messages`、`write_memory_to_string_messages` | `agent._memory_messages`、`agent._memory_string` | 记忆与工具结果按作者字段映射；反思的 PRM 使用字符串形式（含 512 字符截断） |
+| `oagents/agent_types.py:handle_agent_output_types`、`toolcalling_agent.yaml:final_answer` | `agent._finish`、`agent._finish_output` | FINISH 答案数组映射 `AnswerList`/`SolverAnswer`，单对象映射声明的输出类型；`final_answer` 是虚拟工具，不进入患者工具列表 |
+| `agent_tools.py:SearchAgent.forward(max_retries=3)` | `ledger.agent` | 检索 Agent 单次调用由调用方外层重试；`max_step` 映射为 `max_action_steps`（原子核验 20、深度反向与深度核验 10） |
+| `utils.py:run_llm_prompt`、`safe_json_loads` | 公共 `runtime.call_llm` + `ledger.llm` | 结构化输出替代文本 JSON 解析；`max_retries` 映射为调用点参数 `attempts`，每次尝试自行记账后才重试 |
+| `agent_tools.py:BaseAgent.capture_trajectory` | `verify._trajectory` | 按记忆步骤类型映射轨迹；原始模型响应、工具输入输出与每步计数保留在公共 `RunResult.trace` |
 | `data_processor.py:split_text_intelligently` | `stages.split_text` | 同分隔符优先级（`\n\n`、`\n`、`.`、空格、字符），无重叠 |
 | `gen_atomic_task.py:gen_atomic_tasks`、`read_indentifier_language`、`polish_readed_context` | 无对应 | 入口由公共 `generate_tasks` 承担；文件、图片与 URL 读取不适用 |
 
@@ -61,14 +66,19 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 5. 参考答案组织。`TaskBatch` 只有单个 `reference_answer`。深度题按源码 `solve_trajectory` 顺序写入「最终答案 + 子问题与中间答案（自外向内）」；宽度题写入「合并题参考答案：各子问题 → 答案」。子问题内容与顺序取自对应源码阶段，不另行改写。
 6. 题型。源码没有题型采样。出题提示词追加题型约束，取值限于 `directions` 中的题型；扩展题继承父题题型，跨题型合并取第一父题的题型。批量输出按方向各取一题，同一方向内优先顺序为宽度、深度、原子。
 7. 预算边界。`max_candiated_conclusions`、`max_candidate_atomic`、`extended_attempts`、`max_hops`、`num_parallel_predictions`、`merge_attempts`、`query_attempts` 以 `TaskCraftParameters` 显式给出。`atomic_budget_share` 限制原子阶段使用的生成预算比例，`extension_guard_turns` 控制剩余轮数不足时不再发起新的扩展跳，使源码循环在共享预算内结束。
-8. Agent 步数。源码 `max_step`（10/20）是单次 Agent 调用的步数上限，公共 `run_agent` 只接受累计剩余预算，无法在单次调用内设置。适配以累计工具预算替代，实测单次反向检索可达 48 轮模型调用。
-9. 评分采样。`recall_score` 的 3 次并行判定在公共层顺序执行（`judge_samples=3`），判定提示词与评分区间不变，成本逐次计入累计预算。
-10. 无工具回答路径。源码该路径不传 system 指令，公共 `call_llm` 固定携带 system 消息，适配使用最小指令（`LLM_ONLY_INSTRUCTIONS`）保持「无工具、仅自身知识」的语义。
-11. 提示词。源码正文逐字保留，医疗适配以追加约束块实现；正文中的文献与网页示例保留用于说明字段格式，追加块声明本任务领域是病历记录。
-12. `clean_qa` 输入由 Python 字典的 f-string 改为 JSON 文本，字段不变。
-13. 患者标识。病历工具按参数鉴权，本次开放的患者标识写入 Agent 说明。
-14. 原生协议分派。MedAgentBench 的工具列表不是函数工具，按名字过滤会得到空列表。生成阶段检测原生工具对象后按只读视图绑定，放行清单为 GET 与 FINISH；核验与反向检索的输出形态改为 `FINISH` 约定，机制分支与 PhysicianBench 一致。
-15. 原生接口范围。MedAgentBench 声明含 6 个 GET 与 3 个 POST，没有病历文书检索接口；依赖文书内容的结论在该环境下候选更少，机制不变。
+8. Agent 步数与计数。源码 `ToolCallingAgent._run` 以 action step 计数（`max_step` 为 20，深度反向与深度核验为 10），第 1 步先规划、之后每 5 步反思；规划与反思不增加 action step，但每次都增加模型请求。适配保留该循环：`Ledger.agent(..., max_action_steps=)` 给出单次调用上限，规划与反思按 `run_search_agent` 的步骤调度执行，`usage.action_steps` 记录真实 action step 数，`verify.verify_query` 的 `agent_step_number` 取该值（不再取模型请求数）。源码 `traj_step_num()` 返回的 `self.step_number` 在终止时又递增一次，即实际 action step 数加一（达到上限时为 `max_step+1`），该串值与 `usage.step_number` 同时保留在运行结果中。
+9. 动作编码。公共单次调用入口返回结构化 JSON，无法使用 SDK 的工具调用字段；一次 action 的编码是 `{"tool_calls": [...], "final_answer": ...}`（原生协议为 `{"action": "GET …"}`）。源码 `step` 的 JSON 回退分支（agents.py:1516-1525）只支持一个 `{"name", "arguments"}` 对象，SDK 分支也只执行 `tool_calls[0]`（agents.py:1546）；适配把同一次响应里的多个工具调用依次执行、逐个计入 `tool_calls`，使台账计数与真实调用一致。
+10. 无工具调用的回退。源码 `step` 在既无工具调用、内容也不是 JSON 动作时，把模型输出直接当作终答文本；结构化输出下没有对应形态，适配将该情形记为生成失败（`action response carries no tool call`），由调用方的外层重试处理。
+11. 终答解析。`final_answer` 的参数是答案 JSON；达到 action 上限后的 `provide_final_answer` 请求按源码要求返回 `<think>/<answer>`（`AgentThought`），再由 `agent._finish` 把 `answer` 解析为声明的输出结构，对应 `SearchAgent.forward` 的 `safe_json_loads`。原始 `oagents` 运行在此处返回文本，公共运行层需要 `output_type` 结构。
+12. 工具调用记账。每个模型请求与每次工具调用都进入同一 `GenerationBudget.records`：工具调用单独记一条 `model_turns=0`、`tool_calls=1` 的记录，使累计工具预算真实递减，并在达到上限时按总工具预算阻断。
+13. Agent 记忆与模板渲染。规划与反思的请求把消息列表展平为单一输入文本（公共单次调用入口只接受 `instructions` 与 `input_text`），字段与顺序保持作者 `to_messages` 口径；`managed_agents` 为空，模板中的对应 Jinja 分支渲染为空文本，工具清单由 Jinja 循环改为预渲染。提示词逐字取自 `oagents/prompts/w_think_reflect/toolcalling_agent.yaml`。
+14. 评分采样与失败样本。`recall_score` 的 3 次并行判定在公共层顺序执行（`judge_samples=3`），判定提示词与评分区间不变，成本逐次计入累计预算。单个样本的请求失败或输出无法比较时不计入平均值，其余有效样本继续求平均（源码在并行分支里会把整个评分置为 None）；全部无效时返回 None，无工具回答分支按源码的比较异常路径重试，病历工具回答分支按源码直接带回空分数，由原子过滤或深度扩展的对应分支处理。
+15. 无工具回答路径。源码该路径不传 system 指令，公共 `call_llm` 固定携带 system 消息，适配使用最小指令（`LLM_ONLY_INSTRUCTIONS`）保持「无工具、仅自身知识」的语义。
+16. 提示词。源码正文逐字保留，医疗适配以追加约束块实现；正文中的文献与网页示例保留用于说明字段格式，追加块声明本任务领域是病历记录。
+17. `clean_qa` 输入由 Python 字典的 f-string 改为 JSON 文本，字段不变。
+18. 患者标识。病历工具按参数鉴权，本次开放的患者标识写入 Agent 说明。
+19. 原生协议分派。MedAgentBench 的工具列表不是函数工具，按名字过滤会得到空列表。生成阶段检测原生工具对象后按只读视图绑定，放行清单为 GET 与 FINISH；核验与反向检索的输出形态改为 `FINISH` 约定，机制分支与 PhysicianBench 一致。
+20. 原生接口范围。MedAgentBench 声明含 6 个 GET 与 3 个 POST，没有病历文书检索接口；依赖文书内容的结论在该环境下候选更少，机制不变。
 
 ## 5. 预算要求与实测用量
 
@@ -95,7 +105,7 @@ MedAgentBench 实测（同一脚本，患者 `S6534835`，同样预算）：
 | 公共评测 | 核验 `valid=true`；解题与评测模型调用出现 175k token 超过 128k 上下文 |
 | 运行目录 | `outputs/taskcraft-live-20261004-040400` |
 
-配置要求：生成预算低于该量级时，原子阶段的内置核验无法完成，输出为空批，失败原因保留在 `trace`。深度阶段依赖公共层提供单次 Agent 调用的步数上限；解题 Agent 在同类大 snapshot 患者上出现过 131k token 超过 128k 上下文，需在公共层收窄工具返回量。
+配置要求：生成预算低于该量级时，原子阶段的内置核验无法完成，输出为空批，失败原因保留在 `trace`。深度阶段按源码 `max_step=10` 限制单次检索的 action step 数，规划与反思的模型请求由累计预算承担；解题 Agent 在同类大 snapshot 患者上出现过 131k token 超过 128k 上下文，需在公共层收窄工具返回量。
 
 验证方式：`pytest tests/method/test_taskcraft.py`（替身运行层，覆盖阶段机制与共享边界）；`tests/method/test_taskcraft_live.py` 为可选端到端检查，配置 `MEDEVOLVE_TASKCRAFT_MANAGER`、`MEDEVOLVE_TASKCRAFT_PATIENT`、`MEDEVOLVE_TASKCRAFT_BUDGET` 后运行。
 
