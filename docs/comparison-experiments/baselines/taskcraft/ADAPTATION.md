@@ -87,7 +87,8 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 19. 患者标识。病历工具按参数鉴权，本次开放的患者标识写入 Agent 说明。
 20. 原生协议分派。MedAgentBench 的工具列表不是函数工具，按名字过滤会得到空列表。生成阶段检测原生工具对象后按只读视图绑定，放行清单为 GET 与 FINISH；核验与反向检索的输出形态改为 `FINISH` 约定，机制分支与 PhysicianBench 一致。
 21. 原生接口范围。MedAgentBench 声明含 6 个 GET 与 3 个 POST，没有病历文书检索接口；依赖文书内容的结论在该环境下候选更少，机制不变。
-22. 强制终答的答案字段类型。达到 action step 上限后的终答请求按源码要求返回 `<think>/<answer>`，适配用 `AgentThought(think: str, answer: str)` 承载，再按源码 `safe_json_loads` 的位置解析 `answer`。PhysicianBench 机制验收里深度反向检索 14 次尝试中有 12 次的 `answer` 是 JSON 对象而非字符串，`AgentThought` 校验失败并记为 `ValidationError: ... Input should be a valid string`，该父题的整条深度链路随之失败；MedAgentBench 的深度阶段产出 6 个候选，其 12 次反向检索只有 1 次走到强制终答。该字段类型保持源码的字符串口径，未放宽，属于当前适配与 provider 结构化输出之间的已知缺口（证据见第 5 节）。
+22. 强制终答的答案字段类型。达到 action step 上限后的终答请求按源码要求返回 ` thinking/<answer>`，适配用 `FinalThought(think: str, answer: any)` 承载：`answer` 对应源码 `FinalAnswerTool` 的 `inputs = {"answer": {"type": "any"}}` 与 `output_type = "any"`，可以是任意 JSON 值，`think` 仍为字符串；`agent._finish` 在源码 `safe_json_loads` 的位置把字符串解析为 JSON，再映射到本次调用声明的输出结构。JSON 对象与 JSON 文本两种形态都接受。
+23. 规划与反思的答案字段类型。规划（事实、计划）与反思（事实、计划）的 `answer` 在源码里是 `extract_think_and_answer` 从 ` thinking/<answer>` 标签抽出的自由文本，不解析 JSON；适配用 `AgentThought(think: str, answer: str)` 承载，保持文本口径。PhysicianBench 的 `gpt-4o-mini` 在规划请求里把任务要求的 JSON 直接放进 `answer`（反向检索任务给出 `{"identifier", "relation"}`；核验任务因 `AUGMENTED_QUERY` 要求 `answer_list` 键而给出 `{"answer_list": [...]}`），`AgentThought` 校验失败，整次检索以 `ValidationError: ... Input should be a valid string` 终止。这是 PhysicianBench 机制验收深度阶段没有候选的直接原因（证据见 5.1 节）；MedAgentBench 的深度阶段在同一适配下产出 6 个候选。
 
 ## 5. 预算口径与真实运行结果
 
@@ -114,23 +115,37 @@ MEDEVOLVE_TASKCRAFT_LIVE_CONFIG=<机制配置> pytest tests/method/test_taskcraf
 
 ### 5.1 PhysicianBench 机制验收
 
-运行目录 `outputs/taskcraft-mechanism-physicianbench`，患者 `MRN4460967357`，种子 `fhir-full:v1`，`gpt-4o-mini`，机制预算 800 轮 / 800 次工具。
+运行目录 `outputs/taskcraft-mechanism-physicianbench-rerun`，患者 `MRN4460967357`，种子 `fhir-full:v1`，`gpt-4o-mini`，机制预算 800 轮 / 800 次工具，墙钟 14 分 45 秒。
 
 | 项 | 数值 |
 |---|---|
-| 生成状态 | completed；261 模型轮 / 17 次工具调用 / 447 995 tokens（输入 412 338，输出 35 657） |
-| 候选数 | atomic 4，width 1，depth 0 |
-| 原子阶段 | chunk 0 抽到 47 条结论，生成 10 题，核验接纳 4 题 |
-| 宽度阶段 | 合并 2 组，可分解性检查保留 1 组，产出 1 题 |
-| 深度阶段 | 4 道父题各 4 次尝试全部失败：反向检索 14 次尝试里 12 次终答字段类型不符、1 次无工具调用、1 次成功；superset 校验拒绝 2 次；核验 1 次 `llm_score=0.0`；`depth/result.extended=0` |
-| 候选证据 | 原子题 `Condition/2572`、`Condition/2573`、`Condition/2570`、`Condition/2568`；宽度题合并 `Condition/2570` 与 `Condition/2568`，父题为两道原子题 |
-| 最终选题 | 2 题，均为原子题（题型配额决定，宽度题未进入筛选记录） |
-| 过程异常 | 6 次出题因模型返回空 `task_type` 被拒；6 次原子核验记为 `action response carries no tool call`；17 次工具调用全部在开放患者范围内 |
+| 生成状态 | completed；262 模型轮 / 26 次工具调用 / 469 017 tokens（输入 438 291，输出 30 726；按 gpt-4o-mini 公开价估算约 $0.084） |
+| 候选数 | atomic 3，width 2，depth 0 |
+| 分支顺序 | `["width", "depth"]`（派生种子决定） |
+| 原子阶段 | 4 块文本、54 708 字符；chunk 0 与 chunk 1 共抽到 46 条结论，生成 10 题，核验接纳 3 题；1 次出题因模型返回空 `task_type` 被拒；7 次核验失败（3 次规划 `answer` 类型不符、4 次 `action response carries no tool call`） |
+| 宽度阶段 | 合并 2 组，可分解性检查保留 2 组，产出 2 题，父题各 2 道 |
+| 深度阶段 | 3 道父题各 4 次尝试全部失败，反向检索 12 次尝试：6 次规划 `answer` 类型不符、2 次 `APITimeoutError`、1 次 `APIConnectionError`、1 次 `action response carries no tool call`、2 次 superset 校验拒绝；`depth/result.extended=0` |
+| 候选证据 | 原子题 `Condition/2565`、`Condition/2567`、`Condition/2571`；宽度题分别合并 `Condition/2571`+`Condition/2567` 与 `Condition/2567`+`Condition/2565`，各带两道父题 |
+| 最终选题 | 1 题（请求方向为药物处方与诊断与解释；候选均为诊断与解释，宽度题按 `task_type_quota_exhausted` 未进入） |
+| 无已知 token 的请求 | 3 次（2 次 `APITimeoutError`、1 次 `APIConnectionError`），计入 `runs_without_known_tokens` |
 | 提交基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
 
-阶段结论：`atomic` 与 `width` 产出真实候选并通过题面、证据、父题与用量判据；`depth` 在本次运行没有候选，四道父题都未在 `extended_attempts=4` 内完成扩展，失败原因见上表「深度阶段」行，完整失败记录留在 `pipeline.json` 与 `report.json` 的 `stage_records` 里。该环境在 800/800 机制预算下没有深度候选。
+阶段结论：`atomic` 与 `width` 产出带参考答案、可回查证据与父题的真实候选；`depth` 没有候选。
 
-同一配置的另一次运行 `outputs/taskcraft-mechanism-physicianbench-attempt1` 保留为失败记录：原子 40 条结论的 `source_ids` 全为空，证据门槛拒绝全部 10 题，`atomic.accepted=0`，整批 `status=failed`（227 轮 / 16 次工具 / 332 106 tokens）。该次运行里 16 次工具调用有 5 次返回 `PatientAccessError: Patient 4460967357 is outside the allowed patient scope`（模型把 `MRN4460967357` 写成 `4460967357`）；结论里 `source_ids` 由模型给出，这一轮的模型没有按追加约束填写。
+深度阶段没有候选的位置是规划请求，不是强制终答。用同一份配置的 provider 复现（`max_action_steps=1`、空工具列表、反向检索任务文本），失败记录是 `probe/backward/planning/facts/attempt-1`，报错与验收记录逐字一致：
+
+```
+ValidationError: 1 validation error for AgentThought
+answer
+  Input should be a valid string [type=string_type,
+  input_value={'identifier': 'SupersetI...lation': 'is a part of'}, input_type=dict]
+```
+
+同一次复现把任务文本换成不含 JSON 结构的提问时，记录里出现 `probe/final/forced_final/attempt-1` 且请求本身通过校验，说明强制终答的类型口径已与源码一致，瓶颈在规划。核验任务里 `answer_list` 形态的对象来自 `AUGMENTED_QUERY` 明确要求的 JSON 键，同样落在规划请求上。
+
+同一代码路径的另一次运行 `outputs/taskcraft-mechanism-physicianbench`（墙钟 16 分 35 秒）结果相同：completed，261 模型轮 / 17 次工具调用 / 447 995 tokens，atomic 4、width 1、depth 0；深度阶段 16 次反向检索尝试里 12 次是同一个 `AgentThought.answer` 类型错误，2 次 superset 校验拒绝，1 次 `action response carries no tool call`，1 次成功但后续核验 `llm_score=0.0`。
+
+第三次运行 `outputs/taskcraft-mechanism-physicianbench-attempt1` 保留为失败记录：原子 40 条结论的 `source_ids` 全为空，证据门槛拒绝全部 10 题，`atomic.accepted=0`，整批 `status=failed`（227 轮 / 16 次工具 / 332 106 tokens）。该次运行里 16 次工具调用有 5 次返回 `PatientAccessError: Patient 4460967357 is outside the allowed patient scope`（模型把 `MRN4460967357` 写成 `4460967357`）；结论里 `source_ids` 由模型给出，这一轮的模型没有按追加约束填写。
 
 ### 5.2 MedAgentBench 机制验收
 
@@ -172,7 +187,7 @@ MEDEVOLVE_TASKCRAFT_LIVE_CONFIG=<机制配置> pytest tests/method/test_taskcraf
 
 ```
 pytest -q tests/method tests/runtime tests/experiment tests/environment tests/evaluation -W error
-→ 141 passed, 4 skipped
+→ 143 passed, 4 skipped
 
 pytest -q experiments -W error
 → 4 passed, 3 failed
