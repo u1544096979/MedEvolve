@@ -16,7 +16,7 @@
 - 难度层级固定为 1-4：1 事实查询、2 单步推理、3 整合推理、4 临床决策；`reasoning_depth` 为三裁判中位数。
 - `ComplexityMetrics` 三个字段：`evidence_count` = `task.evidence` 中 source_id 数量；`resource_type_count` = source_id 前缀去重数量（`"Observation/123"` → `"Observation"`）；`time_span_days` = 任务引用的 evidence 在 `trajectory.sources` 中对应记录的最早到最晚时间跨度（天），无可用时间时为 `null`。
 - 裁判单次输出只含分数与 reason（`QualityJudgment` / `DifficultyJudgment`）；`QualityReview` / `DifficultyScore` 是聚合后的最终结果，`scores`、`reasoning_depths`、`complexity_metrics` 由聚合函数填充。
-- 不改生成模块（`methods/*` 的生成相关代码、`methods/common.py`）、不改 `feedback` / `strategy_update` 的业务逻辑。唯一例外：Task 6 按用户确认把 FEEDBACK 提示词里的旧维度名换成新维度名。
+- 不改生成模块（`methods/*` 的生成相关代码、`methods/common.py`）、不改 `feedback` / `strategy_update` 的业务逻辑。唯一例外：Task 5 按用户确认把 FEEDBACK 提示词里的旧维度名换成新维度名。
 - 汇总保持既有键名不动：把 `quality_judgments` 换成 `quality_summary`，新增 `difficulty_summary`，其余键（`actual_questions`、`validity_among_verified`、`completion_among_*`、`quality_reviews` 等）不改名、不删除。
 - `time_span_days` 只保存在每条评测记录里，不进入汇总输出（设计文档 4.2 的 `complexity_metrics` 只列 `avg_evidence_count` 与 `avg_resource_types`）。
 - 测试命令（必须在 worktree 根目录执行，`PYTHONPATH` 用于压过主仓库的 editable 安装）：
@@ -24,9 +24,13 @@
   cd /Users/guagua/code/MedEvolve/.worktrees/evaluation-metrics
   PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
   ```
-  基线：`171 passed, 3 skipped`。
-- 代码库既有约定：不为提示词字符串和字段转发建立重复测试（见 `docs/comparison-experiments/common/SPEC.md` 的方法实现要求），因此 Task 2、Task 3、Task 6 不新增测试，靠全量测试与内容核对验收。
+  基线：`171 passed, 3 skipped`（3 个 skip 是本地未加载 Docker 镜像的 live 测试，与本改造无关）。
+- 代码库既有约定：不为提示词字符串和字段转发建立重复测试（见 `docs/comparison-experiments/common/SPEC.md` 的方法实现要求），因此 Task 1、Task 2、Task 5 不新增测试，靠全量测试与内容核对验收。
 - commit message 规范：`<type>(<scope>): 中文描述`；body 用中文写「为什么」，description 只写「做了什么」。
+
+## 任务顺序约束
+
+`QualityReview` 的结构变更会使 `evaluation/evaluator.py` 的旧质量分支失效，因此契约变更与评测流程改造必须是同一个提交，否则该提交的测试必然为红。Task 1、Task 2 互相独立且不破坏现有测试，排在最前；Task 3 是核心原子提交；Task 4、Task 5 依赖 Task 3 的字段。
 
 ---
 
@@ -34,148 +38,27 @@
 
 | 文件 | 职责 | 任务 |
 | --- | --- | --- |
-| `contracts.py` | 裁判输出结构与聚合结果结构 | Task 1 |
-| `evaluation/prompts.py` | 质量与难度裁判提示词 | Task 2 |
-| `configs/*.json`（6 个） | 评测运行配置的 difficulty 角色 | Task 3 |
-| `evaluation/evaluator.py` | 三裁判调用、中位数聚合、复杂度自动计算 | Task 4 |
-| `tests/evaluation/test_evaluator.py` | 裁判机制、聚合、复杂度的单元测试 | Task 4 |
-| `tests/integration/test_pipeline.py`、`tests/integration/test_medagentbench_integration.py` | 真实模块的假模型响应 | Task 4 |
-| `experiments/summary.py` | 质量与难度汇总函数 | Task 5 |
-| `tests/experiment/test_closed_loop.py` | 汇总断言 | Task 1、Task 5 |
-| `methods/medevolve/prompts.py` | FEEDBACK 维度名 | Task 6 |
+| `evaluation/prompts.py` | 质量与难度裁判提示词 | Task 1 |
+| `configs/*.json`（6 个） | 评测运行配置的 difficulty 角色 | Task 2 |
+| `contracts.py` | 裁判输出结构与聚合结果结构 | Task 3 |
+| `evaluation/evaluator.py` | 三裁判调用、中位数聚合、复杂度自动计算 | Task 3 |
+| `tests/evaluation/test_evaluator.py` | 裁判机制、聚合、复杂度的单元测试 | Task 3 |
+| `tests/integration/test_pipeline.py`、`tests/integration/test_medagentbench_integration.py` | 真实模块的假模型响应 | Task 3 |
+| `tests/runtime/test_execution.py` | 工具循环的结构化输出样例类型 | Task 3 |
+| `tests/experiment/test_closed_loop.py` | 假评测结果与汇总断言 | Task 3、Task 4 |
+| `experiments/summary.py` | 质量与难度汇总函数 | Task 4 |
+| `methods/medevolve/prompts.py` | FEEDBACK 维度名 | Task 5 |
 
 ---
 
-### Task 1: 质量与难度数据契约
-
-**Files:**
-- Modify: `contracts.py`（`QualityReview` 附近与 `EvaluationResult`）
-- Test: `tests/experiment/test_closed_loop.py:85` 与同文件 `:133` 附近
-
-**Interfaces:**
-- Consumes: 无（本任务是底层）。
-- Produces:
-  - `DimensionJudgment(score: int, reason: str)`
-  - `QualityJudgment(factual_accuracy, clinical_soundness, evidence_sufficiency, task_clarity: DimensionJudgment)`
-  - `QualityDimension(score: int, scores: list[int], reason: str)`
-  - `QualityReview(factual_accuracy, clinical_soundness, evidence_sufficiency, task_clarity: QualityDimension)`
-  - `ComplexityMetrics(evidence_count: int, resource_type_count: int, time_span_days: float | None)`
-  - `DifficultyJudgment(reasoning_depth: int, reason: str)`
-  - `DifficultyScore(reasoning_depth: int, reasoning_depths: list[int], reason: str, complexity_metrics: ComplexityMetrics)`
-  - `EvaluationResult.difficulty: DifficultyScore | None`
-
-- [ ] **Step 1: 把闭环测试改成新契约（先红）**
-
-在 `tests/experiment/test_closed_loop.py` 中，把 `evaluate` 假实现里的 `quality=QualityReview(dimensions={...})` 换成：
-
-```python
-quality=QualityReview(**{name: QualityDimension(score=4, scores=[4, 4, 4], reason="clear")
-                         for name in ("factual_accuracy", "clinical_soundness",
-                                      "evidence_sufficiency", "task_clarity")}),
-```
-
-导入行改为：
-
-```python
-from contracts import (
-    CompletionReview, DifficultyScore, ComplexityMetrics, EvaluationConfig, Feedback,
-    ...
-)
-```
-（只加 `ComplexityMetrics`、`DifficultyScore`、`QualityDimension`，其余保持原样。）
-
-同时删掉这一行断言（旧汇总键在 Task 5 之前没有对应新键，Task 5 会补新断言）：
-
-```python
-    assert summary["evolution"]["quality_judgments"]["clarity"]["good"] == (4 if failure else 8)
-```
-
-- [ ] **Step 2: 运行测试确认失败**
-
-```bash
-PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest tests/experiment/test_closed_loop.py -q
-```
-Expected: FAIL，`QualityReview` 不接受 `dimensions`（或 `QualityDimension` 未定义），报 `TypeError` / `ValidationError` / `ImportError`。
-
-- [ ] **Step 3: 写契约**
-
-在 `contracts.py` 中把现有的 `class QualityReview(BaseModel): dimensions: JsonObject` 整块替换为：
-
-```python
-class DimensionJudgment(BaseModel):
-    score: int
-    reason: str
-
-
-class QualityJudgment(BaseModel):
-    factual_accuracy: DimensionJudgment
-    clinical_soundness: DimensionJudgment
-    evidence_sufficiency: DimensionJudgment
-    task_clarity: DimensionJudgment
-
-
-class QualityDimension(BaseModel):
-    score: int
-    scores: list[int]
-    reason: str
-
-
-class QualityReview(BaseModel):
-    factual_accuracy: QualityDimension
-    clinical_soundness: QualityDimension
-    evidence_sufficiency: QualityDimension
-    task_clarity: QualityDimension
-
-
-class ComplexityMetrics(BaseModel):
-    evidence_count: int
-    resource_type_count: int
-    time_span_days: float | None
-
-
-class DifficultyJudgment(BaseModel):
-    reasoning_depth: int
-    reason: str
-
-
-class DifficultyScore(BaseModel):
-    reasoning_depth: int
-    reasoning_depths: list[int]
-    reason: str
-    complexity_metrics: ComplexityMetrics
-```
-
-在 `EvaluationResult` 中 `quality: QualityReview | None = None` 之后加一行：
-
-```python
-    difficulty: DifficultyScore | None = None
-```
-
-- [ ] **Step 4: 运行测试确认通过**
-
-```bash
-PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
-```
-Expected: `171 passed, 3 skipped`。
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add contracts.py tests/experiment/test_closed_loop.py
-git commit -m "feat(contracts): 新增质量与难度评分数据结构"
-```
-body 说明：质量维度改为 1-5 数值分数并保留三裁判原始分数，难度增加推理深度与自动复杂度指标；裁判单次输出用 Judgment，聚合结果用 Review/DifficultyScore。
-
----
-
-### Task 2: 质量与难度评测提示词
+### Task 1: 质量与难度评测提示词
 
 **Files:**
 - Modify: `evaluation/prompts.py`（`QUALITY` 整段替换，新增 `DIFFICULTY`）
 - Test: 无新增测试（Global Constraints 的提示词测试约定）
 
 **Interfaces:**
-- Consumes: Task 1 的 `QualityJudgment`、`DifficultyJudgment` 字段名。
+- Consumes: 无。
 - Produces: 模块级常量 `QUALITY`、`DIFFICULTY`，供 `evaluation/evaluator.py` 以 `prompts.QUALITY`、`prompts.DIFFICULTY` 使用。
 
 - [ ] **Step 1: 替换 QUALITY**
@@ -246,7 +129,7 @@ body 说明：旧提示词只要求文本 judgment，无法统计对比；新提
 
 ---
 
-### Task 3: 评测配置增加 difficulty 角色
+### Task 2: 评测配置增加 difficulty 角色
 
 **Files:**
 - Modify: `configs/experiment.json`、`configs/medagentbench-flash.json`、`configs/medagentbench-selfgen.json`、`configs/physicianbench-comparison.json`、`configs/physicianbench-flash.json`、`configs/physicianbench-selfgen.json`（各文件 `evaluation.runtime.models` 与 `evaluation.runtime.budgets`）
@@ -254,7 +137,7 @@ body 说明：旧提示词只要求文本 judgment，无法统计对比；新提
 
 **Interfaces:**
 - Consumes: `runtime.models` / `runtime.budgets` 的 `dict[str, ModelConfig]` / `dict[str, Budget]` 结构。
-- Produces: 每个评测配置里存在 `difficulty` 角色，供 Task 4 的 `config.runtime.models["difficulty"]` 使用。
+- Produces: 每个评测配置里存在 `difficulty` 角色，供 Task 3 的 `config.runtime.models["difficulty"]` 使用。
 
 - [ ] **Step 1: 在 6 个配置的 models 中加入 difficulty**
 
@@ -314,23 +197,35 @@ body 说明：难度评分需要独立的模型与预算条目，先让配置就
 
 ---
 
-### Task 4: 三裁判评测流程与复杂度自动计算
+### Task 3: 数据契约与三裁判评测流程
 
 **Files:**
+- Modify: `contracts.py`（`QualityReview` 附近与 `EvaluationResult`）
 - Modify: `evaluation/evaluator.py`
 - Test: `tests/evaluation/test_evaluator.py`（改造 harness 与故障表，新增 4 个测试）
+- Test: `tests/experiment/test_closed_loop.py`（假评测结果改为新契约，删除旧汇总键断言）
 - Test: `tests/integration/test_pipeline.py:76` 附近（假模型质量/难度响应）
-- Test: `tests/integration/test_medagentbench_integration.py:50` 附近（假模型 schema 分支）
+- Test: `tests/integration/test_medagentbench_integration.py:11` 与 `:50` 附近（导入、角色、假模型 schema 分支）
+- Test: `tests/runtime/test_execution.py:8` 与 `:51`（结构化输出样例类型）
 
 **Interfaces:**
-- Consumes: Task 1 的 `QualityJudgment`、`QualityReview`、`QualityDimension`、`DifficultyJudgment`、`DifficultyScore`、`ComplexityMetrics`；Task 2 的 `prompts.QUALITY`、`prompts.DIFFICULTY`；Task 3 的 `config.runtime.models["difficulty"]`。
+- Consumes: Task 1 的 `prompts.QUALITY`、`prompts.DIFFICULTY`；Task 2 的 `config.runtime.models["difficulty"]`。
 - Produces:
+  - `DimensionJudgment(score: int, reason: str)`
+  - `QualityJudgment(factual_accuracy, clinical_soundness, evidence_sufficiency, task_clarity: DimensionJudgment)`
+  - `QualityDimension(score: int, scores: list[int], reason: str)`
+  - `QualityReview(factual_accuracy, clinical_soundness, evidence_sufficiency, task_clarity: QualityDimension)`
+  - `ComplexityMetrics(evidence_count: int, resource_type_count: int, time_span_days: float | None)`
+  - `DifficultyJudgment(reasoning_depth: int, reason: str)`
+  - `DifficultyScore(reasoning_depth: int, reasoning_depths: list[int], reason: str, complexity_metrics: ComplexityMetrics)`
+  - `EvaluationResult.difficulty: DifficultyScore | None`
   - `_compute_complexity(task: Task, trajectory: PatientTrajectory) -> ComplexityMetrics`
   - `_aggregate_quality_scores(runs: list[RunResult]) -> QualityReview`
   - `_aggregate_difficulty_scores(runs: list[RunResult], complexity: ComplexityMetrics) -> DifficultyScore`
-  - `evaluate_task` 在 `result.quality` 与 `result.difficulty` 上写入聚合结果。
 
-- [ ] **Step 1: 改造测试 harness（先红）**
+**为什么契约与流程在同一个提交：** `QualityReview` 不再持有 `dimensions`，`evaluation/evaluator.py` 的旧质量分支立刻失效，只提交契约会让该提交的测试全红、无法独立 review。两者的字段一一对应，属于同一类改动。
+
+- [ ] **Step 1: 改造单元测试 harness（先红）**
 
 `tests/evaluation/test_evaluator.py` 的导入加上新契约名：
 
@@ -486,14 +381,87 @@ def test_out_of_range_judgments_fail_evaluation(harness, field, scores):
             output = {"reasoning_depth": 2, "reason": "跨记录整合"}
 ```
 
+`tests/runtime/test_execution.py`：该文件把 `QualityReview` 当作「任意结构化输出类型」的样例，与新契约无关。导入改为 `from contracts import Budget, ModelConfig, SolverAnswer, Verification`，参数化样例改为：
+
+```python
+    (Verification, {"valid": True, "reason": "patient found"}),
+```
+
+`tests/experiment/test_closed_loop.py`：把 `evaluate` 假实现里的 `quality=QualityReview(dimensions={...})` 换成：
+
+```python
+quality=QualityReview(**{name: QualityDimension(score=4, scores=[4, 4, 4], reason="clear")
+                         for name in ("factual_accuracy", "clinical_soundness",
+                                      "evidence_sufficiency", "task_clarity")}),
+```
+导入增加 `QualityDimension`。同时删掉这一行断言（Task 4 会补新汇总键的断言）：
+
+```python
+    assert summary["evolution"]["quality_judgments"]["clarity"]["good"] == (4 if failure else 8)
+```
+
 - [ ] **Step 2: 运行测试确认失败**
 
 ```bash
 PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest tests/evaluation/test_evaluator.py -q
 ```
-Expected: FAIL —— 假模型返回的 `QualityJudgment` 结构与旧评测代码期望的 `dimensions` 不匹配，且难度角色未被调用（`next()` 找不到 `DifficultyJudgment` 调用）或 `result.difficulty` 不存在。
+Expected: FAIL —— 假模型返回的 `QualityJudgment` 结构与旧评测代码期望的 `dimensions` 不匹配，且难度裁判没有被调用（`next()` 找不到 `DifficultyJudgment` 调用）或 `result.difficulty` 不存在。
 
-- [ ] **Step 3: 改造 evaluator 常量与导入**
+- [ ] **Step 3: 写契约**
+
+在 `contracts.py` 中把现有的 `class QualityReview(BaseModel): dimensions: JsonObject` 整块替换为：
+
+```python
+class DimensionJudgment(BaseModel):
+    score: int
+    reason: str
+
+
+class QualityJudgment(BaseModel):
+    factual_accuracy: DimensionJudgment
+    clinical_soundness: DimensionJudgment
+    evidence_sufficiency: DimensionJudgment
+    task_clarity: DimensionJudgment
+
+
+class QualityDimension(BaseModel):
+    score: int
+    scores: list[int]
+    reason: str
+
+
+class QualityReview(BaseModel):
+    factual_accuracy: QualityDimension
+    clinical_soundness: QualityDimension
+    evidence_sufficiency: QualityDimension
+    task_clarity: QualityDimension
+
+
+class ComplexityMetrics(BaseModel):
+    evidence_count: int
+    resource_type_count: int
+    time_span_days: float | None
+
+
+class DifficultyJudgment(BaseModel):
+    reasoning_depth: int
+    reason: str
+
+
+class DifficultyScore(BaseModel):
+    reasoning_depth: int
+    reasoning_depths: list[int]
+    reason: str
+    complexity_metrics: ComplexityMetrics
+```
+
+在 `EvaluationResult` 中 `quality: QualityReview | None = None` 之后加一行：
+
+```python
+    difficulty: DifficultyScore | None = None
+```
+
+- [ ] **Step 4: 改造 evaluator 常量与导入**
 
 `evaluation/evaluator.py` 顶部导入增加：
 
@@ -525,7 +493,7 @@ TIME_FIELDS = (
 )
 ```
 
-- [ ] **Step 4: 新增聚合与复杂度函数**
+- [ ] **Step 5: 新增聚合与复杂度函数**
 
 在 `_output` 之后加入：
 
@@ -613,7 +581,7 @@ def _compute_complexity(task: Task, trajectory: PatientTrajectory) -> Complexity
     )
 ```
 
-- [ ] **Step 5: 改动评测流程**
+- [ ] **Step 6: 改动评测流程**
 
 角色校验行改为：
 
@@ -643,32 +611,33 @@ def _compute_complexity(task: Task, trajectory: PatientTrajectory) -> Complexity
         ], complexity)
 ```
 
-- [ ] **Step 6: 运行测试确认通过**
+- [ ] **Step 7: 运行测试确认通过**
 
 ```bash
 PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
 ```
-Expected: `175 passed, 3 skipped`（171 基线 - 1 个被参数化替换的旧测试 + 5 个新增用例：3 个新测试 + 2 个参数化用例）。
+Expected: `176 passed, 3 skipped`（171 基线 + 5 个新增用例：3 个新测试 + 1 个参数化测试的 2 个用例）。
 
-- [ ] **Step 7: 提交**
+- [ ] **Step 8: 提交**
 
 ```bash
-git add evaluation/evaluator.py tests/evaluation/test_evaluator.py \
-        tests/integration/test_pipeline.py tests/integration/test_medagentbench_integration.py
-git commit -m "feat(evaluation): 三裁判打分并自动计算任务复杂度"
+git add contracts.py evaluation/evaluator.py tests/evaluation/test_evaluator.py \
+        tests/integration/test_pipeline.py tests/integration/test_medagentbench_integration.py \
+        tests/runtime/test_execution.py tests/experiment/test_closed_loop.py
+git commit -m "feat(evaluation): 质量评分改用三裁判数值打分并新增难度评估"
 ```
-body 说明：单次文本 judgment 无法统计对比，改成三裁判各打 1-5 分取中位数并保留原始分数；难度用三裁判 1-4 层级加 evidence 与轨迹自动计算的复杂度指标。
+body 说明：单次文本 judgment 无法统计对比，改成三裁判各打 1-5 分取中位数并保留原始分数；难度用三裁判 1-4 层级加 evidence 与轨迹自动计算的复杂度指标；契约与流程同时改动，因为质量结构变更会让旧质量分支立即失效。
 
 ---
 
-### Task 5: 质量与难度汇总
+### Task 4: 质量与难度汇总
 
 **Files:**
 - Modify: `experiments/summary.py`
-- Test: `tests/experiment/test_closed_loop.py`（假评测结果与汇总断言）
+- Test: `tests/experiment/test_closed_loop.py`（假评测结果增加难度，补汇总断言）
 
 **Interfaces:**
-- Consumes: Task 4 写入 `evaluations.json` 的 `quality`（四维 `score`/`scores`/`reason`）与 `difficulty`（`reasoning_depth`、`complexity_metrics`）。
+- Consumes: Task 3 写入 `evaluations.json` 的 `quality`（四维 `score`/`scores`/`reason`）与 `difficulty`（`reasoning_depth`、`complexity_metrics`）。
 - Produces:
   - `summarize_quality(evaluations: list[dict]) -> JsonObject`，键为四个维度名，值含 `mean`、`median`、`distribution`、`high_quality_rate`
   - `summarize_difficulty(evaluations: list[dict]) -> JsonObject`，含 `reasoning_depth`（`mean`、`distribution`）与 `complexity_metrics`（`avg_evidence_count`、`avg_resource_types`）
@@ -693,7 +662,9 @@ body 说明：单次文本 judgment 无法统计对比，改成三裁判各打 1
                                 solver_run=solver, runs=[solver], observed_state={}, status="completed")
 ```
 
-在 `test_two_rounds_and_read_only_summary` 中，把原来的 `quality_judgments` 断言位置（Task 1 已删除该行）替换为：
+导入增加 `ComplexityMetrics`、`DifficultyScore`。
+
+在 `test_two_rounds_and_read_only_summary` 中，把原 `quality_judgments` 断言所在位置（Task 3 已删除该行）替换为：
 
 ```python
     reviews = 4 if failure else 8
@@ -799,7 +770,7 @@ def summarize_difficulty(evaluations: list[dict]) -> JsonObject:
 ```bash
 PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
 ```
-Expected: `175 passed, 3 skipped`。
+Expected: `176 passed, 3 skipped`。
 
 - [ ] **Step 6: 提交**
 
@@ -811,14 +782,14 @@ body 说明：数值评分才能做统计对比，汇总输出每个维度的均
 
 ---
 
-### Task 6: 反馈提示词对齐新的质量维度名
+### Task 5: 反馈提示词对齐新的质量维度名
 
 **Files:**
 - Modify: `methods/medevolve/prompts.py`（`FEEDBACK` 的建议一行）
 - Test: 无新增测试（Global Constraints 的提示词测试约定）
 
 **Interfaces:**
-- Consumes: Task 1 的四个维度名。
+- Consumes: Task 3 定义的四个维度名。
 - Produces: `FEEDBACK` 文本中提到新的四个维度名。
 
 - [ ] **Step 1: 改维度名**
@@ -842,7 +813,7 @@ body 说明：数值评分才能做统计对比，汇总输出每个维度的均
 ```bash
 PYTHONPATH="$PWD" ../../.venv/bin/python -m pytest -q
 ```
-Expected: `175 passed, 3 skipped`。
+Expected: `176 passed, 3 skipped`。
 
 - [ ] **Step 3: 确认没有残留旧维度名**
 
@@ -870,8 +841,8 @@ body 说明：质量维度改名后旧提示词引用的维度已不存在，反
 
 ## Self-Review
 
-**Spec coverage：** 数据结构（1.1、2.1）→ Task 1；质量 prompt（1.3）与难度 prompt（2.4）→ Task 2；评测流程与聚合（3.1、3.2、3.3）→ Task 4；自动复杂度（2.3，含 `time_span_days` 的真实解析，取代设计文档示例里的 `None` 占位）→ Task 4；汇总（4.1、4.2）→ Task 5；配置（实施步骤 5）→ Task 3；本地测试（实施步骤 6）→ 每个任务的测试步骤。设计文档的实施步骤 7（六方法全量重跑）按用户确认不在本计划内。
+**Spec coverage：** 数据结构（1.1、2.1）与评测流程、聚合、校验（3.1、3.2、3.3）→ Task 3；自动复杂度（2.3，含 `time_span_days` 的真实解析，取代设计文档示例里的 `None` 占位）→ Task 3；质量与难度 prompt（1.3、2.4）→ Task 1；配置（实施步骤 5）→ Task 2；汇总（4.1、4.2）→ Task 4；本地测试（实施步骤 6）→ 每个任务的测试步骤。设计文档的实施步骤 7（六方法全量重跑）按用户确认不在本计划内；`methods/medevolve/prompts.py` 的 FEEDBACK 维度名按用户确认纳入（Task 5），是设计文档「不改反馈模块」之外唯一获准的改动。
 
-**类型一致性：** `QualityJudgment`（裁判输出）/ `QualityReview`（聚合）与 `DifficultyJudgment` / `DifficultyScore` 的区分在 Task 1、2、4 中一致；`_compute_complexity`、`_aggregate_quality_scores`、`_aggregate_difficulty_scores` 的签名在 Task 4 定义并在该任务内使用；汇总读取的键名（`quality`、`difficulty`、`reasoning_depth`、`complexity_metrics`）与 Task 1、Task 4 写出的字段一致。
+**类型一致性：** `QualityJudgment`（裁判输出）/ `QualityReview`（聚合）与 `DifficultyJudgment` / `DifficultyScore` 的区分在 Task 1、3、4 中一致；`_compute_complexity`、`_aggregate_quality_scores`、`_aggregate_difficulty_scores` 的签名在 Task 3 定义并在该任务内使用；Task 4 读取的键名（`quality`、`difficulty`、`reasoning_depth`、`complexity_metrics`）与 Task 3 写出的字段一致。
 
 **已知取舍：** 汇总函数接收 `evaluations.json` 记录（dict），不是设计文档 4.1 注解里的 `EvaluationResult` 对象 —— 沿用该模块既有的按文件读取方式；`time_span_days` 不进汇总输出，按设计文档 4.2 的字段清单执行。
