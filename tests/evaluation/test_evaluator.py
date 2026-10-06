@@ -79,6 +79,21 @@ def harness(monkeypatch):
                 trace=[{"type": "run_error", "failure_category": "tool_error"}],
                 usage={}, status="failed", error="opaque runtime error",
             )
+        if h.fail == role + "_environment_error":
+            return RunResult(
+                trace=[{"type": "run_error", "failure_category": "environment_error"}],
+                usage={}, status="failed", error="opaque runtime error",
+            )
+        if h.fail == role + "_model_error":
+            return RunResult(
+                trace=[{"type": "run_error", "failure_category": "model_error"}],
+                usage={}, status="failed", error="opaque runtime error",
+            )
+        if h.fail == role + "_unknown_error":
+            return RunResult(
+                trace=[{"type": "run_error", "failure_category": "unknown_error"}],
+                usage={}, status="failed", error="opaque runtime error",
+            )
         if role == "verifier":
             output = {"valid": h.valid, "reason": "checked original records"}
         elif role == "quality":
@@ -159,6 +174,9 @@ def test_write_completion_uses_observed_state(harness, state, completed):
     ("quality", "model_error", 1, 3),
     ("solver", "model_error", 2, 4),
     ("solver_tool_error", "tool_error", 2, 4),
+    ("solver_environment_error", "environment_error", 2, 4),
+    ("solver_model_error", "model_error", 2, 4),
+    ("solver_unknown_error", "model_error", 2, 4),
     ("solver_budget", "model_error", 2, 4),
     ("state", "environment_error", 2, 4),
     ("completion", "model_error", 2, 5),

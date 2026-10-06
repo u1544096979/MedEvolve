@@ -1,0 +1,163 @@
+{
+  "run_id": "physicianbench-flash",
+  "method": "medevolve",
+  "environment": {
+    "name": "PhysicianBench",
+    "manager_url": "http://127.0.0.1:18084",
+    "seed_data": "fhir-full:v1"
+  },
+  "runtime": {
+    "models": {
+      "data_explorer": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      },
+      "environment_explorer": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      },
+      "generator": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      },
+      "feedback": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      },
+      "updater": {
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      }
+    },
+    "budgets": {
+      "data_explorer": {
+        "max_model_turns": 30,
+        "max_tool_calls": 200
+      },
+      "environment_explorer": {
+        "max_model_turns": 30,
+        "max_tool_calls": 200
+      },
+      "generator": {
+        "max_model_turns": 1,
+        "max_tool_calls": 0
+      }
+    }
+  },
+  "evaluation": {
+    "runtime": {
+      "models": {
+        "verifier": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "quality": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "solver": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "completion": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        }
+      },
+      "budgets": {
+        "verifier": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "quality": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "solver": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "completion": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        }
+      }
+    }
+  },
+  "evolution_patients": [
+    "MRN9838448928",
+    "MRN6756332150"
+  ],
+  "evaluation_patients": [
+    "MRN4460967357"
+  ],
+  "round_patients": [
+    [
+      "MRN9838448928",
+      "MRN6756332150"
+    ],
+    [
+      "MRN9838448928",
+      "MRN6756332150"
+    ]
+  ],
+  "initial_strategy": {
+    "generation_guidance": "依据患者纵向轨迹生成具有明确临床价值、依赖多条记录整合的医疗任务。每题明确作答或操作要求，使用轨迹里实际存在的来源 ID 提供证据，给出有依据的参考答案。两题关注不同临床问题。难度来自跨时间信息整合及合理临床判断，不来自歧义、缺失信息或环境故障。遵守原生工具能力，决策点为 null。",
+    "allocation": [
+      {
+        "task_type": "诊断与解释",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "检查与风险分层",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗规划",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "药物处方",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗重规划",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      }
+    ]
+  },
+  "random_seed": 42,
+  "output_dir": "outputs/physicianbench-flash"
+}

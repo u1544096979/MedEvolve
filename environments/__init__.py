@@ -19,6 +19,7 @@ from contracts import (
 )
 from environments.errors import EnvironmentUnavailable, PatientAccessError, UnsupportedDecisionPoint
 from environments.fhir import FHIRClient, decode_document_notes
+from environments.medagentbench import NativeTools, load_functions
 from environments.physicianbench import FHIR_TOOL_SCHEMAS, NATIVE_FUNCTIONS
 
 _WRITABLE_RESOURCE_TYPES = {
@@ -120,7 +121,7 @@ def _trajectory_resource(resource: dict) -> dict:
 
 
 def _check_environment(name: str) -> None:
-    if name != "PhysicianBench":
+    if name not in {"PhysicianBench", "MedAgentBench"}:
         raise EnvironmentUnavailable(
             f"{name} is unavailable: original implementation is not integrated"
         )
@@ -134,7 +135,8 @@ def _check_decision_point(decision_point: str | None) -> None:
 
 
 async def create_environment(config: EnvironmentConfig) -> EnvironmentInstance:
-    _check_environment(config.name)
+    if config.name not in {"PhysicianBench", "MedAgentBench"}:
+        raise EnvironmentUnavailable(f"{config.name} is unavailable")
     async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
         response = await client.post(
             config.manager_url.rstrip("/") + "/instances", json=config.model_dump()
@@ -153,6 +155,8 @@ async def get_tools(
 ) -> list[Tool]:
     _check_environment(instance.environment)
     _check_decision_point(decision_point)
+    if instance.environment == "MedAgentBench":
+        return NativeTools(instance.endpoint, patient_ids, load_functions())
     client = FHIRClient(instance.endpoint, patient_ids)
     schemas = {schema["name"]: schema for schema in FHIR_TOOL_SCHEMAS}
 
@@ -189,9 +193,21 @@ async def read_state(instance: EnvironmentInstance, task: Task) -> JsonObject:
     if task.environment != instance.environment:
         raise ValueError("Task environment does not match the instance")
     _check_decision_point(task.decision_point)
-    resources = await FHIRClient(instance.endpoint, [task.patient_id]).snapshot(
-        task.patient_id
-    )
+    client = FHIRClient(instance.endpoint, [task.patient_id])
+    if instance.environment == "MedAgentBench":
+        resources = await _snapshot(client, task.patient_id)
+    else:
+        resources = await client.snapshot(task.patient_id)
+    if instance.environment == "MedAgentBench":
+        return {
+            "patient_id": task.patient_id,
+            "environment": instance.environment,
+            "resources": resources,
+            "operation_semantics": {
+                "post": "accept_request_without_persistence",
+                "acceptance_proves_database_write": False,
+            },
+        }
     return {
         "patient_id": task.patient_id,
         "environment": instance.environment,
@@ -207,7 +223,17 @@ async def read_evidence(
     instance: EnvironmentInstance, patient_id: str, source_id: str
 ) -> JsonObject:
     _check_environment(instance.environment)
-    return await FHIRClient(instance.endpoint, [patient_id]).read(source_id)
+    client = FHIRClient(instance.endpoint, [patient_id])
+    if instance.environment == "MedAgentBench":
+        parts = source_id.split("/")
+        if len(parts) != 2:
+            raise ValueError("Evidence must be a local ResourceType/id reference")
+        resource = await client._request("GET", source_id)
+        if resource.get("resourceType") != parts[0] or resource.get("id") != parts[1]:
+            raise ValueError("FHIR server returned a different evidence resource")
+        client._check_resource(resource, set(client.patient_ids))
+        return resource
+    return await client.read(source_id)
 
 
 async def release_environment(
@@ -264,7 +290,11 @@ async def prepare_trajectory(
     instance: EnvironmentInstance, patient_id: str
 ) -> PatientTrajectory:
     _check_environment(instance.environment)
-    resources = await FHIRClient(instance.endpoint, [patient_id]).snapshot(patient_id)
+    client = FHIRClient(instance.endpoint, [patient_id])
+    if instance.environment == "MedAgentBench":
+        resources = await _snapshot(client, patient_id)
+    else:
+        resources = await client.snapshot(patient_id)
     sources = []
     text = []
     seen = set()
@@ -293,3 +323,22 @@ async def prepare_trajectory(
         text="\n\n".join(text),
         sources=sources,
     )
+
+
+async def _snapshot(client: FHIRClient, identifier: str) -> list[dict]:
+    """Read complete patient material, falling back when $everything is unavailable."""
+    try:
+        return await client.snapshot(identifier)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code not in {400, 404, 405, 501}:
+            raise
+    resources = []
+    for resource_type in (
+        "Patient", "Encounter", "Condition", "Observation",
+        "MedicationRequest", "Procedure", "ServiceRequest",
+    ):
+        params = {"_count": 200}
+        params["_id" if resource_type == "Patient" else "patient"] = identifier
+        result = await client._collect(resource_type, params, None, {identifier})
+        resources.extend(result["entries"])
+    return resources

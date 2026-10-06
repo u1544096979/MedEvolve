@@ -211,10 +211,10 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
              if item.get("type") == "run_error"),
             None,
         ) if failed_run is not None else None
+        supported_run_categories = {"tool_error", "environment_error", "model_error"}
+        run_category = run_error.get("failure_category") if run_error else None
         result.failure_category = (
-            run_error.get("failure_category")
-            if run_error and run_error.get("failure_category") == "tool_error"
-            else phase
+            run_category if run_category in supported_run_categories else phase
         )
         # Preserve environment/configuration errors alongside model run records.
         result.observed_state = {

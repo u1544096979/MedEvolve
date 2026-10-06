@@ -2,6 +2,8 @@
 
 import json
 import os
+from urllib.parse import urlparse
+from uuid import uuid4
 
 from agents import (
     Agent, AgentOutputSchema, FunctionTool, ModelSettings, OpenAIChatCompletionsModel,
@@ -15,6 +17,19 @@ from pydantic_core import to_jsonable_python
 from contracts import Budget, ModelConfig, RunResult
 
 
+_OPENCODE_SESSION = str(uuid4())
+
+
+class _OpenCodeOutputSchema(AgentOutputSchema):
+    def validate_json(self, json_str):
+        # OpenCode can return literal newlines inside quoted answer strings.
+        try:
+            parsed = json.loads(json_str, strict=False)
+        except ValueError:
+            return super().validate_json(json_str)
+        return super().validate_json(json.dumps(parsed, ensure_ascii=False))
+
+
 class _ToolBudgetExceeded(AgentsException):
     pass
 
@@ -23,7 +38,11 @@ def _client(model: ModelConfig) -> AsyncOpenAI:
     key = os.environ.get(model.api_key_env)
     if not key:
         raise ValueError(f"Missing API key environment variable: {model.api_key_env}")
-    return AsyncOpenAI(api_key=key, base_url=model.base_url, max_retries=0)
+    headers = {}
+    if urlparse(model.base_url or "").hostname == "opencode.ai":
+        headers = {"x-opencode-session": _OPENCODE_SESSION, "User-Agent": "MedEvolve/0.1"}
+    return AsyncOpenAI(api_key=key, base_url=model.base_url, max_retries=0,
+                       default_headers=headers)
 
 
 def _result(*, model: ModelConfig, **fields) -> RunResult:
@@ -118,6 +137,17 @@ class _Records(RunHooks):
 async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                     output_type: type[BaseModel], model: ModelConfig,
                     budget: Budget) -> RunResult:
+    from environments.medagentbench import NativeTools
+
+    if isinstance(tools, NativeTools):
+        from .native import run_native_agent
+
+        return await run_native_agent(
+            instructions=instructions, input_text=input_text, tools=tools,
+            output_type=output_type, model=model, budget=budget,
+            client_factory=_client, result_factory=_result,
+        )
+
     records = _Records(budget)
     try:
         if any(not isinstance(tool, FunctionTool) for tool in tools):
@@ -125,22 +155,31 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
         if budget.max_model_turns == 0:
             raise MaxTurnsExceeded("Model turn budget exhausted")
         async with _client(model) as client:
-            agent_instructions = instructions
+            agent_instructions = instructions + (
+                "\n完成工具查询后，最终输出只返回符合以下 schema 的 JSON 对象，不加 Markdown 或正文。"
+                "\nReturn only a JSON object matching this schema:\n"
+                + json.dumps(output_type.model_json_schema(), ensure_ascii=False)
+            )
             agent_input = input_text
             if model.instructions_role == "user":
-                agent_instructions = None
                 agent_input = [
-                    {"role": "user", "content": instructions +
-                     "\nReturn only a JSON object matching this schema:\n" +
-                     json.dumps(output_type.model_json_schema(), ensure_ascii=False)},
+                    {"role": "user", "content": agent_instructions},
                     {"role": "user", "content": input_text},
                 ]
+                agent_instructions = None
             agent = Agent(
                 name="MedEvolve", instructions=agent_instructions, tools=tools,
                 # Shared contracts include open dictionaries, which strict schemas reject.
-                output_type=AgentOutputSchema(output_type, strict_json_schema=False),
+                output_type=(
+                    _OpenCodeOutputSchema if urlparse(model.base_url or "").hostname == "opencode.ai"
+                    else AgentOutputSchema
+                )(output_type, strict_json_schema=False),
                 model=OpenAIChatCompletionsModel(model=model.model, openai_client=client),
-                model_settings=ModelSettings(parallel_tool_calls=model.parallel_tool_calls),
+                model_settings=ModelSettings(
+                    parallel_tool_calls=model.parallel_tool_calls,
+                    extra_body={"response_format": {"type": "json_object"}}
+                    if urlparse(model.base_url or "").hostname == "opencode.ai" else None,
+                ),
             )
             result = await Runner.run(
                 agent, agent_input, hooks=records, max_turns=budget.max_model_turns,
