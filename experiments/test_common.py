@@ -5,14 +5,16 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import get_args
 from unittest.mock import AsyncMock
 
 import pytest
 
 from contracts import (Budget, EnvironmentInstance, EvaluationResult, ExperimentConfig,
-                       GenerationDirection, PatientTrajectory, RunResult, RuntimeConfig, TaskBatch)
+                       GenerationDirection, PatientTrajectory, RunResult, RuntimeConfig, TaskBatch,
+                       TaskType)
 from experiments import runner, summarize_run
-from methods.common import GenerationBudget, normalize_usage, validate_task_batch
+from methods.common import GenerationBudget, normalize_usage, output_constraints, validate_task_batch
 
 
 def directions():
@@ -41,6 +43,15 @@ def test_constraints_keep_failed_cost_and_reject_extra_direction_or_time():
     assert validate_task_batch(result(), directions()).output == {"questions": []}
     assert validate_task_batch(result([question()]), directions()).status == "completed"
     assert normalize_usage({})["input_tokens"] is None
+
+
+def test_selection_policy_rejects_incomplete_duplicate_or_mixed_input():
+    types = list(get_args(TaskType))
+    for invalid in (types[:-1], types + [types[0]], []):
+        with pytest.raises(ValueError):
+            output_constraints(task_types=invalid)
+    with pytest.raises(ValueError):
+        output_constraints(directions(), task_types=types)
 
 
 def test_single_node_and_candidate_pool_limits():
@@ -88,10 +99,34 @@ def test_cumulative_budget_keeps_failed_stages_and_blocks_next_call(monkeypatch)
     assert single.await_count == agent.await_count == 1
 
 
-@pytest.mark.parametrize("method", ["taskcraft", "singleshot"])
+def test_free_selection_accepts_same_type_without_changing_direction_mode():
+    types = list(get_args(TaskType))
+    duplicate = result([question(), question()])
+    accepted = validate_task_batch(duplicate, task_types=types)
+    assert accepted.status == "completed"
+    assert len(accepted.output["questions"]) == 2
+    assert validate_task_batch(duplicate, directions()).status == "failed"
+    for questions in ([question(task_type="未知题型")], [question()] * 3,
+                      [question(decision_point="2020-01-01")],
+                      [{**question(), "instruction": " "}]):
+        rejected = validate_task_batch(result(questions), task_types=types)
+        assert rejected.status == "failed" and rejected.output is None
+        assert rejected.trace[-1]["output"]["questions"] == questions
+        assert rejected.usage["total_tokens"] == 10
+    assert validate_task_batch(result(), task_types=types).status == "completed"
+    failed = validate_task_batch(result(status="failed"), task_types=types)
+    assert failed.status == "failed" and failed.usage["model_turns"] == 1
+
+
+@pytest.mark.parametrize("method", ["taskcraft"])
 def test_unimplemented_method_is_explicit(method):
     with pytest.raises(ValueError, match=f"Method {method} is not implemented"):
         runner.resolve_generator(method)
+
+
+def test_singleshot_resolves_implemented_method():
+    from methods.singleshot import generate_tasks
+    assert runner.resolve_generator("singleshot") is generate_tasks
 
 
 def test_workflow_dispatch_resolves_to_the_method_entry():
@@ -144,10 +179,10 @@ def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_p
 
     async def baseline(trajectory, environment, requested, runtime):
         assert trajectory.patient_id != "e" and environment.name == "fake"
-        assert requested == sampled[trajectory.patient_id]
+        assert requested == list(get_args(TaskType))
         if trajectory.patient_id == "h2":
             return result(status="failed")
-        return result([question(task_type=requested[0].task_type)])
+        return result([question(task_type="诊断与解释")])
 
     module = ModuleType("methods.singleshot")
     module.generate_tasks = baseline
@@ -164,6 +199,10 @@ def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_p
     evaluate = AsyncMock(side_effect=lambda task, *args: EvaluationResult(task_id=task.id, status="invalid", runs=[], observed_state={}))
     monkeypatch.setattr(runner, "evaluate_task", evaluate)
     asyncio.run(runner.run_experiment(config))
+    assert sorted(sampled) == ["h", "h2"]
+    assert all(len(requested) == 2 for requested in sampled.values())
+    assert {d.task_type for requested in sampled.values() for d in requested} <= {
+        direction.task_type for direction in config.initial_strategy.allocation}
     prepared.clear()
     for name in ("explore_data", "explore_environment", "analyze_feedback", "update_strategy"):
         monkeypatch.setattr(runner, name, AsyncMock(side_effect=AssertionError("MedEvolve context leaked")))
