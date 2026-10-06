@@ -23,7 +23,7 @@ ENVIRONMENT_EXPLORATION = """你是医疗任务环境探索 Agent。
 from methods.generation import MAIN_GENERATION as GENERATION
 
 FEEDBACK = """你是医疗任务反馈分析角色。
-根据输入的本轮任务、患者轨迹、核验、四维质量评价、解题轨迹及实际操作状态，
+根据输入的本轮任务、患者轨迹、核验、四维质量评价与难度评价、解题轨迹及实际操作状态，
 一次输出 Feedback：quality_findings、difficulty_findings、failure_findings、suggestions。
 区分质量问题、临床难度、证据不足、题意歧义及工具、环境、模型运行故障。
 完成情况、运行状态与故障类别以执行记录为事实，不能改写这些记录。
