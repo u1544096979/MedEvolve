@@ -64,19 +64,25 @@ Agent 使用官方多轮资源检索路径的两个工具：
 
 ### 就诊组织与时间
 
-轨迹按原始 Encounter 组织。保留住院、急诊和 ICU 等就诊标识，以及 `partOf` 父子关系；不把相邻日期自动合并成一次就诊。记录保留自己的就诊引用，缺少关联的记录单独呈现。
+轨迹按“患者 → 就诊 → 原始记录”组织。就诊来源按 `identifier.system` 中的 `encounter-hosp`、`encounter-ed`、`encounter-icu` 区分；`class` 原值同时保留，不能只凭 `class` 判断就诊来源。医院就诊可能带有 AMB、EMER 或 OBSENC 等不同 class 值。
+
+保留 `partOf` 父子关系。急诊和 ICU 子就诊展示在对应医院就诊下，仍保留各自 ID、起止时间及原始关联记录；统计医院就诊次数时只计算 `encounter-hosp` 记录，不将子就诊重复计为医院就诊。子就诊时间可能早于父就诊开始时间，按原始关系和时间呈现，不改写为父就诊时间。
+
+记录依据原始 `encounter` 或 `context` 引用归组，属于子就诊的记录保留子就诊归属。缺少直接就诊引用时保留原有 `derivedFrom`、`hasMember`、`partOf`、`specimen` 等关联，可通过这些引用呈现关联记录；无法关联的记录单独呈现，不按时间接近程度推断就诊归属。
 
 | 资源 | 时间读取规则 |
 | --- | --- |
 | Encounter | 保留 `period.start` 与 `period.end` |
-| Observation | 保留 `effectiveDateTime` 或 `effectivePeriod`；`issued` 单列为发布时间 |
+| Observation | 保留 `effectiveDateTime` 或 `effectivePeriod`；`issued` 单列为发布时间；`valueDateTime` 保留为测量值所描述的日期 |
 | MedicationRequest、MedicationAdministration | 分别保留 `authoredOn`、`effectiveDateTime` 或 `effectivePeriod` |
 | Procedure、Specimen | 分别保留 `performedDateTime` 或 `performedPeriod`、`collection.collectedDateTime` 或 `collection.collectedPeriod` |
 | Condition、MedicationStatement、MedicationDispense | 按原始字段保留 onset、recorded、effective、dateAsserted、whenPrepared、whenHandedOver 等实际存在的时间，并标明字段来源 |
 
-排序依据对应资源的原始事件时间，时间相同按资源类型与 ID 稳定排序。不同时间字段含义不能混用；没有事件时间时明确标记缺失，仅显示所属就诊的起止时间作为背景，不把就诊时间当作事件发生时间。无法解析的时间保留原值并计入整理统计，不使用数据库更新时间补齐。
+排序依据对应资源的原始事件时间，时间相同按资源类型与 ID 稳定排序。不同时间字段含义不能混用；没有事件时间时明确标记缺失，仅显示所属就诊的起止时间作为背景，不把就诊时间当作事件发生时间。Condition 或 MedicationDispense 仅有关联就诊时，记录置于该就诊的无事件时间分组，不补齐诊断或发药时间。无法解析的时间保留原值并计入整理统计，不使用数据库更新时间补齐。
 
-日期保留数据中的去标识值，药物医嘱、实际给药、发药和用药陈述分别呈现。药名沿 Medication 引用读取，保留原始名称与编码；大小写和空白归一仅用于匹配，不覆盖原始值。
+Observation 的记录时间、发布时间和日期型测量值分别呈现。例如，置管日期记录的 `effectiveDateTime` 表示本次观察的时间，`valueDateTime` 表示记录所描述的置管日期；二者可不同。MedicationStatement 的 `dateAsserted` 是用药信息被记录或陈述的时间，不自动作为用药开始时间。
+
+日期保留数据中的去标识值，药物医嘱、实际给药、发药和用药陈述分别呈现。药物表示同时支持 `medicationCodeableConcept` 内的名称与编码，以及 `medicationReference` 指向的 Medication 记录。被引用的 Medication 保留在关联材料中；药名读取其原始名称标识，保留完整编码，不假定 `code` 中必有可读药名。大小写和空白归一仅用于匹配，不覆盖原始值。
 
 整理层不生成临床因果、疗效判断或未经记载的病程事件。现有轨迹压缩作为方法侧能力使用，原始轨迹与来源仍是事实依据。
 
