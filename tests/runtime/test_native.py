@@ -352,6 +352,32 @@ async def test_unrecovered_parameter_error_fails_run_with_tool_error(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_exploration_probes_parameter_limit_and_finishes_with_guidance(monkeypatch):
+    install_transport(monkeypatch, [
+        {"role": "assistant", "content": "GET Condition?patient=p1&status=active"},
+        {"role": "assistant", "content": 'FINISH(["status 参数不被服务接受，改用 category"])'},
+    ])
+    tools = native_tools()
+
+    async def execute(action):
+        if action.startswith("FINISH("):
+            return {"kind": "FINISH", "request": {"action": action},
+                    "reply": "FINISH", "answers": ["status 参数不被服务接受，改用 category"]}
+        return parameter_error(action)
+
+    monkeypatch.setattr(tools, "execute", execute)
+    result = await run_agent(instructions="Explore", input_text="patient", tools=tools,
+        output_type=EnvironmentExploration, model=MODEL,
+        budget=Budget(max_model_turns=2, max_tool_calls=1))
+    assert result.status == "completed", result.error
+    assert result.output == {"guidance": "status 参数不被服务接受，改用 category"}
+    outputs = [item["output"] for item in result.trace if item["type"] == "tool_output"]
+    assert outputs[0]["failure_category"] == "tool_error"
+    assert outputs[0]["status_code"] == 400
+    assert not any(item["type"] == "run_error" for item in result.trace)
+
+
+@pytest.mark.asyncio
 async def test_parameter_error_then_budget_exhaustion_stays_budget_exhausted(monkeypatch):
     install_transport(monkeypatch, [
         {"role": "assistant", "content": "GET Condition?patient=p1&status=active"},
