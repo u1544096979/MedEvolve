@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import math
 import random
 from pathlib import Path
 
@@ -156,8 +157,12 @@ async def run_experiment(config: ExperimentConfig) -> None:
 
         guidance = None
         if config.method == "medevolve":
+            exploration_patients = random.Random(config.random_seed).sample(
+                config.evolution_patients, math.ceil(len(config.evolution_patients) * 0.5)
+            )
+            _save(root / "data_exploration_patients.json", exploration_patients)
             data_run = await invoke("explore_data", explore_data,
-                                    [trajectories[p] for p in config.evolution_patients], config.runtime)
+                                    [trajectories[p] for p in exploration_patients], config.runtime)
             data = parse("explore_data", data_run, DataExploration)
             environment_run = await invoke("explore_environment", explore_environment,
                                            config.environment, config.evolution_patients, config.runtime)

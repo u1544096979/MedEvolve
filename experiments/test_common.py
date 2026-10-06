@@ -174,3 +174,38 @@ def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_p
     assert summary["costs"]["generation"]["total_tokens"] == 20
     assert json.loads((Path(config.output_dir) / "summary.json").read_text()) == summary
     assert evaluate.call_args.args[0].source_method == "singleshot"
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 5])
+def test_data_exploration_opens_reproducible_half_of_training(tmp_path, monkeypatch, count):
+    import math
+    import random
+    values = json.loads((Path(__file__).parents[1] / "configs/experiment.json").read_text())
+    patients = [f"train-{n}" for n in range(count)]
+    values.update(run_id="half", evolution_patients=patients, evaluation_patients=["test"],
+                  round_patients=[patients], output_dir=str(tmp_path))
+    config = ExperimentConfig.model_validate(values)
+    monkeypatch.setattr(runner, "create_environment", AsyncMock(return_value=EnvironmentInstance(
+        instance_id="cache", endpoint="fake", environment=config.environment.name)))
+    monkeypatch.setattr(runner, "release_environment", AsyncMock())
+    monkeypatch.setattr(runner, "prepare_trajectory", AsyncMock(side_effect=lambda instance, patient:
+        PatientTrajectory(patient_id=patient, environment=instance.environment, text="records", sources=[])))
+    data = AsyncMock(return_value=RunResult(output={"guidance": "data"}, trace=[], usage={}, status="completed"))
+    monkeypatch.setattr(runner, "explore_data", data)
+    environment = AsyncMock(return_value=RunResult(output={"guidance": "env"}, trace=[], usage={}, status="completed"))
+    monkeypatch.setattr(runner, "explore_environment", environment)
+    generate = AsyncMock(return_value=result())
+    monkeypatch.setattr(runner, "generate_tasks", generate)
+    feedback = AsyncMock(return_value=RunResult(output=dict(quality_findings=[], difficulty_findings=[],
+        failure_findings=[], suggestions=[]), trace=[], usage={}, status="completed"))
+    monkeypatch.setattr(runner, "analyze_feedback", feedback)
+    monkeypatch.setattr(runner, "update_strategy", AsyncMock(return_value=RunResult(
+        output=config.initial_strategy.model_dump(), trace=[], usage={}, status="completed")))
+    asyncio.run(runner.run_experiment(config))
+    selected = [p.patient_id for p in data.call_args.args[0]]
+    assert selected == random.Random(config.random_seed).sample(patients, math.ceil(count * 0.5))
+    assert json.loads((tmp_path / "data_exploration_patients.json").read_text()) == selected
+    assert "test" not in selected
+    assert environment.call_args.args[1] == patients
+    assert [t.patient_id for t in feedback.call_args.args[1]] == patients
+    assert generate.await_count == count + 1

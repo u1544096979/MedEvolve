@@ -52,7 +52,7 @@ def install_dependencies(monkeypatch, failure=False, preparation_failure=False):
 
     async def data(items, runtime):
         calls["data"] += 1
-        assert [t.patient_id for t in items] == ["e1", "e2"]
+        assert len(items) == 1 and items[0].patient_id in {"e1", "e2"}
         return result({"guidance": "data"})
 
     async def environment(config, patients, runtime):
