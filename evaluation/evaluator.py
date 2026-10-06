@@ -15,14 +15,12 @@ from contracts import (
 )
 from . import prompts
 
-QUALITY_DIMENSIONS = (
-    "factual_accuracy", "clinical_soundness", "evidence_sufficiency", "task_clarity",
-)
 JUDGE_COUNT = 3
 TIME_FIELDS = (
     "effectiveDateTime", "onsetDateTime", "performedDateTime", "occurrenceDateTime",
     "authoredOn", "sent", "start", "date", "recordedDate", "issued",
 )
+PERIOD_FIELDS = ("effectivePeriod", "onsetPeriod", "performedPeriod", "period")
 
 
 def _review_material(task: Task, trajectory: PatientTrajectory) -> dict:
@@ -95,6 +93,16 @@ def _aggregate_difficulty_scores(runs: list[RunResult],
     )
 
 
+def _parse_moment(value) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def _statement_time(statement: str) -> datetime | None:
     try:
         resource = json.loads(statement)
@@ -103,14 +111,20 @@ def _statement_time(statement: str) -> datetime | None:
     if not isinstance(resource, dict):
         return None
     for field in TIME_FIELDS:
-        value = resource.get(field)
-        if not isinstance(value, str):
-            continue
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        parsed = _parse_moment(resource.get(field))
+        if parsed is not None:
+            return parsed
+    for field in PERIOD_FIELDS:
+        period = resource.get(field)
+        if isinstance(period, dict):
+            parsed = _parse_moment(period.get("start"))
+            if parsed is not None:
+                return parsed
+    context = resource.get("context")
+    if isinstance(context, dict):
+        period = context.get("period")
+        if isinstance(period, dict):
+            return _parse_moment(period.get("start"))
     return None
 
 

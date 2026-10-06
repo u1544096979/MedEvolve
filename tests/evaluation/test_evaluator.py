@@ -299,19 +299,23 @@ def test_complexity_metrics_count_sources_types_and_time_span(harness):
     h.task = h.task.model_copy(update={"evidence": [
         Evidence(source_id="Observation/1", statement="首次检验"),
         Evidence(source_id="Condition/2", statement="首次诊断"),
+        Evidence(source_id="Encounter/4", statement="首次就诊"),
     ]})
     h.trajectory = h.trajectory.model_copy(update={"sources": [
         Evidence(source_id="Observation/1", statement=json.dumps(
             {"resourceType": "Observation", "effectiveDateTime": "2026-01-01T00:00:00+08:00"})),
         Evidence(source_id="Condition/2", statement=json.dumps(
-            {"resourceType": "Condition", "onsetDateTime": "2026-01-11T00:00:00+08:00"})),
+            {"resourceType": "Condition", "onsetDateTime": "2026-01-11T00:00:00"})),
+        Evidence(source_id="Encounter/4", statement=json.dumps(
+            {"resourceType": "Encounter",
+             "context": {"period": {"start": "2026-01-21T00:00:00+08:00"}}})),
         Evidence(source_id="Observation/9", statement=json.dumps(
             {"resourceType": "Observation", "effectiveDateTime": "2027-05-01T00:00:00+08:00"})),
         Evidence(source_id="Patient/3", statement="不是 JSON"),
     ]})
     result = evaluate(h)
     assert result.difficulty.complexity_metrics == ComplexityMetrics(
-        evidence_count=2, resource_type_count=2, time_span_days=10.0)
+        evidence_count=3, resource_type_count=3, time_span_days=20.0)
 
 
 @pytest.mark.parametrize("field, scores", [("quality_scores", [6, 4, 4]), ("depths", [5, 2, 2])])
