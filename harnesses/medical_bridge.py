@@ -42,9 +42,12 @@ WRITE_TOOL_NAMES = frozenset({
 })
 MEDAGENTBENCH_DESCRIPTION = (
     "执行一次 MedAgentBench 原生文本动作。只能提交以下三种之一，且每次只提交一个：\n"
-    "1. 查询：GET {api_base}<ResourceType>?<参数>...\n"
-    "2. 提交：POST {api_base}<ResourceType>\\n<JSON payload>（环境接受请求但不写入数据库）\n"
+    "1. 查询：GET <ResourceType>?<参数名1>=<值1>&<参数名2>=<值2>...\n"
+    "2. 提交：POST <ResourceType>\\n<JSON payload>（环境接受请求但不写入数据库）\n"
     "3. 结束：FINISH([answer1, answer2, ...])，answers 必须是 JSON 列表。\n"
+    "路径只写相对路径，即以资源类型开头、紧跟在服务地址之后的部分，"
+    "例如 GET Condition?patient=p1；不要写服务地址、域名或完整 URL，"
+    "工具会把相对路径接到本会话的 FHIR 服务上。\n"
     "保持 ResourceType、参数名与 payload 字段与上游原生实现一致。"
 )
 

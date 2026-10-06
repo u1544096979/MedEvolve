@@ -19,6 +19,9 @@ from harnesses.contracts import GroupKey, HarnessName, Snapshot
 from harnesses.isolation import DockerCommandError, HarnessIsolation
 from harnesses.medical_bridge import ToolSessions
 
+REAL_ASYNC_CLIENT = httpx.AsyncClient
+REAL_CLIENT = httpx.Client
+
 
 class FakeDocker:
     """Docker CLI stand-in recording every command and enforcing mount scope."""
@@ -467,17 +470,50 @@ def fake_fhir() -> FakeFHIRService:
     return FakeFHIRService()
 
 
+def _refuse_unrouted(request: httpx.Request) -> httpx.Response:
+    raise RuntimeError(
+        f"测试禁止外发 HTTP 请求：{request.method} {request.url} 的客户端没有注入 "
+        "transport。请注入 httpx.MockTransport 或 ASGITransport，不要在测试里访问真实服务。"
+    )
+
+
+UNROUTED_TRANSPORT = httpx.MockTransport(_refuse_unrouted)
+
+
+def _install_transport_guard(monkeypatch, transport=None) -> None:
+    """Give every client built without a transport the `transport` stub.
+
+    Without `transport`, the fallback refuses the request instead of letting the
+    network stack answer, so no test can reach a real provider or FHIR endpoint
+    even when it forgets to inject a stub.
+    """
+    fallback = transport if transport is not None else UNROUTED_TRANSPORT
+
+    def async_client(*args, **kwargs):
+        if not kwargs.get("transport"):
+            kwargs["transport"] = fallback
+        return REAL_ASYNC_CLIENT(*args, **kwargs)
+
+    def client(*args, **kwargs):
+        if not kwargs.get("transport"):
+            kwargs["transport"] = fallback
+        return REAL_CLIENT(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client)
+    monkeypatch.setattr(httpx, "Client", client)
+
+
+@pytest.fixture(autouse=True)
+def refuse_unrouted_http(monkeypatch) -> httpx.MockTransport:
+    """No harness test may issue a real outbound request (no paid model call)."""
+    _install_transport_guard(monkeypatch)
+    return UNROUTED_TRANSPORT
+
+
 @pytest.fixture
 def fhir_service(monkeypatch, fake_fhir) -> FakeFHIRService:
     """Route every FHIRClient HTTP call in this test to `FakeFHIRService`."""
-    real_client = httpx.AsyncClient
-    transport = fake_fhir.transport()
-
-    def client_factory(*args, **kwargs):
-        kwargs.setdefault("transport", transport)
-        return real_client(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+    _install_transport_guard(monkeypatch, fake_fhir.transport())
     return fake_fhir
 
 

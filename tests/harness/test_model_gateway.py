@@ -21,6 +21,7 @@ GROUP = GroupKey(
     run_id="run-1", environment="PhysicianBench", harness="openclaw",
     source_method="medevolve", seed=42,
 )
+PROVIDER_TRANSPORT = object()
 LIMITS = {
     "execution": {"max_model_turns": 2, "max_tool_calls": 1},
     "learning": {"max_model_turns": 3, "max_tool_calls": 0},
@@ -51,7 +52,8 @@ def message(text="你好"):
 def gateway_factory(provider, api_key):
     created = []
 
-    def make(*, client_id="container-1", limits=None, model=None, **kwargs):
+    def make(*, client_id="container-1", limits=None, model=None,
+             transport=PROVIDER_TRANSPORT, **kwargs):
         values = dict(LIMITS)
         values.update(limits or {})
         config = model or ModelConfig(
@@ -69,7 +71,7 @@ def gateway_factory(provider, api_key):
                 timeout_seconds=values["timeout_seconds"],
                 learning_timeout_seconds=values["learning_timeout_seconds"],
             ),
-            transport=provider.transport(),
+            transport=provider.transport() if transport is PROVIDER_TRANSPORT else transport,
             **kwargs,
         )
         created.append(gateway)
@@ -232,6 +234,32 @@ async def test_streaming_is_refused_before_forwarding(provider, gateway_factory)
             {"messages": message(), "stream": True}, phase="execution", task_id="task-1"
         )
     assert provider.requests == []
+
+
+@pytest.mark.asyncio
+async def test_gateway_without_an_injected_transport_is_refused_not_sent(
+    api_key, gateway_factory
+):
+    """A gateway built with the default transport must fail, not dial out."""
+    gateway = gateway_factory(transport=None)
+    with pytest.raises(ProviderError, match="禁止外发 HTTP 请求"):
+        await gateway.complete({"messages": message()}, phase="execution", task_id="task-1")
+    call = gateway.calls()[0]
+    assert call.status == "provider_error"
+    assert "禁止外发 HTTP 请求" in call.error
+
+
+@pytest.mark.asyncio
+async def test_fhir_service_also_routes_a_default_transport_gateway(
+    api_key, fhir_service, gateway_factory
+):
+    fhir_service.route("/chat/completions", httpx.Response(404, text="no provider here"))
+    gateway = gateway_factory(transport=None)
+    with pytest.raises(ProviderError, match="404"):
+        await gateway.complete({"messages": message()}, phase="execution", task_id="task-1")
+    assert [str(request.url) for request in fhir_service.requests] == [
+        "https://opencode.ai/zen/go/v1/chat/completions"
+    ]
 
 
 @pytest.mark.asyncio

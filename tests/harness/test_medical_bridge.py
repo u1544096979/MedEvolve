@@ -94,6 +94,29 @@ async def test_tool_events_keep_order_and_duration(real_physicianbench):
 
 
 @pytest.mark.asyncio
+async def test_medagentbench_description_uses_relative_paths_only(real_medagentbench):
+    """The description must not promise a service address the bridge cannot reveal."""
+    rig = real_medagentbench
+    registry = ToolSessions(environments=rig.environments)
+    session_id = await registry.open(
+        SolverInput(instruction="查询患者情况", patient_id="p1"), rig.config
+    )
+    tools = await registry.list(session_id)
+    description = tools[0]["description"]
+    assert "{api_base}" not in description
+    assert "http" not in description
+    assert "GET <ResourceType>?" in description
+    assert "POST <ResourceType>" in description
+    assert "相对路径" in description
+
+    fetch = await registry.invoke(
+        session_id, MEDAGENTBENCH_TOOL, {"action": "GET Condition?patient=p1"}
+    )
+    assert fetch["status"] == "ok"
+    assert fetch["output"]["kind"] == "GET"
+
+
+@pytest.mark.asyncio
 async def test_medagentbench_keeps_native_get_post_and_finish(real_medagentbench):
     rig = real_medagentbench
     registry = ToolSessions(environments=rig.environments)
