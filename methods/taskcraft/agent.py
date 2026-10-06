@@ -481,7 +481,7 @@ class _SearchRun:
         if run is None:
             return
         thought = AgentThought.model_validate(run.output)
-        # 源码 provide_final_answer 返回  thinking/<answer> 文本，SearchAgent.forward 用
+        # 源码 provide_final_answer 返回 <think>/<answer> 文本，SearchAgent.forward 用
         # safe_json_loads 解析 answer；适配在同一位置把 answer 解析为声明的输出结构。
         # 模型给出的对象在这里已按源码的文本口径承载。
         self._finish(thought.answer, kind="forced_final", step=step)

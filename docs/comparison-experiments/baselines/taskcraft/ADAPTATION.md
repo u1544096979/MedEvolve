@@ -87,10 +87,12 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 19. 患者标识。病历工具按参数鉴权，本次开放的患者标识写入 Agent 说明。
 20. 原生协议分派。MedAgentBench 的工具列表不是函数工具，按名字过滤会得到空列表。生成阶段检测原生工具对象后按只读视图绑定，放行清单为 GET 与 FINISH；核验与反向检索的输出形态改为 `FINISH` 约定，机制分支与 PhysicianBench 一致。
 21. 原生接口范围。MedAgentBench 声明含 6 个 GET 与 3 个 POST，没有病历文书检索接口；依赖文书内容的结论在该环境下候选更少，机制不变。
-22. 强制终答的答案字段类型。达到 action step 上限后的终答请求按源码要求返回 ` thinking/<answer>`，适配与规划、反思共用 `AgentThought`：`think` 与 `answer` 接受任意 JSON 值，由 `thought_text` 取文本形态（字符串保持原样，对象等取 JSON 文本）；`answer` 对应源码 `FinalAnswerTool` 的 `inputs = {"answer": {"type": "any"}}` 与 `output_type = "any"`。`agent._finish` 在源码 `safe_json_loads` 的位置把该文本解析为 JSON，再映射到本次调用声明的输出结构，JSON 对象与 JSON 文本两种形态都接受。
-23. 规划与反思的答案字段类型。规划的（事实、计划）与反思的（事实、计划）在源码里由 `extract_think_and_answer` 从 ` thinking/<answer>` 标签抽出，都是自由文本，不解析 JSON。适配的 `AgentThought.think`、`answer` 按同一文本口径承载任意 JSON 值：模型把任务要求的对象直接放进 `answer` 时（反向检索任务给出 `{"identifier": ..., "relation": ...}`；核验任务因 `AUGMENTED_QUERY` 要求 `answer_list` 键而给出 `{"answer_list": [...]}`），`thought_text` 取其 JSON 文本进入记忆与后续解析。
+22. 强制终答的答案字段类型。达到 action step 上限后的终答请求按源码要求返回 `<think>/<answer>`，适配与规划、反思共用 `AgentThought`：`think` 与 `answer` 接受任意 JSON 值，由 `thought_text` 取文本形态（字符串保持原样，对象等取 JSON 文本）；`answer` 对应源码 `FinalAnswerTool` 的 `inputs = {"answer": {"type": "any"}}` 与 `output_type = "any"`。`agent._finish` 在源码 `safe_json_loads` 的位置把该文本解析为 JSON，再映射到本次调用声明的输出结构，JSON 对象与 JSON 文本两种形态都接受。
+23. 规划与反思的答案字段类型。规划的（事实、计划）与反思的（事实、计划）在源码里由 `extract_think_and_answer` 从 `<think>/<answer>` 标签抽出，都是自由文本，不解析 JSON。适配的 `AgentThought.think`、`answer` 按同一文本口径承载任意 JSON 值：模型把任务要求的对象直接放进 `answer` 时（反向检索任务给出 `{"identifier": ..., "relation": ...}`；核验任务因 `AUGMENTED_QUERY` 要求 `answer_list` 键而给出 `{"answer_list": [...]}`），`thought_text` 取其 JSON 文本进入记忆与后续解析。
 
 ## 5. 预算口径与真实运行结果
+
+本节全部运行在分支 `codex/taskcraft-baseline` 上产生，撰写本节时该分支头为 `c6cf92f`。每个运行目录对应的实现提交按 `git log --format='%h %cI %s'` 与目录内产物的写入时间比对确定，逐项列在 5.1–5.3；运行目录里的四份产物由 `41fe367` 引入，在该提交落库（2026-10-07T01:29:04）之前开始的两个运行带的是它的工作区改动。运行目录内 `pipeline.json` 的 `author_commit` 是所适配的作者源码基线，与实现提交不同。
 
 `TaskCraftParameters` 默认值取自源码签名：`chunk_size=16384`、`max_candidate_conclusions=20`、`max_candidate_atomic=10`、`judge_samples=3`、`question_attempts=3`、`query_attempts=3`、`merge_attempts=5`、`extended_attempts=4`、`max_hops=2`、`width_attempts=3`；Agent 步数上限为 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10`。`max_candidate_atomic` 与共享生成预算共同决定单批候选数。
 
@@ -128,7 +130,8 @@ MEDEVOLVE_TASKCRAFT_LIVE_CONFIG=<机制配置> pytest tests/method/test_taskcraf
 | 候选证据 | 原子题 `Condition/2571`、`Condition/2572`、`Condition/2573`、`Condition/2570`、`Condition/2566`、`Condition/2568`；宽度题分别合并 `Condition/2571`+`Condition/2572`、`Condition/2573`+`Condition/2570`、`Condition/2566`+`Condition/2568`，各带两道父题 |
 | 最终选题 | 1 题（请求方向为药物处方与诊断与解释；候选均为诊断与解释，其余 8 题按 `task_type_quota_exhausted` 未进入） |
 | 无已知 token 的请求 | 0 次（`runs_without_known_tokens=0`） |
-| 提交基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
+| 实现提交 | `4daa5cb`（分支 `codex/taskcraft-baseline`，运行于 04:32 开始、04:51 结束） |
+| 作者源码基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
 
 阶段结论：`atomic` 与 `width` 产出带参考答案、可回查证据与父题的真实候选；`depth` 在 PhysicianBench 上没有通过验收，接纳候选为 0。三类失败都落在作者自身的判定分支上：
 
@@ -138,15 +141,15 @@ MEDEVOLVE_TASKCRAFT_LIVE_CONFIG=<机制配置> pytest tests/method/test_taskcraf
 
 PhysicianBench 保留的运行目录：
 
-| 运行目录 | 内容 |
-|---|---|
-| `outputs/taskcraft-mechanism-physicianbench` | completed；261 模型轮 / 17 次工具调用 / 447 995 tokens，墙钟 16 分 35 秒；atomic 4，width 1，depth 0；最终选题 2 题 |
-| `outputs/taskcraft-mechanism-physicianbench-rerun` | completed；262 模型轮 / 26 次工具调用 / 469 017 tokens，墙钟 14 分 45 秒；atomic 3，width 2，depth 0；3 次请求无已知 token；最终选题 1 题 |
-| `outputs/taskcraft-mechanism-physicianbench-attempt1` | failed（原子阶段没有通过内置核验的候选）；227 模型轮 / 16 次工具调用 / 332 106 tokens，墙钟 12 分 56 秒；atomic 0，width 0，depth 0；最终选题 0 题 |
+| 运行目录 | 实现提交 | 内容 |
+|---|---|---|
+| `outputs/taskcraft-mechanism-physicianbench` | `41fe367` | completed；261 模型轮 / 17 次工具调用 / 447 995 tokens，墙钟 16 分 35 秒；atomic 4，width 1，depth 0；最终选题 2 题 |
+| `outputs/taskcraft-mechanism-physicianbench-rerun` | `b8da4a9` | completed；262 模型轮 / 26 次工具调用 / 469 017 tokens，墙钟 14 分 45 秒；atomic 3，width 2，depth 0；3 次请求无已知 token；最终选题 1 题 |
+| `outputs/taskcraft-mechanism-physicianbench-attempt1` | `41fe367` | failed（原子阶段没有通过内置核验的候选）；227 模型轮 / 16 次工具调用 / 332 106 tokens，墙钟 12 分 56 秒；atomic 0，width 0，depth 0；最终选题 0 题 |
 
 ### 5.2 MedAgentBench 机制验收
 
-运行目录 `outputs/taskcraft-medagentbench`，患者 `S2874099`，种子 `jyxsu6/medagentbench@sha256:3fb83d7ed71c5476f9eb6212bd440a909ef7505922bbc757dc488a8fc0701966`，`deepseek-v4.1-flash`，机制预算 800 轮 / 800 次工具。
+机制验收运行目录 `outputs/taskcraft-mechanism-medagentbench`（机制预算 800 轮 / 800 次工具），患者 `S2874099`，种子 `jyxsu6/medagentbench@sha256:3fb83d7ed71c5476f9eb6212bd440a909ef7505922bbc757dc488a8fc0701966`，`deepseek-v4.1-flash`。
 
 | 项 | 数值 |
 |---|---|
@@ -158,7 +161,8 @@ PhysicianBench 保留的运行目录：
 | 宽度阶段 | 合并检查保留 4 组，产出 4 题，父题数 2–3 |
 | 最终选题 | 1 题（请求方向为药物处方与诊断与解释，候选均为诊断与解释，另一方向的配额没有候选） |
 | 过程异常 | 5 次反向检索硬失败：2 次模型返回 `{"name": "final_answer", ...}` 而非 `{"action": ...}`，3 次收到 `PatientAccessError: Only FHIR search URLs are supported`；1 次核验返回 `LLM can solve this task`（作者的无法工具作答过滤分支）；均按作者重试参数处理 |
-| 提交基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
+| 实现提交 | `41fe367`（分支 `codex/taskcraft-baseline`，运行于 01:12 开始、03:23 结束） |
+| 作者源码基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
 
 阶段结论：`atomic`、`depth`、`width` 均产出带参考答案、可回查证据与父题的真实候选。
 
@@ -177,6 +181,7 @@ PhysicianBench 保留的运行目录：
 | 失败类别 | 无 | 无 |
 | 生成成本 | 8 轮 / 0 次工具 / 18 067 tokens | 1 轮 / 0 次工具 / 27 088 tokens（输入 8 114，输出 18 974） |
 | 评测成本 | 0 | 0 |
+| 实现提交 | `41fe367` | `41fe367` |
 
 两个环境的公共预算都不足以走完原子阶段，公共输出为题数 0 的真实截断，未以机制预算的输出代替。
 
