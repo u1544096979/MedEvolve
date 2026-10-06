@@ -83,6 +83,13 @@
           "instructions_role": "system",
           "parallel_tool_calls": true
         },
+        "difficulty": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
         "solver": {
           "model": "gpt-4o-mini",
           "base_url": "https://api.openlux.ai/v1",
@@ -104,6 +111,10 @@
           "max_tool_calls": 200
         },
         "quality": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "difficulty": {
           "max_model_turns": 30,
           "max_tool_calls": 200
         },
