@@ -62,6 +62,9 @@ class QualityReview(BaseModel):
     task_clarity: QualityDimension          # 题目清晰度
 ```
 
+单个裁判只输出 score 与 reason（`DimensionJudgment`，四维组合为 `QualityJudgment`）；
+`scores` 与合并后的 `reason` 由评测侧聚合函数写入 `QualityReview`，裁判不产出这两个字段。
+
 #### 1.2 四个质量维度定义
 
 **1. factual_accuracy（事实准确性）**
@@ -125,7 +128,7 @@ task_clarity（题目清晰度）：
 5分=目标明确，背景完整，无歧义；4分=基本清晰但个别细节需推断；3分=方向明确但缺背景或要求不具体；
 2分=目标模糊或矛盾；1分=无法理解或严重歧义。
 
-输出QualityReview，每个维度包含score（整数1-5）和reason（字符串）。
+输出QualityJudgment，四个维度各包含score（整数1-5）和reason（字符串）。
 依据task、reference_answer、evidence、trajectory和verification结果评价。"""
 ```
 
@@ -146,6 +149,8 @@ class DifficultyScore(BaseModel):
     reason: str  # 合并的评分依据
     complexity_metrics: ComplexityMetrics  # 自动计算指标
 ```
+
+单个裁判只输出 `reasoning_depth` 与 `reason`（`DifficultyJudgment`）；`reasoning_depths` 与 `complexity_metrics` 由评测侧聚合函数写入。
 
 #### 2.2 推理深度层级定义
 
@@ -175,9 +180,14 @@ def _compute_complexity(task: Task, trajectory: PatientTrajectory) -> Complexity
     # 统计资源类型（从source_id前缀提取，如"Observation/123" -> "Observation"）
     resource_types = {sid.split('/')[0] for sid in source_ids if '/' in sid}
     
-    # 时间跨度：从trajectory.sources中提取时间字段
-    # 简化版：返回None，实际实现需要解析每个source的时间字段
-    time_span_days = None
+    # 时间跨度：解析任务引用记录的时间字段，口径与 environments 的 _record_time 一致
+    # 平铺字段 → effectivePeriod/onsetPeriod/performedPeriod/period 的 start → context.period.start
+    # 不带时区的值按 UTC 处理；无可用时间时为 None
+    moments = [_statement_time(source.statement) for source in trajectory.sources
+               if source.source_id in source_ids]
+    moments = [moment for moment in moments if moment is not None]
+    time_span_days = ((max(moments) - min(moments)).total_seconds() / 86400
+                      if moments else None)
     
     return ComplexityMetrics(
         evidence_count=len(source_ids),
@@ -202,7 +212,7 @@ complexity_metrics已在输入中提供（evidence_count、resource_type_count�
 
 评分依据task.instruction的要求和evidence的复杂度。reason说明为何归为该层级。
 
-输出DifficultyScore，包含reasoning_depth（整数1-4）、reason（字符串）和complexity_metrics（已提供的对象）。"""
+输出DifficultyJudgment，包含reasoning_depth（整数1-4）和reason（字符串）；complexity_metrics 由评测侧写入最终 DifficultyScore。"""
 ```
 
 ### 三、评测流程改造
@@ -223,7 +233,7 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
     quality_runs = []
     for judge_idx in range(3):
         run = await model_run(
-            runtime.call_llm, role="quality", schema=QualityReview,
+            runtime.call_llm, role="quality", schema=QualityJudgment,
             instructions=prompts.QUALITY, payload=material,
         )
         quality_runs.append(run)
@@ -236,7 +246,7 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
     difficulty_runs = []
     for judge_idx in range(3):
         run = await model_run(
-            runtime.call_llm, role="difficulty", schema=DifficultyScore,
+            runtime.call_llm, role="difficulty", schema=DifficultyJudgment,
             instructions=prompts.DIFFICULTY,
             payload={
                 "task": material["task"],
@@ -258,7 +268,7 @@ import statistics
 
 def _aggregate_quality_scores(runs: list[RunResult]) -> QualityReview:
     """聚合三个裁判的质量评分"""
-    judges = [_output(run, QualityReview) for run in runs]
+    judges = [_output(run, QualityJudgment) for run in runs]
     
     def aggregate_dimension(dim_name: str) -> QualityDimension:
         dims = [getattr(judge, dim_name) for judge in judges]
@@ -288,7 +298,7 @@ def _aggregate_difficulty_scores(
     complexity: ComplexityMetrics
 ) -> DifficultyScore:
     """聚合三个裁判的难度评分"""
-    judges = [_output(run, DifficultyScore) for run in runs]
+    judges = [_output(run, DifficultyJudgment) for run in runs]
     
     depths = [j.reasoning_depth for j in judges]
     reasons = [j.reason for j in judges]
@@ -307,28 +317,35 @@ def _aggregate_difficulty_scores(
 #### 3.3 校验逻辑
 
 ```python
-# 校验quality维度分数
-for dim_name in ["factual_accuracy", "clinical_soundness",
-                 "evidence_sufficiency", "task_clarity"]:
-    dim = getattr(quality, dim_name)
-    if not (1 <= dim.score <= 5):
-        raise ValueError(f"{dim_name}.score must be 1-5")
-    if len(dim.scores) != 3:
-        raise ValueError(f"{dim_name}.scores must contain exactly 3 scores")
+# 裁判数量固定为 3；每个裁判的 reason 必须非空，分数必须在区间内，再取中位数
+if len(quality_runs) != 3:
+    raise ValueError("quality scoring requires exactly three judges")
+for judge in quality_judges:  # 每个裁判一次 QualityJudgment
+    for dim_name in ["factual_accuracy", "clinical_soundness",
+                     "evidence_sufficiency", "task_clarity"]:
+        dim = getattr(judge, dim_name)
+        if not dim.reason.strip():
+            raise ValueError(f"{dim_name}.reason must not be empty")
+        if not (1 <= dim.score <= 5):
+            raise ValueError(f"{dim_name}.score must be 1-5")
 
-# 校验difficulty层级
-if not (1 <= difficulty.reasoning_depth <= 4):
-    raise ValueError("reasoning_depth must be 1-4")
-if len(difficulty.reasoning_depths) != 3:
-    raise ValueError("reasoning_depths must contain exactly 3 depths")
+if len(difficulty_runs) != 3:
+    raise ValueError("difficulty scoring requires exactly three judges")
+for judge in difficulty_judges:  # 每个裁判一次 DifficultyJudgment
+    if not judge.reason.strip():
+        raise ValueError("reason must not be empty")
+    if not (1 <= judge.reasoning_depth <= 4):
+        raise ValueError("reasoning_depth must be 1-4")
 ```
 
 ### 四、汇总逻辑改造
 
 #### 4.1 summary.py新增函数
 
+输入为 evaluations.json 记录（dict）；缺少四个维度数值分数或难度字段的旧记录会被跳过。
+
 ```python
-def summarize_quality(evaluations: list[EvaluationResult]) -> dict:
+def summarize_quality(evaluations: list[dict]) -> dict:
     """汇总质量评分分布"""
     valid_evals = [e for e in evaluations if e.quality is not None]
     if not valid_evals:
@@ -339,15 +356,15 @@ def summarize_quality(evaluations: list[EvaluationResult]) -> dict:
                      "evidence_sufficiency", "task_clarity"]:
         scores = [getattr(e.quality, dim_name).score for e in valid_evals]
         dimensions[dim_name] = {
-            "mean": statistics.mean(scores),
-            "median": statistics.median(scores),
+            "mean": float(statistics.mean(scores)),
+            "median": float(statistics.median(scores)),
             "distribution": dict(Counter(scores)),  # {1: count, 2: count, ...}
             "high_quality_rate": sum(s >= 4 for s in scores) / len(scores),
         }
     
     return dimensions
 
-def summarize_difficulty(evaluations: list[EvaluationResult]) -> dict:
+def summarize_difficulty(evaluations: list[dict]) -> dict:
     """汇总难度分布"""
     valid_evals = [e for e in evaluations if e.difficulty is not None]
     if not valid_evals:
@@ -359,12 +376,12 @@ def summarize_difficulty(evaluations: list[EvaluationResult]) -> dict:
     
     return {
         "reasoning_depth": {
-            "mean": statistics.mean(depths),
+            "mean": float(statistics.mean(depths)),
             "distribution": dict(Counter(depths)),  # {1: count, 2: count, ...}
         },
         "complexity_metrics": {
-            "avg_evidence_count": statistics.mean(evidence_counts),
-            "avg_resource_types": statistics.mean(resource_counts),
+            "avg_evidence_count": float(statistics.mean(evidence_counts)),
+            "avg_resource_types": float(statistics.mean(resource_counts)),
         }
     }
 ```
@@ -378,13 +395,13 @@ def summarize_difficulty(evaluations: list[EvaluationResult]) -> dict:
   "method": "medevolve",
   "evaluation": {
     "actual_questions": 10,
-    "validity_rate": 0.9,
-    "completion_rate": 0.8,
+    "validity_among_verified": {"numerator": 9, "denominator": 10, "rate": 0.9},
+    "completion_among_reviewed": {"numerator": 8, "denominator": 10, "rate": 0.8},
     "quality_summary": {
       "factual_accuracy": {
         "mean": 4.2,
-        "median": 4,
-        "distribution": {1: 0, 2: 0, 3: 1, 4: 5, 5: 4},
+        "median": 4.0,
+        "distribution": {"3": 1, "4": 5, "5": 4},
         "high_quality_rate": 0.9
       },
       "clinical_soundness": {...},
@@ -394,7 +411,7 @@ def summarize_difficulty(evaluations: list[EvaluationResult]) -> dict:
     "difficulty_summary": {
       "reasoning_depth": {
         "mean": 2.8,
-        "distribution": {1: 1, 2: 3, 3: 5, 4: 1}
+        "distribution": {"1": 1, "2": 3, "3": 5, "4": 1}
       },
       "complexity_metrics": {
         "avg_evidence_count": 4.5,

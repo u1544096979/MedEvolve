@@ -249,7 +249,7 @@ from contracts import (
 `SimpleNamespace` 增加两个可调字段：
 
 ```python
-        quality_scores=[4, 4, 4], depths=[2, 2, 2],
+        quality_scores=[4, 4, 4], depths=[2, 2, 2], blank_reason=None,
 ```
 
 假 `run` 的质量分支替换为按裁判序号取分，并新增难度分支：
@@ -258,13 +258,15 @@ from contracts import (
         if role == "quality":
             index = sum(1 for call in h.model_calls[:-1]
                         if call["output_type"] is QualityJudgment)
-            output = {key: {"score": h.quality_scores[index], "reason": "supported"}
+            reason = "" if h.blank_reason == "quality" else "supported"
+            output = {key: {"score": h.quality_scores[index], "reason": reason}
                       for key in ("factual_accuracy", "clinical_soundness",
                                   "evidence_sufficiency", "task_clarity")}
         elif role == "difficulty":
             index = sum(1 for call in h.model_calls[:-1]
                         if call["output_type"] is DifficultyJudgment)
-            output = {"reasoning_depth": h.depths[index], "reason": "跨记录整合"}
+            reason = "" if h.blank_reason == "difficulty" else "跨记录整合"
+            output = {"reasoning_depth": h.depths[index], "reason": reason}
 ```
 
 `test_solver_receives_only_patient_question_and_decision_point` 的 `len(result.runs) == 5` 改为 `== 10`。
@@ -337,6 +339,9 @@ def test_complexity_metrics_count_sources_types_and_time_span(harness):
         Evidence(source_id="Observation/1", statement="首次检验"),
         Evidence(source_id="Condition/2", statement="首次诊断"),
         Evidence(source_id="Encounter/4", statement="首次就诊"),
+        Evidence(source_id="MedicationRequest/5", statement=json.dumps(
+            {"resourceType": "MedicationRequest",
+             "effectivePeriod": {"start": "2026-01-31T00:00:00+08:00"}})),
     ]})
     h.trajectory = h.trajectory.model_copy(update={"sources": [
         Evidence(source_id="Observation/1", statement=json.dumps(
@@ -346,13 +351,26 @@ def test_complexity_metrics_count_sources_types_and_time_span(harness):
         Evidence(source_id="Encounter/4", statement=json.dumps(
             {"resourceType": "Encounter",
              "context": {"period": {"start": "2026-01-21T00:00:00+08:00"}}})),
+        Evidence(source_id="MedicationRequest/5", statement=json.dumps(
+            {"resourceType": "MedicationRequest",
+             "effectivePeriod": {"start": "2026-01-31T00:00:00+08:00"}})),
         Evidence(source_id="Observation/9", statement=json.dumps(
             {"resourceType": "Observation", "effectiveDateTime": "2027-05-01T00:00:00+08:00"})),
         Evidence(source_id="Patient/3", statement="不是 JSON"),
     ]})
     result = evaluate(h)
     assert result.difficulty.complexity_metrics == ComplexityMetrics(
-        evidence_count=3, resource_type_count=3, time_span_days=20.0)
+        evidence_count=4, resource_type_count=4, time_span_days=30.0)
+
+
+@pytest.mark.parametrize("role", ["quality", "difficulty"])
+def test_empty_judge_reason_fails_evaluation(harness, role):
+    h = harness
+    h.blank_reason = role
+    result = evaluate(h)
+    assert result.status == "failed"
+    assert result.failure_category == "model_error"
+    assert result.completion is None
 
 
 @pytest.mark.parametrize("field, scores", [("quality_scores", [6, 4, 4]), ("depths", [5, 2, 2])])
@@ -514,6 +532,9 @@ def _aggregate_quality_scores(runs: list[RunResult]) -> QualityReview:
     def aggregate(dimension: str) -> QualityDimension:
         judgments = [getattr(judge, dimension) for judge in judges]
         scores = [judgment.score for judgment in judgments]
+        for judgment in judgments:
+            if not judgment.reason.strip():
+                raise ValueError(f"{dimension}.reason must not be empty")
         for score in scores:
             if not 1 <= score <= 5:
                 raise ValueError(f"{dimension}.score must be 1-5")
@@ -535,6 +556,9 @@ def _aggregate_difficulty_scores(runs: list[RunResult],
                                  complexity: ComplexityMetrics) -> DifficultyScore:
     judges = _judge_outputs(runs, DifficultyJudgment)
     depths = [judge.reasoning_depth for judge in judges]
+    for judge in judges:
+        if not judge.reason.strip():
+            raise ValueError("reason must not be empty")
     for depth in depths:
         if not 1 <= depth <= 4:
             raise ValueError("reasoning_depth must be 1-4")
@@ -689,12 +713,33 @@ body 说明：单次文本 judgment 无法统计对比，改成三裁判各打 1
 ```python
     reviews = 4 if failure else 8
     assert summary["evolution"]["quality_summary"]["task_clarity"] == {
-        "mean": 4, "median": 4.0, "distribution": {"4": reviews}, "high_quality_rate": 1.0}
+        "mean": 4.0, "median": 4.0, "distribution": {"4": reviews}, "high_quality_rate": 1.0}
     assert summary["evolution"]["difficulty_summary"]["reasoning_depth"] == {
-        "mean": 2, "distribution": {"2": reviews}}
+        "mean": 2.0, "distribution": {"2": reviews}}
     assert summary["evolution"]["difficulty_summary"]["complexity_metrics"] == {
-        "avg_evidence_count": 3, "avg_resource_types": 2}
+        "avg_evidence_count": 3.0, "avg_resource_types": 2.0}
     assert summary["evaluation"]["quality_summary"]["factual_accuracy"]["high_quality_rate"] == 1.0
+```
+
+新增一个直接测汇总函数的旧记录用例（追加到 `tests/experiment/test_closed_loop.py` 末尾）：
+
+```python
+def test_summary_ignores_legacy_quality_records():
+    from experiments.summary import summarize_difficulty, summarize_quality
+    legacy = {"quality": {"dimensions": {"clarity": {"judgment": "good", "reason": "clear"}}}}
+    dimensions = ("factual_accuracy", "clinical_soundness",
+                  "evidence_sufficiency", "task_clarity")
+    current = {
+        "quality": {name: {"score": 4, "scores": [4, 4, 4], "reason": "supported"}
+                    for name in dimensions},
+        "difficulty": {"reasoning_depth": 2, "reasoning_depths": [2, 2, 2], "reason": "整合",
+                       "complexity_metrics": {"evidence_count": 3, "resource_type_count": 2,
+                                              "time_span_days": 5.0}},
+    }
+    assert summarize_quality([legacy]) == {}
+    assert summarize_difficulty([legacy]) == {}
+    assert summarize_quality([legacy, current])["task_clarity"]["mean"] == 4.0
+    assert summarize_difficulty([legacy, current])["reasoning_depth"]["distribution"] == {"2": 1}
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -714,17 +759,46 @@ QUALITY_DIMENSIONS = (
 )
 
 
+def _quality_scores(evaluation: dict) -> list[int] | None:
+    review = evaluation.get("quality")
+    if not isinstance(review, dict):
+        return None
+    scores = []
+    for dimension in QUALITY_DIMENSIONS:
+        assessment = review.get(dimension)
+        if not isinstance(assessment, dict) or not isinstance(assessment.get("score"), int):
+            return None
+        scores.append(assessment["score"])
+    return scores
+
+
+def _difficulty_score(evaluation: dict) -> dict | None:
+    score = evaluation.get("difficulty")
+    if not isinstance(score, dict) or not isinstance(score.get("reasoning_depth"), int):
+        return None
+    metrics = score.get("complexity_metrics")
+    if not isinstance(metrics, dict):
+        return None
+    if not all(isinstance(metrics.get(field), int)
+               for field in ("evidence_count", "resource_type_count")):
+        return None
+    return {"reasoning_depth": score["reasoning_depth"],
+            "evidence_count": metrics["evidence_count"],
+            "resource_type_count": metrics["resource_type_count"]}
+
+
 def summarize_quality(evaluations: list[dict]) -> JsonObject:
-    reviews = [evaluation["quality"] for evaluation in evaluations
-               if evaluation.get("quality")]
-    if not reviews:
+    # Legacy records keep the retired `dimensions` shape and cannot be aggregated.
+    score_lists = [scores for evaluation in evaluations
+                   if (scores := _quality_scores(evaluation)) is not None]
+    if not score_lists:
         return {}
     summary = {}
-    for dimension in QUALITY_DIMENSIONS:
-        scores = [review[dimension]["score"] for review in reviews]
+    for index, dimension in enumerate(QUALITY_DIMENSIONS):
+        scores = [score_list[index] for score_list in score_lists]
         summary[dimension] = {
-            "mean": statistics.mean(scores),
-            "median": statistics.median(scores),
+            "mean": float(statistics.mean(scores)),
+            "median": float(statistics.median(scores)),
             "distribution": {str(score): count for score, count in sorted(Counter(scores).items())},
             "high_quality_rate": sum(score >= 4 for score in scores) / len(scores),
         }
@@ -732,21 +806,21 @@ def summarize_quality(evaluations: list[dict]) -> JsonObject:
 
 
 def summarize_difficulty(evaluations: list[dict]) -> JsonObject:
-    scores = [evaluation["difficulty"] for evaluation in evaluations
-              if evaluation.get("difficulty")]
-    if not scores:
+    entries = [entry for evaluation in evaluations
+               if (entry := _difficulty_score(evaluation)) is not None]
+    if not entries:
         return {}
-    depths = [score["reasoning_depth"] for score in scores]
-    evidence_counts = [score["complexity_metrics"]["evidence_count"] for score in scores]
-    resource_counts = [score["complexity_metrics"]["resource_type_count"] for score in scores]
+    depths = [entry["reasoning_depth"] for entry in entries]
+    evidence_counts = [entry["evidence_count"] for entry in entries]
+    resource_counts = [entry["resource_type_count"] for entry in entries]
     return {
         "reasoning_depth": {
-            "mean": statistics.mean(depths),
+            "mean": float(statistics.mean(depths)),
             "distribution": {str(depth): count for depth, count in sorted(Counter(depths).items())},
         },
         "complexity_metrics": {
-            "avg_evidence_count": statistics.mean(evidence_counts),
-            "avg_resource_types": statistics.mean(resource_counts),
+            "avg_evidence_count": float(statistics.mean(evidence_counts)),
+            "avg_resource_types": float(statistics.mean(resource_counts)),
         },
     }
 ```
