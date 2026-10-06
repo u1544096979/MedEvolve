@@ -33,7 +33,7 @@ def test_workflow_pool_and_public_evaluation(tmp_path, monkeypatch, status, prod
             trace=[{'type': 'selection', 'selected_directions': [0, 2]}],
             usage={'model_turns': 4, 'tool_calls': 0, 'input_tokens': 40,
                    'output_tokens': 20, 'total_tokens': 60})
-    async def evaluate(task, trajectory, environment, evaluation_config):
+    async def evaluate(task, trajectory, environment, evaluation_config, environments=None):
         assert task.patient_id == trajectory.patient_id == 'p'
         assert task.environment == trajectory.environment == environment.name
         assert task.source_method == 'workflow'

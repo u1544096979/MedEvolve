@@ -75,7 +75,7 @@ def install_dependencies(monkeypatch, failure=False, preparation_failure=False):
                                       "reference_answer": "answer", "evidence": []}
                                      for d in directions[:count]]})
 
-    async def evaluate(task, trajectory, environment, config):
+    async def evaluate(task, trajectory, environment, config, environments=None):
         calls["evaluate"] += 1
         assert task.patient_id == trajectory.patient_id
         assert task.source_method == "medevolve" and task.environment == "fake"
