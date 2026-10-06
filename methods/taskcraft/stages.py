@@ -294,7 +294,7 @@ class Pipeline:
                   f"{json.dumps(source, ensure_ascii=False)}\n"
                   "    Each dictionary contains: index (unique ID), question (original question), "
                   "and content_identifier (identifier).\n    ")
-        merged = None
+        merged_results = None
         for _ in range(self.parameters.width_attempts):
             run = await self.ledger.llm("width/merge", instructions=prompts.width_prompts()["merge_prompt"],
                                        input_text=prompt, output_type=MergedQuestions)
@@ -303,28 +303,22 @@ class Pipeline:
                 if self.ledger.exhausted:
                     return []
                 continue
-            merged = MergedQuestions.model_validate(run.output).merged
+            try:
+                merged_results = self._merge_groups(
+                    MergedQuestions.model_validate(run.output).merged, atomic)
+            except (IndexError, ValueError) as exc:
+                # 源码在映射父题时抛错会丢弃整次响应并重试（gen_width_based_task.py:190-200），
+                # 越界或缺少字段的分组不修剪成更小的组。
+                self.record("width/merge", status="failed", reason="合并分组无法映射到原子题",
+                            error=f"{type(exc).__name__}: {exc}")
+                merged_results = None
+                if self.ledger.exhausted:
+                    return []
+                continue
             break
-        if merged is None:
+        if merged_results is None:
             self.failure = self.failure or "宽度扩展没有生成合并问题"
             return []
-
-        merged_results = []
-        for item in merged:
-            indexes = sorted({index for index in item.index if 0 <= index < len(atomic)})
-            if len(indexes) < 2 or not item.question.strip():
-                self.record("width/merge", status="rejected", reason="合并分组不合法",
-                            index=item.index, question=item.question)
-                continue
-            parents = [atomic[index] for index in indexes]
-            merged_results.append({
-                "index": len(merged_results),
-                "question": item.question,
-                "content_identifier": item.content_identifier,
-                "original_questions": [parent.question.instruction for parent in parents],
-                "golden_answers": [parent.question.reference_answer for parent in parents],
-                "parents": parents,
-            })
         self.record("width/merge", status="completed", merged=len(merged_results))
         if not merged_results:
             self.failure = self.failure or "宽度扩展没有合法合并分组"
@@ -345,6 +339,28 @@ class Pipeline:
             ))
         self.record("width/result", checked=len(results))
         return results
+
+    def _merge_groups(self, merged: list, atomic: list[Candidate]) -> list[dict]:
+        """移植 width_extend 的合并映射：父题索引保持模型给定的顺序与重复项。
+
+        越界索引与缺少父题或问题文本的分组按模型输出失败处理，由调用方丢弃整次响应重试。
+        """
+        groups = []
+        for item in merged:
+            if not item.index:
+                raise ValueError("合并分组没有父题")
+            if not item.question.strip():
+                raise ValueError("合并分组没有合并问题文本")
+            parents = [atomic[index] for index in item.index]
+            groups.append({
+                "index": len(groups),
+                "question": item.question,
+                "content_identifier": item.content_identifier,
+                "original_questions": [parent.question.instruction for parent in parents],
+                "golden_answers": [parent.question.reference_answer for parent in parents],
+                "parents": parents,
+            })
+        return groups
 
     async def _check_merged(self, merged_results: list[dict]) -> list[dict]:
         """移植 check_queries：先查可分解性，再查无工具回答是否已能答对。"""

@@ -9,8 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 from contracts import (
-    Budget, EnvironmentConfig, EnvironmentInstance, Evidence, GenerationDirection,
-    ModelConfig, PatientTrajectory, RunResult, RuntimeConfig, SolverAnswer, TaskBatch,
+    Budget, EnvironmentConfig, EnvironmentInstance, Evidence, GeneratedQuestion,
+    GenerationDirection, ModelConfig, PatientTrajectory, RunResult, RuntimeConfig,
+    SolverAnswer, TaskBatch,
 )
 from environments import get_tools
 from environments.errors import EnvironmentUnavailable, PatientAccessError
@@ -27,7 +28,7 @@ from methods.taskcraft.schemas import (
     SearchAction, SupersetCheck, TrajectoryScore,
 )
 from methods.taskcraft.verify import score_recall, verify_query
-from methods.taskcraft.stages import split_text
+from methods.taskcraft.stages import Candidate, Pipeline, split_text
 from tests.environment.test_patient_boundary import native_fhir  # noqa: F401
 
 WRITE_TOOLS = ("fhir_medication_request_create", "fhir_service_request_create",
@@ -277,6 +278,63 @@ class FakeRuntime:
         raise AssertionError("检索 Agent 不再走公共一次性 Agent 运行入口")
 
 
+class WidthRuntime(FakeRuntime):
+    """宽度阶段替身：按给定分组返回合并题，并按各组答案区分无工具作答的评分。"""
+
+    def __init__(self, groups, *, states=None, width_answers=None, **kwargs):
+        super().__init__(**kwargs)
+        self.groups = [list(group) for group in groups]
+        self.states = dict(states or {})
+        self.width_answers = dict(width_answers or {})
+
+    async def call_llm(self, *, model, instructions, input_text, output_type):
+        if output_type is MergedQuestions:
+            self.llm_calls.append(output_type.__name__)
+            self.log.append(("llm", output_type.__name__, input_text))
+            return completed({"merged": [
+                {"question": f"合并问题 {position}", "index": list(group),
+                 "content_identifier": "记录块"}
+                for position, group in enumerate(self.groups)]})
+        if output_type is DecompositionReport:
+            self.llm_calls.append(output_type.__name__)
+            self.log.append(("llm", output_type.__name__, input_text))
+            indexes = [int(value) for value in re.findall(r'"index": (\d+)', input_text)]
+            return completed({"results": [{"index": index, "state": self.states.get(index, 1)}
+                                          for index in indexes]})
+        if output_type is KnowledgeAnswers:
+            self.llm_calls.append(output_type.__name__)
+            self.log.append(("llm", output_type.__name__, input_text))
+            indexes = [int(value) for value in re.findall(r'"index": (\d+)', input_text)]
+            return completed({"answers": [
+                {"index": index, "llm_answer": self.width_answers.get(index, "无法确定")}
+                for index in indexes]})
+        if output_type is AnswerScore:
+            self.score_requests += 1
+            self.log.append(("llm", output_type.__name__, input_text))
+            golden, other = input_text.rsplit("Golden Answer:", 1)[-1].split("Other Answer:")
+            value = other[0].strip().strip("[]").strip().strip("'\"")
+            return completed({"answer_analysis": "judged",
+                              "answer_score": 2 if value and value in golden else 0})
+        return await super().call_llm(model=model, instructions=instructions,
+                                      input_text=input_text, output_type=output_type)
+
+
+def atomic_pool(count):
+    """构造可直接驱动宽度阶段的原子候选；参考答案逐题不同以便区分分组来源。"""
+    return [Candidate(
+        question=GeneratedQuestion(
+            instruction=f"该患者第 {index} 项记录说明了什么？", task_type="诊断与解释",
+            reference_answer=f"答案 {index}",
+            evidence=[Evidence(source_id=BLOCK_A, statement=f"第 {index} 项记录")]),
+        origin="atomic", locator=BLOCK_A) for index in range(count)]
+
+
+def width_pipeline(fake, monkeypatch, *, turns=160):
+    monkeypatch.setattr("runtime.call_llm", fake.call_llm)
+    budget = GenerationBudget(runtime_config(max_model_turns=turns))
+    return Pipeline(trajectory(), [], directions(), TaskCraftParameters(), Ledger(budget))
+
+
 @pytest.fixture
 def environment():
     return EnvironmentConfig(name="PhysicianBench", manager_url="http://unused",
@@ -465,9 +523,11 @@ async def test_depth_extension_depends_on_parent_and_keeps_sub_query_chain(patch
     assert stage_records(result, "depth/extension")[0]["status"] == "completed"
 
 
+@pytest.mark.parametrize("state", ["invalid", " invalid ", "INVALID"])
 @pytest.mark.asyncio
-async def test_depth_extension_rejects_invalid_superset(patched, environment):
-    fake = FakeRuntime(superset_state="invalid")
+async def test_depth_superset_check_reads_the_new_query_field(patched, environment, state):
+    """superset 校验读取返回对象的 new_query 字段，只有显式 invalid 才拒绝扩展。"""
+    fake = FakeRuntime(superset_state=state)
     patched(fake)
     result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
 
@@ -476,6 +536,8 @@ async def test_depth_extension_rejects_invalid_superset(patched, environment):
     rejected = [entry for entry in stage_records(result, "depth/superset")
                 if entry["status"] == "rejected"]
     assert len(rejected) == 2 * TaskCraftParameters().extended_attempts
+    # 记录里带回被判定的 superset 与关系，证明读到的是校验结果本身而不是整段响应。
+    assert rejected[0]["identifier"] == BLOCK_B and rejected[0]["relation"]
     assert "NewQuery" not in fake.llm_calls
 
 
@@ -520,6 +582,56 @@ async def test_width_extension_rejects_question_the_model_answers_without_record
     assert not [candidate for candidate in pool if candidate["origin"] == "width"]
     scores = stage_records(result, "width/answer_score")
     assert scores and scores[0]["llm_score"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_width_group_keeps_its_own_answers_and_stable_index(monkeypatch):
+    """首组在分解检查被淘汰后，保留组仍按自身答案与稳定 index 评分。"""
+    fake = WidthRuntime(groups=[[0, 1], [2, 3], [4, 5]], states={0: 0, 2: 0})
+    pipeline = width_pipeline(fake, monkeypatch)
+
+    candidates = await pipeline.width(atomic_pool(6))
+
+    assert [candidate.question.instruction for candidate in candidates] == ["合并问题 1"]
+    # 第二组是响应里的最后一项；保留组不能借用它的原始问题与答案。
+    scored = next(text for kind, name, text in fake.log if name == "AnswerScore")
+    assert "['答案 2', '答案 3']" in scored
+    assert "答案 4" not in scored
+    step2 = next(text for kind, name, text in fake.log if name == "KnowledgeAnswers")
+    assert [int(value) for value in re.findall(r'"index": (\d+)', step2)] == [1]
+
+
+@pytest.mark.asyncio
+async def test_width_out_of_range_parent_index_is_a_model_output_failure(monkeypatch):
+    """越界父题索引按模型输出失败记账并重试，不把分组修剪成更小的组。"""
+    fake = WidthRuntime(groups=[[0, 9]])
+    pipeline = width_pipeline(fake, monkeypatch)
+
+    candidates = await pipeline.width(atomic_pool(4))
+
+    assert candidates == []
+    failures = [entry for entry in pipeline.records if entry["stage"] == "width/merge"
+                and entry["status"] == "failed"]
+    assert len(failures) == TaskCraftParameters().width_attempts
+    assert "IndexError" in failures[0]["error"]
+    assert "DecompositionReport" not in fake.llm_calls
+    assert pipeline.failure == "宽度扩展没有生成合并问题"
+
+
+@pytest.mark.asyncio
+async def test_width_keeps_duplicate_parent_indexes_in_model_order(monkeypatch):
+    """父题索引保持模型给定的顺序与重复项，不排序也不去重。"""
+    fake = WidthRuntime(groups=[[2, 0, 2]], width_answers={0: "无法确定"})
+    pipeline = width_pipeline(fake, monkeypatch)
+
+    candidates = await pipeline.width(atomic_pool(3))
+
+    assert len(candidates) == 1
+    step1 = next(text for kind, name, text in fake.log if name == "DecompositionReport")
+    assert step1.count("该患者第 2 项") == 2 and step1.count("该患者第 0 项") == 1
+    assert step1.index("该患者第 2 项") < step1.index("该患者第 0 项")
+    scored = next(text for kind, name, text in fake.log if name == "AnswerScore")
+    assert scored.count("答案 2") == 2 and scored.count("答案 0") == 1
 
 
 @pytest.mark.asyncio
