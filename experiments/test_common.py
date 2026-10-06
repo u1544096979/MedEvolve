@@ -88,10 +88,29 @@ def test_cumulative_budget_keeps_failed_stages_and_blocks_next_call(monkeypatch)
     assert single.await_count == agent.await_count == 1
 
 
-@pytest.mark.parametrize("method", ["taskcraft", "workflow", "singleshot", "selfgen", "envexplore"])
+@pytest.mark.parametrize("method", ["taskcraft", "singleshot", "selfgen", "envexplore"])
 def test_unimplemented_method_is_explicit(method):
     with pytest.raises(ValueError, match=f"Method {method} is not implemented"):
         runner.resolve_generator(method)
+
+
+def test_workflow_dispatch_resolves_to_the_method_entry():
+    from methods import workflow
+
+    assert runner.resolve_generator("workflow") is workflow.generate_tasks
+
+
+def test_workflow_run_requires_a_candidate_pool_allocation(tmp_path):
+    values = json.loads((Path(__file__).parents[1] / "configs/experiment.json").read_text())
+    values.update(method="workflow", run_id="workflow-pool", output_dir=str(tmp_path / "pool"),
+                  evolution_patients=[], evaluation_patients=["h"], round_patients=[])
+    values["initial_strategy"]["allocation"] = [d.model_dump(mode="json") for d in directions()]
+    config = ExperimentConfig.model_validate(values)
+
+    with pytest.raises(ValueError, match="candidate pool"):
+        asyncio.run(runner.run_experiment(config))
+
+    assert not (tmp_path / "pool").exists()
 
 
 def test_shared_patient_sampling_failure_accounting_and_baseline_isolation(tmp_path, monkeypatch):

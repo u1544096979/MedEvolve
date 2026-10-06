@@ -1,7 +1,6 @@
 """Fixed-stage task generation: locate, generate and internally check."""
 
 import json
-import re
 
 from pydantic import BaseModel, Field
 
@@ -14,9 +13,10 @@ from contracts import (
     RuntimeConfig,
     TaskBatch,
 )
-from methods.common import GenerationBudget, output_constraints
+from methods.common import (GenerationBudget, output_constraints, summarize_results,
+                            validate_task_batch)
 
-from .prompts import GENERATE, INTERNAL_CHECK, LOCATE
+from .prompts import GENERATE_BY_TYPE, INTERNAL_CHECK, LOCATE
 
 __all__ = ["generate_tasks", "FocusSelection", "BatchReview"]
 
@@ -52,20 +52,6 @@ def _trajectory_input(trajectory: PatientTrajectory) -> dict:
     }
 
 
-def _records(trajectory: PatientTrajectory) -> dict[str, str]:
-    """Map source_id to its record body using the trajectory text produced for methods."""
-    parts = re.split(r"(?m)^\[[^\]]*\]\s*(\S+)\s*$", trajectory.text)
-    return {parts[index]: parts[index + 1].strip()
-            for index in range(1, len(parts) - 1, 2)}
-
-
-def _focuses(selection: FocusSelection) -> list[ClinicalFocus]:
-    by_index = {focus.direction_index: focus for focus in selection.focuses}
-    if len(by_index) != 2 or set(by_index) != {0, 1}:
-        raise ValueError("locate must return exactly one clinical focus per direction index")
-    return [by_index[0], by_index[1]]
-
-
 def _selected_focuses(selection: FocusSelection, directions: list[GenerationDirection],
                       trajectory: PatientTrajectory) -> list[ClinicalFocus]:
     """Validate the two located task types against the candidate pool and trajectory."""
@@ -84,9 +70,20 @@ def _selected_focuses(selection: FocusSelection, directions: list[GenerationDire
     return focuses
 
 
+def _selection_entry(focuses: list[ClinicalFocus]) -> dict:
+    """Record the located task types and focuses alongside the raw stage records."""
+    return {
+        "type": "selection",
+        "selected_directions": [focus.direction_index for focus in focuses],
+        "focuses": [focus.model_dump(mode="json") for focus in focuses],
+    }
+
+
 def _decisions(review: BatchReview, questions: list[GeneratedQuestion]) -> list[dict]:
+    if len(review.reviews) != len(questions):
+        raise ValueError("internal check must judge every candidate exactly once")
     by_index = {item.index: item for item in review.reviews}
-    if set(by_index) != set(range(len(questions))):
+    if len(by_index) != len(review.reviews) or set(by_index) != set(range(len(questions))):
         raise ValueError("internal check must judge every candidate exactly once")
     return [
         {
@@ -103,14 +100,22 @@ def _decisions(review: BatchReview, questions: list[GeneratedQuestion]) -> list[
     ]
 
 
+def _finish(budget: GenerationBudget, selected: list[GenerationDirection],
+            focuses: list[ClinicalFocus], *, output: TaskBatch | None = None,
+            status: str | None = None, error: str | None = None) -> RunResult:
+    """Close the run with the selected directions and keep the located selection in the trace."""
+    result = budget.finish(selected, output=output, status=status, error=error)
+    return result.model_copy(update={"trace": [*result.trace, _selection_entry(focuses)]})
+
+
 async def generate_tasks(
     trajectory: PatientTrajectory,
     environment: EnvironmentConfig,
     directions: list[GenerationDirection],
     runtime: RuntimeConfig,
 ) -> RunResult:
-    """Run the fixed locate, generate and internal check stages for one patient."""
-    constraints = output_constraints(directions)
+    """Run the fixed locate, per-type generate and internal check stages for one patient."""
+    output_constraints(directions, candidate_pool=True)
     budget = GenerationBudget(runtime)
 
     located = await budget.call_llm(
@@ -126,35 +131,47 @@ async def generate_tasks(
         output_type=FocusSelection,
     )
     if located.status != "completed":
-        return budget.finish(directions, status=located.status, error=f"locate:{located.error}")
+        return summarize_results(budget.records, status=located.status, error=f"locate: {located.error}")
     try:
-        focuses = _focuses(FocusSelection.model_validate(located.output))
+        focuses = _selected_focuses(FocusSelection.model_validate(located.output), directions, trajectory)
     except Exception as exc:
-        return budget.finish(directions, status="failed", error=f"locate: {type(exc).__name__}: {exc}")
+        return summarize_results(budget.records, status="failed",
+                                 error=f"locate: {type(exc).__name__}: {exc}")
 
-    generated = await budget.call_llm(
-        "generate",
-        instructions=f"{GENERATE}\n{constraints}",
-        input_text=json.dumps(
-            {
-                "trajectory": _trajectory_input(trajectory),
-                "focuses": [focus.model_dump(mode="json") for focus in focuses],
-                "directions": [direction.model_dump(mode="json") for direction in directions],
-            },
-            ensure_ascii=False,
-        ),
-        output_type=TaskBatch,
-    )
-    if generated.status != "completed":
-        return budget.finish(directions, status=generated.status, error=f"generate:{generated.error}")
-    try:
-        candidates = TaskBatch.model_validate(generated.output).questions
-    except Exception as exc:
-        return budget.finish(directions, status="failed", error=f"generate: {type(exc).__name__}: {exc}")
+    selected = [directions[focus.direction_index] for focus in focuses]
+    known = {source.source_id for source in trajectory.sources}
+    candidates: list[GeneratedQuestion] = []
+    for index, (focus, direction) in enumerate(zip(focuses, selected)):
+        stage = f"generate_{index}"
+        generated = await budget.call_llm(
+            stage,
+            instructions=f"{GENERATE_BY_TYPE[direction.task_type]}\n"
+                         + output_constraints([direction], max_questions=1),
+            input_text=json.dumps(
+                {
+                    "trajectory": _trajectory_input(trajectory),
+                    "focus": focus.model_dump(mode="json"),
+                    "direction": direction.model_dump(mode="json"),
+                },
+                ensure_ascii=False,
+            ),
+            output_type=TaskBatch,
+        )
+        validated = validate_task_batch(generated, [direction], max_questions=1)
+        if validated.status != "completed":
+            return _finish(budget, selected, focuses, status=validated.status,
+                           error=f"{stage}: {validated.error}")
+        batch = TaskBatch.model_validate(validated.output)
+        if any(evidence.source_id not in known
+               for question in batch.questions for evidence in question.evidence):
+            return _finish(budget, selected, focuses, status="failed",
+                           error=f"{stage}: unknown evidence source")
+        candidates.extend(batch.questions)
+
     if not candidates:
-        return budget.finish(directions, output=TaskBatch(questions=[]))
-    records = _records(trajectory)
+        return _finish(budget, selected, focuses, output=TaskBatch(questions=[]))
 
+    records = {source.source_id: source.statement for source in trajectory.sources}
     checked = await budget.call_llm(
         "check",
         instructions=INTERNAL_CHECK,
@@ -177,14 +194,15 @@ async def generate_tasks(
         output_type=BatchReview,
     )
     if checked.status != "completed":
-        return budget.finish(directions, status=checked.status, error=f"check:{checked.error}")
+        return _finish(budget, selected, focuses, status=checked.status, error=f"check:{checked.error}")
     try:
         decisions = _decisions(BatchReview.model_validate(checked.output), candidates)
     except Exception as exc:
-        return budget.finish(directions, status="failed", error=f"check: {type(exc).__name__}: {exc}")
+        return _finish(budget, selected, focuses, status="failed",
+                       error=f"check: {type(exc).__name__}: {exc}")
 
     kept = [question for question, decision in zip(candidates, decisions) if decision["keep"]]
-    result = budget.finish(directions, output=TaskBatch(questions=kept))
+    result = _finish(budget, selected, focuses, output=TaskBatch(questions=kept))
     return result.model_copy(
         update={
             "trace": [

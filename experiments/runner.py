@@ -11,7 +11,7 @@ from contracts import (
     TaskBatch,
 )
 
-from methods.common import normalize_usage, validate_task_batch
+from methods.common import normalize_usage, output_constraints, validate_task_batch
 
 METHOD_MODULES = {
     "medevolve": "methods.medevolve",
@@ -89,6 +89,8 @@ async def run_experiment(config: ExperimentConfig) -> None:
     generator = resolve_generator(config.method)
     if "generator" not in config.runtime.models or "generator" not in config.runtime.budgets:
         raise ValueError("runtime requires generator model and cumulative generator budget")
+    if config.method == "workflow":
+        output_constraints(config.initial_strategy.allocation, candidate_pool=True)
     evolution = set(config.evolution_patients)
     if evolution.intersection(config.evaluation_patients):
         raise ValueError("Evolution and evaluation patients must be disjoint")
@@ -173,8 +175,9 @@ async def run_experiment(config: ExperimentConfig) -> None:
             sampling = random.Random(config.random_seed) if folder.name == "evaluation" else rng
             allocation = config.initial_strategy.allocation if folder.name == "evaluation" else current.allocation
             for patient_index, patient in enumerate(patients):
-                directions = sampling.choices(allocation,
-                                              weights=[d.weight for d in allocation], k=2)
+                directions = (list(allocation) if config.method == "workflow" else
+                              sampling.choices(allocation,
+                                               weights=[d.weight for d in allocation], k=2))
                 stage = f"{folder.name}/generate/{patient_index}"
                 async def generate_batch():
                     if config.runtime.budgets["generator"].max_model_turns == 0:
@@ -186,7 +189,8 @@ async def run_experiment(config: ExperimentConfig) -> None:
                     else:
                         result = await generator(trajectories[patient], config.environment,
                                                  directions, config.runtime)
-                    result = validate_task_batch(result, directions)
+                    result = validate_task_batch(result, directions,
+                                                 candidate_pool=config.method == "workflow")
                     budget = config.runtime.budgets["generator"]
                     if (result.usage["model_turns"] > budget.max_model_turns or
                             result.usage["tool_calls"] > budget.max_tool_calls):
