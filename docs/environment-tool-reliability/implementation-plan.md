@@ -262,25 +262,29 @@ python -m pytest tests/environment/test_medagentbench.py tests/runtime/test_nati
 
 现有 `test_functions_are_unmodified_official_declaration` 依赖整文件哈希。改为验证九个函数、Condition 与 MedicationRequest 的 GET 参数集合，以及 POST 参数结构，保留上游版本和许可证出处；不要通过更新哈希继续声称声明未经修改。模块说明明确本地声明与错误分类适配。
 
-将 GET 的 HTTPStatusError 单独处理，分类核心如下；`_is_parameter_error` 在同一模块定义：
+将 GET 的 HTTPStatusError 单独处理：HTTP 400 记为可恢复的工具错误，其他状态沿用环境错误。
 
 ```python
 except httpx.HTTPStatusError as exc:
     response = exc.response
-    recoverable = response.status_code == 400 and _is_parameter_error(response)
+    if response.status_code == 400:
+        return {
+            "kind": "GET", "request": request,
+            "reply": (f"HTTP {response.status_code}: {response.text}. "
+                      "Correct the query parameters and retry."),
+            "status_code": response.status_code,
+            "failure_category": "tool_error",
+        }
     return {
         "kind": "GET", "request": request,
-        "reply": (f"HTTP {response.status_code}: {response.text}. "
-                  + ("Correct the query parameters and retry."
-                     if recoverable else "FHIR request failed.")),
-        "status_code": response.status_code,
-        "failure_category": "tool_error" if recoverable else "environment_error",
+        "reply": f"Error in sending the GET request: {exc}",
+        "failure_category": "environment_error",
     }
 ```
 
-`_is_parameter_error` 检查 OperationOutcome 的 `issue[].diagnostics` 与 `issue[].details.text`；非 JSON 时检查响应文本。只接受含 `parameter`、`search parameter` 或 `query parameter` 且明确含 unknown、unsupported、unrecognized、invalid、not supported 或 not recognized 的错误描述，匹配不区分大小写。没有这种明确诊断的 400 保持环境错误。ConnectError、ReadTimeout 和其他异常沿用环境错误。不要向服务发验证或重试请求。
+判定只看状态码，不解析 OperationOutcome 正文，也不向服务发验证或重试请求。非 400 的 HTTP 错误、ConnectError、ReadTimeout 和其他异常沿用环境错误与原回复文本。
 
-原生运行时增加一个 `pending_parameter_error` 标志，初始为 False：
+原生运行时增加一个 `pending_parameter_error` 标志，初始为 False；该标志只在解题运行中生效，环境探索运行以交付指导为完成条件，不因探到的参数错误判失败：
 
 ```python
 if result.get("failure_category") == "tool_error":
