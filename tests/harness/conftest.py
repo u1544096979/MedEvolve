@@ -163,6 +163,50 @@ class FakeDocker:
         return set(self.containers)
 
 
+class FakeProvider:
+    """OpenAI-compatible Chat Completions backend for gateway tests."""
+
+    def __init__(self, *, usage=None, emit_usage=True, tool_calls=0, status=200,
+                 error=None, content="ok"):
+        self.requests: list[dict] = []
+        self.headers: list[dict] = []
+        self.usage = usage if usage is not None else {
+            "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+        }
+        self.emit_usage = emit_usage
+        self.tool_calls = tool_calls
+        self.status = status
+        self.error = error
+        self.content = content
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self._handle)
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(json.loads(request.content))
+        self.headers.append(dict(request.headers))
+        if self.status != 200:
+            return httpx.Response(self.status, json={"error": {"message": self.error or "boom"}})
+        message = {"role": "assistant", "content": self.content, "tool_calls": [
+            {"id": f"call-{index}", "type": "function",
+             "function": {"name": "medical_action", "arguments": "{}"}}
+            for index in range(self.tool_calls)
+        ]}
+        payload = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "model": self.requests[-1]["model"],
+            "choices": [{
+                "index": 0,
+                "finish_reason": "tool_calls" if self.tool_calls else "stop",
+                "message": message,
+            }],
+        }
+        if self.emit_usage:
+            payload["usage"] = dict(self.usage)
+        return httpx.Response(200, json=payload)
+
+
 class FakeFHIRService:
     """In-process FHIR backend for bridge tests; records every request."""
 
@@ -478,6 +522,17 @@ def real_medagentbench(fhir_service, fake_environments):
             name="MedAgentBench", manager_url="http://unused", seed_data="seed"
         ),
     )
+
+
+@pytest.fixture
+def provider() -> FakeProvider:
+    return FakeProvider()
+
+
+@pytest.fixture
+def api_key(monkeypatch) -> str:
+    monkeypatch.setenv("GATEWAY_API_KEY", "secret-key")
+    return "secret-key"
 
 
 class BridgeRig:
