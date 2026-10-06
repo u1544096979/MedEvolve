@@ -217,3 +217,4 @@ class ExperimentConfig(BaseModel):
     random_seed: int
     output_dir: str
     compare_initial_strategy: bool = False
+    guidance_path: str | None = None
