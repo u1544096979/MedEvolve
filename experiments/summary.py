@@ -81,6 +81,13 @@ def summarize_run(output_dir: str) -> JsonObject:
         aggregate["runs_without_known_tokens"] += missing
         for key in USAGE_FIELDS:
             aggregate[key] += usage[key] or 0
+    if config["method"] == "envexplore":
+        fields = (*USAGE_FIELDS, "runs", "runs_without_known_tokens")
+        costs["method"] = {
+            field: sum(costs.get(category, {}).get(field, 0)
+                       for category in ("exploration", "generation"))
+            for field in fields
+        }
     return {
         "run_id": config["run_id"], "method": config["method"],
         "status": manifest["status"], "errors": manifest.get("errors", []),

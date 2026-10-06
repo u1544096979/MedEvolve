@@ -120,24 +120,40 @@ async def explore_data(
 
 
 async def explore_environment(
-    config: EnvironmentConfig, patient_ids: list[str], runtime: RuntimeConfig
+    config: EnvironmentConfig, patient_ids: list[str], runtime: RuntimeConfig,
 ) -> RunResult:
-    instance = await create_environment(config)
+    instance = None
+    result = None
+    release_error = None
     try:
+        instance = await create_environment(config)
         tools = await get_tools(instance, patient_ids)
-        return await run_agent(
+        result = await run_agent(
             instructions=ENVIRONMENT_EXPLORATION,
-            input_text=json.dumps(
-                {"environment": instance.environment, "patient_ids": patient_ids},
-                ensure_ascii=False,
-            ),
-            tools=tools,
-            output_type=EnvironmentExploration,
+            input_text=json.dumps({"environment": instance.environment, "patient_ids": patient_ids},
+                                  ensure_ascii=False),
+            tools=tools, output_type=EnvironmentExploration,
             model=runtime.models["environment_explorer"],
             budget=runtime.budgets["environment_explorer"],
         )
+    except Exception as exc:
+        result = RunResult(trace=[{"type": "run_error", "failure_category": "environment_error",
+                                  "error": str(exc)}], usage={"model_turns": 0, "tool_calls": 0},
+                           status="failed", error=f"{type(exc).__name__}: {exc}")
     finally:
-        await release_environment(config, instance)
+        if instance is not None:
+            try:
+                await release_environment(config, instance)
+            except Exception as exc:
+                release_error = f"{type(exc).__name__}: {exc}"
+    if release_error is not None:
+        result = result.model_copy(update={
+            "output": None, "status": "failed", "error": "release_environment failed: " + release_error,
+            "trace": [*result.trace, {"type": "environment_release", "released": False,
+                "instance_id": instance.instance_id, "error": release_error,
+                "rejected_output": result.output}],
+        })
+    return result
 
 
 async def generate_tasks(

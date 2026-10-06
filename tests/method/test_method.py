@@ -139,8 +139,9 @@ async def test_environment_exploration_releases_independent_instance(
     ):
         monkeypatch.setattr(method, name, substitute)
     if failure in ("tools", "agent"):
-        with pytest.raises(RuntimeError, match="unavailable"):
-            await method.explore_environment(config, ["evolution-1"], runtime)
+        failed = await method.explore_environment(config, ["evolution-1"], runtime)
+        assert failed.status == "failed" and failed.output is None
+        assert "unavailable" in failed.error
     else:
         assert await method.explore_environment(config, ["evolution-1"], runtime) is result
         assert agent.await_args.kwargs["output_type"] is EnvironmentExploration
