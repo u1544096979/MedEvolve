@@ -12,7 +12,7 @@ from contracts import (
     EvaluationConfig, ModelConfig, PatientTrajectory, QualityReview, RunResult,
     RuntimeConfig, SolverAnswer, Task, Verification,
 )
-from evaluation import evaluate_task
+from evaluation import evaluate_task, review_completion
 
 
 @pytest.fixture
@@ -129,6 +129,29 @@ def evaluate(h):
     return asyncio.run(evaluate_task(h.task, h.trajectory, h.environment, h.config))
 
 
+def executed_run():
+    """A harness RunResult with the trace shape a harness produces."""
+    return RunResult(
+        output={"answer": "处方已创建"},
+        trace=[
+            {"type": "model_request", "instructions": "历史提示词"},
+            {"type": "tool_start", "name": "create_prescription", "call_id": "write-1",
+             "arguments": "{}"},
+            {"type": "tool_output", "name": "create_prescription", "call_id": "write-1",
+             "output": {"prescriptions": [{"id": "rx-1"}]}},
+        ],
+        usage={}, status="completed",
+    )
+
+
+def review(h, *, run=None, observed_state=None, **kwargs):
+    return asyncio.run(review_completion(
+        h.task, h.trajectory, run if run is not None else executed_run(),
+        observed_state if observed_state is not None else {"prescriptions": [{"id": "rx-1"}]},
+        h.config, **kwargs,
+    ))
+
+
 def test_solver_receives_only_patient_question_and_decision_point(harness):
     h = harness
     result = evaluate(h)
@@ -229,6 +252,57 @@ def test_unverifiable_evidence_stops_before_models(harness, evidence, expected_r
     assert expected_reason in result.verification.reason
     assert h.model_calls == []
     assert h.created == []
+
+
+def test_review_completion_reviews_executed_material_only(harness):
+    h = harness
+    completion, run = review(h)
+    assert completion.completed is True
+    assert run.status == "completed"
+    assert len(h.model_calls) == 1
+    call = h.model_calls[0]
+    assert call["output_type"] is CompletionReview
+    payload = json.loads(call["input_text"])
+    assert payload["solver_answer"] == {"answer": "处方已创建"}
+    assert [item["type"] for item in payload["solver_trace"]] == ["tool_start", "tool_output"]
+    assert "历史提示词" not in call["input_text"]
+    assert payload["observed_state"] == {"prescriptions": [{"id": "rx-1"}]}
+    assert payload["evidence_records"] == [{"source_id": "source-1", "statement": "轨迹证据"}]
+    # The review process holds the reference answer; the solver input never does.
+    assert payload["task"]["reference_answer"] == h.task.reference_answer
+    assert h.created == []
+
+
+def test_review_completion_records_a_failed_run_before_raising(harness):
+    h = harness
+    h.fail = "completion"
+    seen = []
+    with pytest.raises(ValueError, match="model unavailable"):
+        review(h, record=seen.append)
+    assert len(seen) == 1
+    assert seen[0].status == "failed"
+    assert len(h.model_calls) == 1
+
+
+def test_review_completion_does_not_review_a_failed_solver_run(harness):
+    h = harness
+    failed = RunResult(trace=[], usage={}, status="failed", error="opaque runtime error")
+    with pytest.raises(ValueError, match="opaque runtime error"):
+        review(h, run=failed)
+    assert h.model_calls == []
+
+
+def test_evaluate_task_completion_matches_direct_review(harness):
+    h = harness
+    result = evaluate(h)
+    evaluated_payload = next(
+        call["input_text"] for call in h.model_calls if call["output_type"] is CompletionReview
+    )
+    h.model_calls.clear()
+    completion, run = review(h, run=result.solver_run, observed_state=result.observed_state)
+    assert completion == result.completion
+    assert run == result.runs[-1]
+    assert evaluated_payload == h.model_calls[0]["input_text"]
 
 
 def test_cancellation_releases_solver_instance(harness, monkeypatch):

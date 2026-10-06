@@ -43,6 +43,54 @@ def _output(run: RunResult, schema: type[BaseModel]) -> BaseModel:
     return schema.model_validate(run.output)
 
 
+def _completion_material(task: Task, trajectory: PatientTrajectory,
+                        solver_run: RunResult, observed_state: dict) -> dict:
+    material = _review_material(task, trajectory)
+    answer = _output(solver_run, SolverAnswer)
+    return {
+        "task": material["task"],
+        "evidence_records": [
+            source.model_dump() for source in trajectory.sources
+            if source.source_id in {evidence.source_id for evidence in task.evidence}
+        ],
+        "solver_answer": answer.model_dump(),
+        # Review execution evidence without replaying the solver's prompts and model requests.
+        "solver_trace": [
+            item for item in solver_run.trace
+            if item.get("type") in {"tool_start", "tool_output", "run_error", "tool_budget"}
+        ],
+        "observed_state": observed_state,
+    }
+
+
+async def review_completion(
+    task: Task, trajectory: PatientTrajectory, solver_run: RunResult,
+    observed_state: dict, config: EvaluationConfig, *, record=None,
+) -> tuple[CompletionReview, RunResult]:
+    """Judge one executed run against the frozen task; never re-solve the task.
+
+    The reviewed material is the real harness answer, its filtered execution
+    trace and the observed state. Verification and quality results stay with the
+    frozen dataset, so changing harness does not regenerate the question or
+    replay the fixed solver. The reference answer is held here by the review
+    process; `record` receives the model run so callers keep their run history.
+    """
+    runtime = import_module("runtime")
+    if "completion" not in config.runtime.models:
+        raise ValueError("missing evaluation model: completion")
+    material = _completion_material(task, trajectory, solver_run, observed_state)
+    try:
+        run = await runtime.call_llm(
+            instructions=prompts.COMPLETION, input_text=_json(material),
+            output_type=CompletionReview, model=config.runtime.models["completion"],
+        )
+    except Exception as exc:
+        run = RunResult(trace=[], usage={}, status="failed", error=str(exc))
+    if record is not None:
+        record(run)
+    return _output(run, CompletionReview), run
+
+
 async def evaluate_task(task: Task, trajectory: PatientTrajectory,
                         environment: EnvironmentConfig,
                         config: EvaluationConfig) -> EvaluationResult:
@@ -180,26 +228,10 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
             await env.release_environment(environment, instance)
             phase = phase_before_release
         phase = "model_error"
-        answer = _output(result.solver_run, SolverAnswer)
-        # Review execution evidence without replaying the solver's prompts and model requests.
-        completion_material = {
-            "task": material["task"],
-            "evidence_records": [
-                source.model_dump() for source in trajectory.sources
-                if source.source_id in {evidence.source_id for evidence in task.evidence}
-            ],
-            "solver_answer": answer.model_dump(),
-            "solver_trace": [
-                item for item in result.solver_run.trace
-                if item.get("type") in {"tool_start", "tool_output", "run_error", "tool_budget"}
-            ],
-            "observed_state": result.observed_state,
-        }
-        run = await model_run(
-            runtime.call_llm, role="completion", schema=CompletionReview,
-            instructions=prompts.COMPLETION, payload=completion_material,
+        result.completion, _ = await review_completion(
+            task, trajectory, result.solver_run, result.observed_state, config,
+            record=result.runs.append,
         )
-        result.completion = _output(run, CompletionReview)
         result.status = "completed"
         if not result.completion.completed:
             result.failure_category = "clinical"
