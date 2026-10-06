@@ -3,15 +3,15 @@
   "method": "selfgen",
   "environment": {
     "name": "PhysicianBench",
-    "manager_url": "http://10.7.0.15:18084",
+    "manager_url": "http://127.0.0.1:18084",
     "seed_data": "fhir-full:v1"
   },
   "runtime": {
     "models": {
       "generator": {
-        "model": "gpt-4o-mini",
-        "base_url": "https://api.openlux.ai/v1",
-        "api_key_env": "OPENLUX_API_KEY",
+        "model": "deepseek-v4.1-flash",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key_env": "OPENCODE_API_KEY",
         "instructions_role": "system",
         "parallel_tool_calls": true
       }
@@ -27,30 +27,30 @@
     "runtime": {
       "models": {
         "verifier": {
-          "model": "gpt-4o-mini",
-          "base_url": "https://api.openlux.ai/v1",
-          "api_key_env": "OPENLUX_API_KEY",
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
           "instructions_role": "system",
           "parallel_tool_calls": true
         },
         "quality": {
-          "model": "gpt-4o-mini",
-          "base_url": "https://api.openlux.ai/v1",
-          "api_key_env": "OPENLUX_API_KEY",
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
           "instructions_role": "system",
           "parallel_tool_calls": true
         },
         "solver": {
-          "model": "gpt-4o-mini",
-          "base_url": "https://api.openlux.ai/v1",
-          "api_key_env": "OPENLUX_API_KEY",
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
           "instructions_role": "system",
           "parallel_tool_calls": true
         },
         "completion": {
-          "model": "gpt-4o-mini",
-          "base_url": "https://api.openlux.ai/v1",
-          "api_key_env": "OPENLUX_API_KEY",
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
           "instructions_role": "system",
           "parallel_tool_calls": true
         }
@@ -76,7 +76,8 @@
     }
   },
   "evolution_patients": [
-    "MRN9838448928"
+    "MRN9838448928",
+    "MRN6756332150"
   ],
   "evaluation_patients": [
     "MRN4460967357"

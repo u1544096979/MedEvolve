@@ -11,7 +11,7 @@ KINDS = ["诊断与解释", "检查与风险分层"]
 BUDGET = {"max_model_turns": 6, "max_tool_calls": 0}
 
 @pytest.mark.parametrize("source,target", [
-    ("physicianbench-comparison.json", "physicianbench-selfgen.json"),
+    ("physicianbench-flash.json", "physicianbench-selfgen.json"),
     ("medagentbench-flash.json", "medagentbench-selfgen.json"),
 ])
 def test_config_keeps_sampling_environment_and_model(source, target):
