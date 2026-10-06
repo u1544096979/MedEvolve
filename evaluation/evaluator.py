@@ -61,6 +61,9 @@ def _aggregate_quality_scores(runs: list[RunResult]) -> QualityReview:
     def aggregate(dimension: str) -> QualityDimension:
         judgments = [getattr(judge, dimension) for judge in judges]
         scores = [judgment.score for judgment in judgments]
+        for judgment in judgments:
+            if not judgment.reason.strip():
+                raise ValueError(f"{dimension}.reason must not be empty")
         for score in scores:
             if not 1 <= score <= 5:
                 raise ValueError(f"{dimension}.score must be 1-5")
@@ -82,6 +85,9 @@ def _aggregate_difficulty_scores(runs: list[RunResult],
                                  complexity: ComplexityMetrics) -> DifficultyScore:
     judges = _judge_outputs(runs, DifficultyJudgment)
     depths = [judge.reasoning_depth for judge in judges]
+    for judge in judges:
+        if not judge.reason.strip():
+            raise ValueError("reason must not be empty")
     for depth in depths:
         if not 1 <= depth <= 4:
             raise ValueError("reasoning_depth must be 1-4")

@@ -39,7 +39,7 @@ def harness(monkeypatch):
         environment=EnvironmentConfig(name="fixture", manager_url="unused", seed_data="seed"),
         created=[], released=[], tool_calls=[], model_calls=[], state_reads=[],
         state={"prescriptions": []}, fail=None, valid=True,
-        quality_scores=[4, 4, 4], depths=[2, 2, 2],
+        quality_scores=[4, 4, 4], depths=[2, 2, 2], blank_reason=None,
     )
 
     async def create_environment(config):
@@ -101,13 +101,15 @@ def harness(monkeypatch):
         elif role == "quality":
             index = sum(1 for call in h.model_calls[:-1]
                         if call["output_type"] is QualityJudgment)
-            output = {key: {"score": h.quality_scores[index], "reason": "supported"}
+            reason = "" if h.blank_reason == "quality" else "supported"
+            output = {key: {"score": h.quality_scores[index], "reason": reason}
                       for key in ("factual_accuracy", "clinical_soundness",
                                   "evidence_sufficiency", "task_clarity")}
         elif role == "difficulty":
             index = sum(1 for call in h.model_calls[:-1]
                         if call["output_type"] is DifficultyJudgment)
-            output = {"reasoning_depth": h.depths[index], "reason": "跨记录整合"}
+            reason = "" if h.blank_reason == "difficulty" else "跨记录整合"
+            output = {"reasoning_depth": h.depths[index], "reason": reason}
         elif role == "solver":
             output = {"answer": "处方已创建"}
         else:
@@ -300,6 +302,9 @@ def test_complexity_metrics_count_sources_types_and_time_span(harness):
         Evidence(source_id="Observation/1", statement="首次检验"),
         Evidence(source_id="Condition/2", statement="首次诊断"),
         Evidence(source_id="Encounter/4", statement="首次就诊"),
+        Evidence(source_id="MedicationRequest/5", statement=json.dumps(
+            {"resourceType": "MedicationRequest",
+             "effectivePeriod": {"start": "2026-01-31T00:00:00+08:00"}})),
     ]})
     h.trajectory = h.trajectory.model_copy(update={"sources": [
         Evidence(source_id="Observation/1", statement=json.dumps(
@@ -309,13 +314,26 @@ def test_complexity_metrics_count_sources_types_and_time_span(harness):
         Evidence(source_id="Encounter/4", statement=json.dumps(
             {"resourceType": "Encounter",
              "context": {"period": {"start": "2026-01-21T00:00:00+08:00"}}})),
+        Evidence(source_id="MedicationRequest/5", statement=json.dumps(
+            {"resourceType": "MedicationRequest",
+             "effectivePeriod": {"start": "2026-01-31T00:00:00+08:00"}})),
         Evidence(source_id="Observation/9", statement=json.dumps(
             {"resourceType": "Observation", "effectiveDateTime": "2027-05-01T00:00:00+08:00"})),
         Evidence(source_id="Patient/3", statement="不是 JSON"),
     ]})
     result = evaluate(h)
     assert result.difficulty.complexity_metrics == ComplexityMetrics(
-        evidence_count=3, resource_type_count=3, time_span_days=20.0)
+        evidence_count=4, resource_type_count=4, time_span_days=30.0)
+
+
+@pytest.mark.parametrize("role", ["quality", "difficulty"])
+def test_empty_judge_reason_fails_evaluation(harness, role):
+    h = harness
+    h.blank_reason = role
+    result = evaluate(h)
+    assert result.status == "failed"
+    assert result.failure_category == "model_error"
+    assert result.completion is None
 
 
 @pytest.mark.parametrize("field, scores", [("quality_scores", [6, 4, 4]), ("depths", [5, 2, 2])])
