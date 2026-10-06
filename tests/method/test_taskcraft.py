@@ -1,5 +1,6 @@
 """TaskCraft 医疗适配：阶段机制、内置核验与共享边界的检查。"""
 
+import asyncio
 import importlib
 import json
 import re
@@ -11,8 +12,10 @@ from contracts import (
     Budget, EnvironmentConfig, EnvironmentInstance, Evidence, GenerationDirection,
     ModelConfig, PatientTrajectory, RunResult, RuntimeConfig, SolverAnswer, TaskBatch,
 )
+from environments import get_tools
+from environments.errors import EnvironmentUnavailable, PatientAccessError
 from environments.medagentbench import NativeTools
-from methods.taskcraft.environment import is_native
+from methods.taskcraft.environment import bind_generation_tools, is_native
 from methods.taskcraft import READ_ONLY_TOOLS, TaskCraftParameters, generate_tasks
 from methods.taskcraft.schemas import (
     AnswerList, AnswerScore, BackwardContext, CleanedQuestion, ConclusionList,
@@ -20,6 +23,7 @@ from methods.taskcraft.schemas import (
     QueryJudgement, QueryMerge, SupersetCheck,
 )
 from methods.taskcraft.stages import split_text
+from tests.environment.test_patient_boundary import native_fhir  # noqa: F401
 
 WRITE_TOOLS = ("fhir_medication_request_create", "fhir_service_request_create",
                "fhir_communication_create_message", "fhir_appointment_create")
@@ -512,6 +516,85 @@ def test_only_read_only_medical_tools_are_bound(patched, environment):
     patched(fake)
     assert "fhir_medication_request_create" not in READ_ONLY_TOOLS
     assert len(READ_ONLY_TOOLS) == 9
+
+
+def test_read_tools_do_not_require_nine_names():
+    read = SimpleNamespace(name="fhir_observation_search_labs")
+    write = SimpleNamespace(name="fhir_medication_request_create")
+    assert bind_generation_tools([read, write]) == [read]
+
+
+def test_read_only_subset_binds_without_environment_name():
+    """只读绑定取自显式声明：任意非空子集可用，空集拒绝，不凭名称推断权限。"""
+    declared = [SimpleNamespace(name="fhir_observation_search_vitals"),
+                SimpleNamespace(name="fhir_patient_search_demographics")]
+    unlisted = [SimpleNamespace(name="audit_search_probe"),
+                SimpleNamespace(name="fhir_medication_request_create")]
+    assert bind_generation_tools(declared + unlisted) == declared
+    with pytest.raises(EnvironmentUnavailable):
+        bind_generation_tools(unlisted)
+
+
+def test_native_generation_blocks_post_before_transport(monkeypatch):
+    calls = []
+
+    async def execute(self, action):
+        calls.append(action)
+        return {"kind": "FINISH", "answers": ["ok"]}
+
+    monkeypatch.setattr(NativeTools, "execute", execute)
+    original = NativeTools("http://fhir.test/", ["patient-1"], [])
+    bound = bind_generation_tools(original)
+    assert isinstance(bound, NativeTools)
+    rejected = asyncio.run(bound.execute(
+        "```tool_code\nPOST http://fhir.test/MedicationRequest\n{}\n```"))
+    assert rejected["kind"] == "error"
+    assert calls == []
+    assert asyncio.run(bound.execute('FINISH(["ok"])'))["answers"] == ["ok"]
+    assert calls == ['FINISH(["ok"])']
+
+
+@pytest.mark.asyncio
+async def test_native_generation_binds_declared_reads_and_allows_only_get_and_finish(monkeypatch):
+    calls = []
+
+    async def execute(self, action):
+        calls.append(action)
+        return {"kind": "GET", "request": {"action": action}, "reply": "recorded"}
+
+    monkeypatch.setattr(NativeTools, "execute", execute)
+    declarations = [{"name": "GET {api_base}/Observation", "parameters": {}},
+                    {"name": "POST {api_base}/MedicationRequest", "parameters": {}}]
+    source = NativeTools("http://fhir.test/", ["patient-1"], declarations)
+    bound = bind_generation_tools(source)
+
+    assert [item["name"] for item in bound.functions] == ["GET {api_base}/Observation"]
+    assert bound.functions[0] is not declarations[0]
+    assert source.functions == declarations
+
+    unfenced = "POST http://fhir.test/MedicationRequest\n{}"
+    blocked = await bound.execute(unfenced)
+    assert blocked["kind"] == "error"
+    assert blocked["request"] == {"action": unfenced}
+    assert await bound.execute("GET {api_base}/Observation") == {
+        "kind": "GET", "request": {"action": "GET {api_base}/Observation"},
+        "reply": "recorded"}
+    assert calls == ["GET {api_base}/Observation"]
+
+
+@pytest.mark.asyncio
+async def test_generation_binding_keeps_the_patient_read_boundary(native_fhir):
+    instance = EnvironmentInstance(instance_id="instance-one",
+                                   endpoint="http://instance-one/fhir/",
+                                   environment="MedAgentBench")
+    bound = bind_generation_tools(await get_tools(instance, ["a"]))
+
+    with pytest.raises(PatientAccessError):
+        await bound.execute("GET Patient/b")
+    with pytest.raises(PatientAccessError):
+        await bound.execute("GET Observation?patient=b")
+    assert (await bound.execute("GET Observation?patient=a"))["kind"] == "GET"
+    assert len(native_fhir[1]) == 1
 
 
 def test_stage_parameters_keep_source_defaults(environment):

@@ -1,7 +1,7 @@
 """TaskCraft 医疗适配：作者源码的阶段算法接入公共对比实验入口。
 
 源码基线：/Users/guagua/code/TaskCraft 提交 1e405e0b02c4738654e2d885b16677b46c9fe969，
-MIT 许可，声明见 LICENSE-TaskCraft。阶段对应关系与适配差异见 stages.py、prompts.py。
+许可与作者归属见 LICENSE-TaskCraft。阶段对应关系与适配差异见 stages.py、prompts.py。
 """
 
 from contracts import (

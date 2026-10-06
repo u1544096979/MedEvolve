@@ -1,3 +1,12 @@
+TaskCraft 许可与归属
+
+参考仓库：TaskCraft，提交 1e405e0b02c4738654e2d885b16677b46c9fe969。
+本文件保留该仓库的许可文本，以及被移植源文件的许可声明与作者归属。
+
+
+参考仓库 LICENSE（MIT）
+--------------------------------------------------------------------------
+
 MIT License
 
 Copyright (c) 2025 OPPO
@@ -19,3 +28,36 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+源文件许可声明（Apache License 2.0）
+--------------------------------------------------------------------------
+
+被移植源文件的文件头声明如下，原文保留：
+
+    # @File         : gen_atomic_task.py
+    # @Author       : Dingfeng Shi <shidingfeng@outlook.com>, Jingyi Cao <224040283@link.cuhk.edu.cn>, Qianben Chen <chenqianben@oppo.com>
+    # @LICENSE      : Apache License 2.0
+
+    # @File         : gen_depth_based_task.py
+    # @Author       : Dingfeng Shi <shidingfeng@outlook.com>, Jingyi Cao <224040283@link.cuhk.edu.cn>, Qianben Chen <chenqianben@oppo.com>
+    # @LICENSE      : Apache License 2.0
+
+    # @File         : gen_width_based_task.py
+    # @Author       : Jingyi Cao <224040283@link.cuhk.edu.cn>
+    # @LICENSE      : Apache License 2.0
+
+    # @File         : agent_tools.py
+    # @Author       : Qianben Chen <chenqianben@oppo.com>
+    # @LICENSE      : Apache License 2.0
+
+    # @File         : utils.py
+    # @Author       : Qianben Chen <chenqianben@oppo.com>
+    # @LICENSE      : Apache License 2.0
+
+    # @File         : data_processor.py
+    # @Author       : Jingyi Cao <224040283@link.cuhk.edu.cn>
+    # @LICENSE      : Apache License 2.0
+
+上述文件按 Apache License 2.0 分发，许可全文见
+https://www.apache.org/licenses/LICENSE-2.0 。

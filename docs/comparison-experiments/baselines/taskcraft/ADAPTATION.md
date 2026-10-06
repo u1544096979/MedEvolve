@@ -4,7 +4,7 @@
 
 - 参考仓库：`/Users/guagua/code/TaskCraft`，提交 `1e405e0b02c4738654e2d885b16677b46c9fe969`。
 - 论文：[TaskCraft: Automated Generation of Agentic Tasks](https://arxiv.org/abs/2506.10055)。
-- 许可：仓库 LICENSE 为 MIT（Copyright (c) 2025 OPPO），`taskcraft/gen_*.py` 文件头标注 Apache License 2.0。提示词副本与许可文本保存在 `methods/taskcraft/LICENSE-TaskCraft`。
+- 许可与归属：参考仓库 LICENSE 为 MIT（Copyright (c) 2025 OPPO）；被移植的 `taskcraft/gen_atomic_task.py`、`gen_depth_based_task.py`、`gen_width_based_task.py`、`agent_tools.py`、`utils.py`、`data_processor.py` 文件头声明 Apache License 2.0 并列有作者。两份许可声明与这些文件头的作者归属保存在 `methods/taskcraft/LICENSE-TaskCraft`。
 - 提示词基线：`methods/taskcraft/prompt_text.py` 保存 `taskcraft/prompts/*.yaml` 的逐字文本，`SOURCES` 给出每个提示词的来源文件与键名。
 - 模块归属：`methods/taskcraft/` 与方法测试 `tests/method/test_taskcraft.py`、`tests/method/test_taskcraft_live.py`。
 
@@ -31,7 +31,7 @@
 
 | 源码 | 适配后 |
 |---|---|
-| `CrawlerSearchTool`、`CrawlerReadTool`、`CrawlerArchiveSearchTool`、`VisualInspectorTool` | 当前患者 9 个只读 FHIR 工具：`fhir_condition_search_problems`、`fhir_observation_search_labs`、`fhir_observation_search_vitals`、`fhir_patient_search_demographics`、`fhir_procedure_search_orders`、`fhir_medication_request_search_orders`、`fhir_document_reference_search_clinical_notes`、`fhir_service_request_search`、`fhir_observation_search_social_history` |
+| `CrawlerSearchTool`、`CrawlerReadTool`、`CrawlerArchiveSearchTool`、`VisualInspectorTool` | 当前患者只读 FHIR 工具声明，绑定取其中的非空子集：`fhir_condition_search_problems`、`fhir_observation_search_labs`、`fhir_observation_search_vitals`、`fhir_patient_search_demographics`、`fhir_procedure_search_orders`、`fhir_medication_request_search_orders`、`fhir_document_reference_search_clinical_notes`、`fhir_service_request_search`、`fhir_observation_search_social_history` |
 | 写工具（`fhir_*_create`、`fhir_*_create_message`） | 生成阶段不绑定，留给评测阶段解题 Agent |
 | 文档文件、PDF、网页 | `PatientTrajectory.text`，按记录时间排序的记录块 |
 | `content_identifier`（文献或网页标题） | 病历记录块标签 `[记录时间] 资源类型/资源ID`（`prepare_trajectory` 的格式） |
@@ -40,15 +40,17 @@
 
 病历工具按 `patient`/`subject` 参数鉴权，本次开放的患者标识随 Agent 说明一起下发，避免使用记录正文中的其他标识。
 
-MedAgentBench 使用原生文本动作协议，生成阶段按环境分派（`methods/taskcraft/environment.py`）：
+MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskcraft/environment.py` 的 `bind_generation_tools`：
 
 | 项 | PhysicianBench | MedAgentBench |
 |---|---|---|
-| 工具绑定 | 9 个只读函数工具 | `NativeTools` 对象原样透传（上游 `funcs_v1` 的 6 个 GET、3 个 POST） |
-| 检索动作 | 函数调用，参数 `count`、`page_limit` | `GET <FHIR 接口路径>`，返回量用 `_count`，患者范围由环境自动限定 |
-| 写入动作 | 生成阶段不绑定写工具 | 说明中禁止 POST，生成阶段只做检索 |
+| 工具绑定 | 环境声明的只读函数工具，允许非空子集；未在声明内的工具不绑定，空集视为环境不可用 | `ReadOnlyNativeTools` 只读视图：不修改原 `NativeTools` 对象及其患者客户端，只复制其中的 GET 工具声明 |
+| 检索动作 | 函数调用，参数 `count`、`page_limit` | `GET <FHIR 接口路径>`，返回量用 `_count`，患者范围由公共环境的实例、分页与地址鉴权承担 |
+| 写入动作 | 不绑定 `fhir_*_create` 类工具 | 放行清单只有 GET 与 FINISH，POST 等写动作在执行路径返回错误，不进入传输层 |
 | 核验 Agent 输出 | `AnswerList` | `FINISH([...])` 答案列表，经 `SolverAnswer` 承载后解析 |
 | 反向检索输出 | `BackwardContext` 对象 | 同样要求 `FINISH` 返回单个对象 |
+
+只读权限取自环境显式声明的工具名，不凭 `_search` 之类的名称推断；检索能力与证据来源的映射不依赖固定工具数量，具备同等检索接口与来源映射的环境可直接接入。
 
 ## 4. 适配差异与源码缺陷对照
 
@@ -65,7 +67,7 @@ MedAgentBench 使用原生文本动作协议，生成阶段按环境分派（`me
 11. 提示词。源码正文逐字保留，医疗适配以追加约束块实现；正文中的文献与网页示例保留用于说明字段格式，追加块声明本任务领域是病历记录。
 12. `clean_qa` 输入由 Python 字典的 f-string 改为 JSON 文本，字段不变。
 13. 患者标识。病历工具按参数鉴权，本次开放的患者标识写入 Agent 说明。
-14. 原生协议分派。MedAgentBench 的工具列表不是函数工具，按名字过滤会得到空列表。生成阶段检测原生工具对象并整份透传，核验与反向检索的输出形态改为 `FINISH` 约定；机制分支与 PhysicianBench 一致。
+14. 原生协议分派。MedAgentBench 的工具列表不是函数工具，按名字过滤会得到空列表。生成阶段检测原生工具对象后按只读视图绑定，放行清单为 GET 与 FINISH；核验与反向检索的输出形态改为 `FINISH` 约定，机制分支与 PhysicianBench 一致。
 15. 原生接口范围。MedAgentBench 声明含 6 个 GET 与 3 个 POST，没有病历文书检索接口；依赖文书内容的结论在该环境下候选更少，机制不变。
 
 ## 5. 预算要求与实测用量
