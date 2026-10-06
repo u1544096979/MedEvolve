@@ -945,6 +945,6 @@ body 说明：质量维度改名后旧提示词引用的维度已不存在，反
 
 五个任务与前后的文档同步提交全部落地，实现以代码为准：`contracts.py`、`evaluation/prompts.py`、`evaluation/evaluator.py`、`experiments/summary.py`、`configs/*.json`、`methods/medevolve/prompts.py`。
 
-终审后的修复轮在计划之外追加了四项内容：`summarize_run` 兼容旧结构的评测记录、裁判 reason 非空校验、平铺 `effectivePeriod` 等 period 字段的回归用例、汇总数值统一为浮点并跳过旧记录。
+终审后的修复轮在计划之外追加了五项内容：`summarize_run` 兼容旧结构的评测记录、裁判 reason 非空校验、平铺 `effectivePeriod` 等 period 字段的回归用例、汇总数值统一为浮点并跳过旧记录、docs/experiment-framework/design.md 的契约表对齐。
 
 最终测试：`PYTHONPATH="$PWD" ../../.venv/bin/python .superpowers/run-tests.py -q` → `214 passed, 3 skipped`。六个方法在评测患者上的全量重跑未在本次范围内执行。

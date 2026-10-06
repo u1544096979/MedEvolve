@@ -17,7 +17,7 @@
 
 **不修改**：
 - 生成模块（methods/medevolve/、methods/*/的generation相关代码）
-- 反馈模块（feedback和strategy_update保持原样）
+- 反馈模块（feedback和strategy_update保持原样；用户确认的唯一例外是 FEEDBACK 提示词补入难度评价输入并改用新的质量维度名）
 
 ## 整体架构
 
@@ -211,9 +211,10 @@ complexity_metrics已在输入中提供（evidence_count、resource_type_count�
 4分=临床决策：综合多维度证据、权衡风险收益、制定方案。例如"调整降压药方案"。
 
 评分依据task.instruction的要求和evidence的复杂度。reason说明为何归为该层级。
-
-输出DifficultyJudgment，包含reasoning_depth（整数1-4）和reason（字符串）；complexity_metrics 由评测侧写入最终 DifficultyScore。"""
+输出DifficultyJudgment，包含reasoning_depth（整数1-4）和reason（字符串）。"""
 ```
+
+complexity_metrics 已作为输入提供，最终 DifficultyScore 由评测侧写入该指标与三位裁判的原始层级。
 
 ### 三、评测流程改造
 
@@ -345,35 +346,65 @@ for judge in difficulty_judges:  # 每个裁判一次 DifficultyJudgment
 输入为 evaluations.json 记录（dict）。实现中会跳过结构早于数值评分的旧记录，以及缺少四个维度数值分数或难度字段的记录。
 
 ```python
-def summarize_quality(evaluations: list[dict]) -> dict:
-    """汇总质量评分分布"""
-    reviews = [e["quality"] for e in evaluations if e.get("quality")]
-    if not reviews:
-        return {}
+QUALITY_DIMENSIONS = (
+    "factual_accuracy", "clinical_soundness", "evidence_sufficiency", "task_clarity",
+)
 
-    dimensions = {}
-    for dim_name in ["factual_accuracy", "clinical_soundness",
-                     "evidence_sufficiency", "task_clarity"]:
-        scores = [review[dim_name]["score"] for review in reviews]
-        dimensions[dim_name] = {
+
+def _quality_scores(evaluation: dict) -> list[int] | None:
+    review = evaluation.get("quality")
+    if not isinstance(review, dict):
+        return None
+    scores = []
+    for dimension in QUALITY_DIMENSIONS:
+        assessment = review.get(dimension)
+        if not isinstance(assessment, dict) or not isinstance(assessment.get("score"), int):
+            return None
+        scores.append(assessment["score"])
+    return scores
+
+
+def _difficulty_score(evaluation: dict) -> dict | None:
+    score = evaluation.get("difficulty")
+    if not isinstance(score, dict) or not isinstance(score.get("reasoning_depth"), int):
+        return None
+    metrics = score.get("complexity_metrics")
+    if not isinstance(metrics, dict):
+        return None
+    if not all(isinstance(metrics.get(field), int)
+               for field in ("evidence_count", "resource_type_count")):
+        return None
+    return {"reasoning_depth": score["reasoning_depth"],
+            "evidence_count": metrics["evidence_count"],
+            "resource_type_count": metrics["resource_type_count"]}
+
+
+def summarize_quality(evaluations: list[dict]) -> JsonObject:
+    # Legacy records keep the retired `dimensions` shape and cannot be aggregated.
+    score_lists = [scores for evaluation in evaluations
+                   if (scores := _quality_scores(evaluation)) is not None]
+    if not score_lists:
+        return {}
+    summary = {}
+    for index, dimension in enumerate(QUALITY_DIMENSIONS):
+        scores = [score_list[index] for score_list in score_lists]
+        summary[dimension] = {
             "mean": float(statistics.mean(scores)),
             "median": float(statistics.median(scores)),
             "distribution": {str(score): count for score, count in sorted(Counter(scores).items())},
-            "high_quality_rate": sum(s >= 4 for s in scores) / len(scores),
+            "high_quality_rate": sum(score >= 4 for score in scores) / len(scores),
         }
+    return summary
 
-    return dimensions
 
-def summarize_difficulty(evaluations: list[dict]) -> dict:
-    """汇总难度分布"""
-    scores = [e["difficulty"] for e in evaluations if e.get("difficulty")]
-    if not scores:
+def summarize_difficulty(evaluations: list[dict]) -> JsonObject:
+    entries = [entry for evaluation in evaluations
+               if (entry := _difficulty_score(evaluation)) is not None]
+    if not entries:
         return {}
-
-    depths = [score["reasoning_depth"] for score in scores]
-    evidence_counts = [score["complexity_metrics"]["evidence_count"] for score in scores]
-    resource_counts = [score["complexity_metrics"]["resource_type_count"] for score in scores]
-
+    depths = [entry["reasoning_depth"] for entry in entries]
+    evidence_counts = [entry["evidence_count"] for entry in entries]
+    resource_counts = [entry["resource_type_count"] for entry in entries]
     return {
         "reasoning_depth": {
             "mean": float(statistics.mean(depths)),
@@ -382,7 +413,7 @@ def summarize_difficulty(evaluations: list[dict]) -> dict:
         "complexity_metrics": {
             "avg_evidence_count": float(statistics.mean(evidence_counts)),
             "avg_resource_types": float(statistics.mean(resource_counts)),
-        }
+        },
     }
 ```
 
