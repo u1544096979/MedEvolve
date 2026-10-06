@@ -22,6 +22,7 @@ from contracts import (
 from environments import create_environment, get_tools, release_environment
 from runtime import call_llm, run_agent
 from methods.common import USAGE_FIELDS, normalize_usage, output_constraints, validate_task_batch
+from methods.generation import trajectory_payload
 from .compression import COMPRESSION, CompressedTrajectory, compression_input
 
 from .prompts import (
@@ -42,12 +43,7 @@ __all__ = [
 
 
 def _trajectory_input(trajectory: PatientTrajectory) -> dict:
-    return {
-        "patient_id": trajectory.patient_id,
-        "environment": trajectory.environment,
-        "text": trajectory.text,
-        "sources": [source.model_dump(mode="json") for source in trajectory.sources],
-    }
+    return trajectory_payload(trajectory)
 
 
 def _evaluation_input(evaluation: EvaluationResult) -> dict:
