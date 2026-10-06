@@ -12,6 +12,8 @@ SingleShot 是本项目的单次生成对比方法，按本规范报告，不对
 
 main 对齐指公共契约、环境适配、运行协议、实验入口和评测口径兼容，不要求复制主方法的生成算法、探索指导或进化策略。已有 SingleShot 实现作为适配起点，不重写环境客户端、LLM 客户端或 Agent 执行器。
 
+SingleShot 的 generate_tasks 和生成提示词在 methods/singleshot/ 内独立维护，不调用 methods.medevolve.generate_tasks，也不导入 MedEvolve 的生成提示词。可按本方法的输入与单次生成要求调整提示词；复用范围为公共数据契约、模型调用、预算统计、输出约束及评测接口。
+
 | 组件 | 职责 | 文件边界 |
 | --- | --- | --- |
 | SingleShot | 完整输入、单次生成、状态与成本 | methods/singleshot/__init__.py、methods/singleshot/prompts.py |
@@ -27,6 +29,8 @@ main 对齐指公共契约、环境适配、运行协议、实验入口和评测
 公共轨迹准备 → 两个生成方向 → 一次生成 → 公共证据与整题核验 → 质量评价 → 独立解题 → 完成评价与汇总。
 
 SingleShot 只在 evaluation_patients 上生成任务，不使用 evolution_patients 或 round_patients 学习、探索或更新策略。公共入口按 initial_strategy.allocation 和 random_seed 采样两个方向；相同患者顺序、初始配比和种子下，方向安排与公共入口的初始策略评测一致。
+
+directions 是本批次两道目标任务的生成要求，每个 GenerationDirection 包含 task_type（题型）、difficulty（难度要求）和 weight（公共采样权重）。例如两个位置分别为“诊断与解释，关联多个时间节点分析病程变化”和“治疗规划，综合多条记录制定方案”。两个方向可使用相同题型，分别对应一次生成中的两个目标位置；不是两个医疗环境，也不代表两次模型调用。weight 用于公共入口采样，不代表要求生成的题数。
 
 生成模型接收当前患者的 trajectory、两个 directions 和公共输出约束。trajectory 包含患者标识、环境名称、完整 text，以及 sources 中的 source_id 和原始记录 statement；不只传来源 ID，不为节省输入而截断、抽样或概括患者事实。
 
@@ -57,7 +61,7 @@ TaskBatch.questions 最多两题，证据不足允许少出题或返回空列表
 
 ## 事实、答案与证据
 
-事实选取、临床表达与候选答案口径遵循 [主方法规范](../../main/SPEC.md) 的公共临床约束，不依赖主方法专属指导。题干明确时间范围、作答或操作要求，难度来自有依据的记录整合和临床判断，不来自缺失信息、歧义或环境故障。
+生成提示词由 SingleShot 独立组织，事实真实性、引用有效性、候选答案合理性和环境可执行性遵循本节及公共评测要求。题干明确时间范围、作答或操作要求，难度来自有依据的记录整合和临床判断，不来自缺失信息、歧义或环境故障。
 
 每条患者事实对应当前患者轨迹中的真实 ResourceType/id。evidence.statement 只陈述该原始记录支持的事实，核对药物、剂量、数值、单位与时间；跨记录推断写在候选答案中并分别引用依据。活动处方不证明实际服用、疗效或耐受性，记录未出现某事实不证明该事实不存在。
 
