@@ -3,11 +3,11 @@
 import importlib
 import json
 from collections import Counter
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel
 
-from contracts import Budget, GenerationDirection, RunResult, RuntimeConfig, TaskBatch
+from contracts import Budget, GenerationDirection, RunResult, RuntimeConfig, TaskBatch, TaskType
 
 RunStatus = Literal["completed", "budget_exhausted", "failed"]
 
@@ -27,32 +27,57 @@ def normalize_usage(usage: dict) -> dict:
     return result
 
 
-def output_constraints(directions: list[GenerationDirection]) -> str:
-    if len(directions) != 2:
+def _selection_policy(directions: list[GenerationDirection] | None,
+                      task_types: list[TaskType] | None) -> Counter | set:
+    """Resolve the allowed task types of direction mode or free-selection mode."""
+    if task_types is not None:
+        if directions is not None:
+            raise ValueError("Use directions or task_types, not both")
+        expected = set(get_args(TaskType))
+        if len(task_types) != len(expected) or set(task_types) != expected:
+            raise ValueError("task_types must contain all five task types once")
+        return set(task_types)
+    if directions is None or len(directions) != 2:
         raise ValueError("directions must contain exactly two generation positions")
-    return (
+    return Counter(d.task_type for d in directions)
+
+
+def output_constraints(directions: list[GenerationDirection] | None = None, *,
+                      task_types: list[TaskType] | None = None) -> str:
+    _selection_policy(directions, task_types)
+    fields = (
         "返回 TaskBatch JSON，questions 最多两题；证据不足可少出题或返回空列表。"
         "每题包含 instruction、task_type、reference_answer、evidence、decision_point。"
         "instruction 和 reference_answer 非空；evidence 逐条包含可定位的 source_id 和事实 statement。"
         "decision_point 必须为 null。不要附加患者、环境、轮次、方法或任务编号。"
+    )
+    if task_types is not None:
+        return fields + (
+            "从以下五种题型中自主选择适合资料的题目，两题可同类型，不要求覆盖全部题型："
+            + json.dumps(task_types, ensure_ascii=False)
+        )
+    return fields + (
         "题型数量不能超过指定方向中该题型的数量；题型与难度方向："
         + json.dumps([d.model_dump(mode="json") for d in directions], ensure_ascii=False)
     )
 
 
-def validate_task_batch(result: RunResult, directions: list[GenerationDirection]) -> RunResult:
-    output_constraints(directions)
+def validate_task_batch(result: RunResult, directions: list[GenerationDirection] | None = None, *,
+                        task_types: list[TaskType] | None = None) -> RunResult:
+    policy = _selection_policy(directions, task_types)
     result = result.model_copy(update={"usage": normalize_usage(result.usage)})
     if result.status != "completed":
         return result.model_copy(update={"output": None})
     try:
         batch = TaskBatch.model_validate(result.output)
         if len(batch.questions) > 2:
-            raise ValueError("TaskBatch exceeds the two generation positions")
-        allowed = Counter(d.task_type for d in directions)
+            raise ValueError("TaskBatch exceeds the two-question limit")
         actual = Counter(q.task_type for q in batch.questions)
-        if actual - allowed:
-            raise ValueError("TaskBatch task types exceed requested directions")
+        if task_types is None:
+            if actual - policy:
+                raise ValueError("TaskBatch task types exceed requested directions")
+        elif set(actual) - policy:
+            raise ValueError("TaskBatch contains unsupported task types")
         for question in batch.questions:
             if question.decision_point is not None:
                 raise ValueError("decision_point must be null until time filtering is supported")
@@ -126,7 +151,9 @@ class GenerationBudget:
                                    dict(instructions=instructions, input_text=input_text,
                                         tools=tools, output_type=output_type), agent=True)
 
-    def finish(self, directions: list[GenerationDirection], *, output: TaskBatch | None = None,
+    def finish(self, directions: list[GenerationDirection] | None = None, *,
+               task_types: list[TaskType] | None = None, output: TaskBatch | None = None,
                status: RunStatus | None = None, error: str | None = None) -> RunResult:
         return validate_task_batch(summarize_results(self.records, output=output,
-                                                     status=status, error=error), directions)
+                                                     status=status, error=error),
+                                   directions, task_types=task_types)

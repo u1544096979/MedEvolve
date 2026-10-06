@@ -5,14 +5,16 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import get_args
 from unittest.mock import AsyncMock
 
 import pytest
 
 from contracts import (Budget, EnvironmentInstance, EvaluationResult, ExperimentConfig,
-                       GenerationDirection, PatientTrajectory, RunResult, RuntimeConfig, TaskBatch)
+                       GenerationDirection, PatientTrajectory, RunResult, RuntimeConfig, TaskBatch,
+                       TaskType)
 from experiments import runner, summarize_run
-from methods.common import GenerationBudget, normalize_usage, validate_task_batch
+from methods.common import GenerationBudget, normalize_usage, output_constraints, validate_task_batch
 
 
 def directions():
@@ -43,6 +45,15 @@ def test_constraints_keep_failed_cost_and_reject_extra_direction_or_time():
     assert normalize_usage({})["input_tokens"] is None
 
 
+def test_selection_policy_rejects_incomplete_duplicate_or_mixed_input():
+    types = list(get_args(TaskType))
+    for invalid in (types[:-1], types + [types[0]], []):
+        with pytest.raises(ValueError):
+            output_constraints(task_types=invalid)
+    with pytest.raises(ValueError):
+        output_constraints(directions(), task_types=types)
+
+
 def test_cumulative_budget_keeps_failed_stages_and_blocks_next_call(monkeypatch):
     config = json.loads((Path(__file__).parents[1] / "configs/experiment.json").read_text())
     runtime = RuntimeConfig.model_validate(config["runtime"])
@@ -70,6 +81,25 @@ def test_cumulative_budget_keeps_failed_stages_and_blocks_next_call(monkeypatch)
 
     asyncio.run(run())
     assert single.await_count == agent.await_count == 1
+
+
+def test_free_selection_accepts_same_type_without_changing_direction_mode():
+    types = list(get_args(TaskType))
+    duplicate = result([question(), question()])
+    accepted = validate_task_batch(duplicate, task_types=types)
+    assert accepted.status == "completed"
+    assert len(accepted.output["questions"]) == 2
+    assert validate_task_batch(duplicate, directions()).status == "failed"
+    for questions in ([question(task_type="未知题型")], [question()] * 3,
+                      [question(decision_point="2020-01-01")],
+                      [{**question(), "instruction": " "}]):
+        rejected = validate_task_batch(result(questions), task_types=types)
+        assert rejected.status == "failed" and rejected.output is None
+        assert rejected.trace[-1]["output"]["questions"] == questions
+        assert rejected.usage["total_tokens"] == 10
+    assert validate_task_batch(result(), task_types=types).status == "completed"
+    failed = validate_task_batch(result(status="failed"), task_types=types)
+    assert failed.status == "failed" and failed.usage["model_turns"] == 1
 
 
 @pytest.mark.parametrize("method", ["taskcraft", "workflow", "singleshot", "selfgen", "envexplore"])
