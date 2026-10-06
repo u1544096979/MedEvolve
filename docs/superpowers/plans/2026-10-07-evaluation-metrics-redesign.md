@@ -14,7 +14,7 @@
 - 裁判数量固定为 3（`JUDGE_COUNT = 3`），最终分数取三个分数的中位数，同时保留三个原始分数与每位裁判的 reason。
 - 质量四维键名固定：`factual_accuracy`、`clinical_soundness`、`evidence_sufficiency`、`task_clarity`；每维 score 为 1-5 整数。
 - 难度层级固定为 1-4：1 事实查询、2 单步推理、3 整合推理、4 临床决策；`reasoning_depth` 为三裁判中位数。
-- `ComplexityMetrics` 三个字段：`evidence_count` = `task.evidence` 中 source_id 数量；`resource_type_count` = source_id 前缀去重数量（`"Observation/123"` → `"Observation"`）；`time_span_days` = 任务引用的 evidence 在 `trajectory.sources` 中对应记录的最早到最晚时间跨度（天），无可用时间时为 `null`。
+- `ComplexityMetrics` 三个字段：`evidence_count` = `task.evidence` 中 source_id 数量；`resource_type_count` = source_id 前缀去重数量（`"Observation/123"` → `"Observation"`）；`time_span_days` = 任务引用的 evidence 在 `trajectory.sources` 中对应记录的最早到最晚时间跨度（天），无可用时间时为 `null`。时间字段口径与 `environments/__init__.py` 的 `_record_time` 一致：先查平铺字段 `effectiveDateTime`、`onsetDateTime`、`performedDateTime`、`occurrenceDateTime`、`authoredOn`、`sent`、`start`、`date`、`recordedDate`、`issued`，再查 `effectivePeriod`、`onsetPeriod`、`performedPeriod`、`period` 的 `start`，最后查 `context.period.start`；不带时区的值按 UTC 处理。
 - 裁判单次输出只含分数与 reason（`QualityJudgment` / `DifficultyJudgment`）；`QualityReview` / `DifficultyScore` 是聚合后的最终结果，`scores`、`reasoning_depths`、`complexity_metrics` 由聚合函数填充。
 - 不改生成模块（`methods/*` 的生成相关代码、`methods/common.py`）、不改 `feedback` / `strategy_update` 的业务逻辑。唯一例外：Task 5 按用户确认把 FEEDBACK 提示词里的旧维度名换成新维度名。
 - 汇总保持既有键名不动：把 `quality_judgments` 换成 `quality_summary`，新增 `difficulty_summary`，其余键（`actual_questions`、`validity_among_verified`、`completion_among_*`、`quality_reviews` 等）不改名、不删除。
@@ -336,19 +336,23 @@ def test_complexity_metrics_count_sources_types_and_time_span(harness):
     h.task = h.task.model_copy(update={"evidence": [
         Evidence(source_id="Observation/1", statement="首次检验"),
         Evidence(source_id="Condition/2", statement="首次诊断"),
+        Evidence(source_id="Encounter/4", statement="首次就诊"),
     ]})
     h.trajectory = h.trajectory.model_copy(update={"sources": [
         Evidence(source_id="Observation/1", statement=json.dumps(
             {"resourceType": "Observation", "effectiveDateTime": "2026-01-01T00:00:00+08:00"})),
         Evidence(source_id="Condition/2", statement=json.dumps(
-            {"resourceType": "Condition", "onsetDateTime": "2026-01-11T00:00:00+08:00"})),
+            {"resourceType": "Condition", "onsetDateTime": "2026-01-11T00:00:00"})),
+        Evidence(source_id="Encounter/4", statement=json.dumps(
+            {"resourceType": "Encounter",
+             "context": {"period": {"start": "2026-01-21T00:00:00+08:00"}}})),
         Evidence(source_id="Observation/9", statement=json.dumps(
             {"resourceType": "Observation", "effectiveDateTime": "2027-05-01T00:00:00+08:00"})),
         Evidence(source_id="Patient/3", statement="不是 JSON"),
     ]})
     result = evaluate(h)
     assert result.difficulty.complexity_metrics == ComplexityMetrics(
-        evidence_count=2, resource_type_count=2, time_span_days=10.0)
+        evidence_count=3, resource_type_count=3, time_span_days=20.0)
 
 
 @pytest.mark.parametrize("field, scores", [("quality_scores", [6, 4, 4]), ("depths", [5, 2, 2])])
@@ -485,14 +489,12 @@ QUALITY_DIMENSIONS = {
 替换为
 
 ```python
-QUALITY_DIMENSIONS = (
-    "factual_accuracy", "clinical_soundness", "evidence_sufficiency", "task_clarity",
-)
 JUDGE_COUNT = 3
 TIME_FIELDS = (
     "effectiveDateTime", "onsetDateTime", "performedDateTime", "occurrenceDateTime",
     "authoredOn", "sent", "start", "date", "recordedDate", "issued",
 )
+PERIOD_FIELDS = ("effectivePeriod", "onsetPeriod", "performedPeriod", "period")
 ```
 
 - [ ] **Step 5: 新增聚合与复杂度函数**
@@ -544,6 +546,16 @@ def _aggregate_difficulty_scores(runs: list[RunResult],
     )
 
 
+def _parse_moment(value) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def _statement_time(statement: str) -> datetime | None:
     try:
         resource = json.loads(statement)
@@ -552,14 +564,20 @@ def _statement_time(statement: str) -> datetime | None:
     if not isinstance(resource, dict):
         return None
     for field in TIME_FIELDS:
-        value = resource.get(field)
-        if not isinstance(value, str):
-            continue
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        parsed = _parse_moment(resource.get(field))
+        if parsed is not None:
+            return parsed
+    for field in PERIOD_FIELDS:
+        period = resource.get(field)
+        if isinstance(period, dict):
+            parsed = _parse_moment(period.get("start"))
+            if parsed is not None:
+                return parsed
+    context = resource.get("context")
+    if isinstance(context, dict):
+        period = context.get("period")
+        if isinstance(period, dict):
+            return _parse_moment(period.get("start"))
     return None
 
 
