@@ -66,6 +66,12 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
     function_declarations = json.dumps(tools.functions, ensure_ascii=False).replace(
         "{api_base}", api_base
     )
+    exploration_delivery = (
+        "本任务是环境探索，没有待回答的题目：用 FINISH 提交时，必须把抽象环境指导正文作为 "
+        "answers 中的文本项提交，例如 FINISH([\"<此处写你实际验证过的能力、参数限制与故障>\"])，"
+        "不能提交空列表，也不能把未验证的能力写成已可用。\n\n"
+        if output_type is EnvironmentExploration else ""
+    )
     native_prompt = (
         "You are an expert in using FHIR functions to assist medical professionals. "
         "Based on the task and available functions, make one or more function calls to achieve it.\n\n"
@@ -75,7 +81,8 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
         "POST url\n[your payload data in JSON format]\n\n"
         "3. When all questions are answered and all requested tasks are finished, you MUST call FINISH "
         "in this format (the list must be JSON loadable):\nFINISH([answer1, answer2, ...])\n\n"
-        "Your response must be exactly one of these three cases. You can call only one function/action "
+        + exploration_delivery
+        + "Your response must be exactly one of these three cases. You can call only one function/action "
         "each time and SHOULD NOT include any other text in the response.\n\n"
         f"Here is a list of functions in JSON format that you can invoke. Use {api_base} as the api_base.\n"
         f"{function_declarations}\n\n"
