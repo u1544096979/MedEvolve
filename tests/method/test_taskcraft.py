@@ -23,6 +23,7 @@ from methods.taskcraft.agent import run_search_agent, step_kind
 from methods.taskcraft.environment import bind_generation_tools, is_native
 from methods.taskcraft import READ_ONLY_TOOLS, TaskCraftParameters, generate_tasks
 from methods.taskcraft.ledger import Ledger
+from methods.taskcraft import prompts
 from methods.taskcraft.scheduling import derive_seed, select_candidates
 from methods.taskcraft.schemas import (
     AgentThought, AnswerList, AnswerScore, BackwardContext, CleanedQuestion,
@@ -981,6 +982,8 @@ def test_stage_parameters_keep_source_defaults(environment):
     assert settings.question_attempts == 3 and settings.width_attempts == 3
     assert settings.extended_attempts == 4 and settings.max_hops == 2
     assert settings.merge_attempts == 5 and settings.query_attempts == 3
+    # 内层重试：utils.run_llm_prompt(max_retries=3) 与 retry_predict(MAX_RETRIES=3)。
+    assert settings.request_attempts == 3
     # 源码 SearchAgent 的 max_step：原子核验 20，深度反向与深度核验各 10。
     assert settings.atomic_max_action_steps == 20
     assert settings.depth_backward_max_action_steps == 10
@@ -1059,6 +1062,68 @@ async def test_ledger_retry_bills_every_attempt(monkeypatch):
     assert [record.status for _, record in ledger.budget.records] == ["failed", "completed"]
     assert ledger.exhausted is False
     assert ledger.used_turns() == 2
+
+
+class FlakyRuntime(FakeRuntime):
+    """指定结构的前若干次请求失败：用于核对源码内层重试的账单。"""
+
+    def __init__(self, failures=(), **kwargs):
+        super().__init__(**kwargs)
+        self.failures = Counter(failures)
+        self.attempts = Counter()
+
+    async def call_llm(self, *, model, instructions, input_text, output_type):
+        self.attempts[output_type.__name__] += 1
+        if self.failures[output_type.__name__] >= self.attempts[output_type.__name__]:
+            self.llm_calls.append(output_type.__name__)
+            return failed_run()
+        return await super().call_llm(model=model, instructions=instructions,
+                                      input_text=input_text, output_type=output_type)
+
+
+def stage_attempt_stages(pipeline, stage):
+    return [name for name, _ in pipeline.ledger.budget.records
+            if name.startswith(f"{stage}/attempt-")]
+
+
+def two_attempts(stage):
+    return [f"{stage}/attempt-1", f"{stage}/attempt-2"]
+
+
+@pytest.mark.asyncio
+async def test_depth_requests_retry_inside_the_source_loops(monkeypatch):
+    """源码 depth 请求带 max_retries=3：首次失败后同一次调用内再试，两次都进入账本。"""
+    fake = FlakyRuntime(failures=("SupersetCheck", "NewQuery", "QueryMerge", "QueryJudgement"))
+    pipeline = stage_pipeline(monkeypatch, fake)
+
+    backward = await pipeline._backward(prompts.depth_prompts(), BLOCK_A)
+    merged = await pipeline._merge(prompts.depth_prompts(), "综合问题", "子问题", BLOCK_A, "5.9 mmol/L")
+
+    assert backward["query"] == "在该患者的高钾血症问题条目下，血钾结果是多少？"
+    assert merged == "综合问题：问题条目下的血钾结果"
+    assert stage_attempt_stages(pipeline, "depth/superset") == two_attempts("depth/superset")
+    assert stage_attempt_stages(pipeline, "depth/query") == two_attempts("depth/query")
+    assert stage_attempt_stages(pipeline, "depth/merge") == two_attempts("depth/merge")
+    assert stage_attempt_stages(pipeline, "depth/merge_judge") == two_attempts("depth/merge_judge")
+    # 内层重试成功即结束外层循环，不叠加重试次数。
+    assert [record.status for name, record in pipeline.ledger.budget.records
+            if name.startswith("depth/superset/") ] == ["failed", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_width_requests_retry_inside_the_source_loops(monkeypatch):
+    """源码 retry_predict 的 MAX_RETRIES=3：宽度三处请求各自内层重试并逐次记账。"""
+    fake = FlakyRuntime(failures=("MergedQuestions", "DecompositionReport", "KnowledgeAnswers"))
+    pipeline = width_pipeline(fake, monkeypatch)
+
+    candidates = await pipeline.width(atomic_pool(4))
+
+    assert [candidate.question.instruction for candidate in candidates] == ["合并问题：血钾结果与诊断的关系"]
+    assert stage_attempt_stages(pipeline, "width/merge") == two_attempts("width/merge")
+    assert stage_attempt_stages(pipeline, "width/decompose") == two_attempts("width/decompose")
+    assert stage_attempt_stages(pipeline, "width/answer") == two_attempts("width/answer")
+    assert [record.status for name, record in pipeline.ledger.budget.records
+            if name.startswith("width/merge/")] == ["failed", "completed"]
 
 
 @pytest.mark.asyncio

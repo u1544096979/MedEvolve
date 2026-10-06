@@ -56,7 +56,9 @@ class TaskCraftParameters(BaseModel):
     merge_attempts: int = 5               # process_single_task: for _ in range(5)
     extended_attempts: int = 4            # depth_extend(extended_attempts=4)
     max_hops: int = 2                     # depth_extend(max_hops=2)
-    width_attempts: int = 3               # gen_width_based_task: MAX_RETRIES = 3
+    width_attempts: int = 3               # width_extend / check_queries: for _ in range(3)
+    # 单次请求的内层重试：utils.run_llm_prompt(max_retries=3) 与 retry_predict(MAX_RETRIES=3)。
+    request_attempts: int = 3
     # 源码 SearchAgent 的 max_step：原子核验 20，深度反向 10，深度核验 10。
     atomic_max_action_steps: int = ATOMIC_MAX_ACTION_STEPS
     depth_backward_max_action_steps: int = DEPTH_BACKWARD_MAX_ACTION_STEPS
@@ -353,7 +355,8 @@ class Pipeline:
         merged_results = None
         for _ in range(self.parameters.width_attempts):
             run = await self.ledger.llm("width/merge", instructions=prompts.width_prompts()["merge_prompt"],
-                                       input_text=prompt, output_type=MergedQuestions)
+                                       input_text=prompt, output_type=MergedQuestions,
+                                       attempts=self.parameters.request_attempts)
             if run is None or run.status != "completed":
                 self.record("width/merge", status=_status(run), error=_error(run))
                 if self.ledger.exhausted:
@@ -447,7 +450,8 @@ class Pipeline:
         for _ in range(self.parameters.width_attempts):
             run = await self.ledger.llm("width/decompose",
                                        instructions=prompts.width_prompts()["check_prompt_1"],
-                                       input_text=prompt1, output_type=DecompositionReport)
+                                       input_text=prompt1, output_type=DecompositionReport,
+                                       attempts=self.parameters.request_attempts)
             if run is None or run.status != "completed":
                 self.record("width/decompose", status=_status(run), error=_error(run))
                 if self.ledger.exhausted:
@@ -476,7 +480,8 @@ class Pipeline:
         for _ in range(self.parameters.width_attempts):
             run = await self.ledger.llm("width/answer",
                                        instructions=prompts.width_prompts()["check_prompt_2"],
-                                       input_text=prompt2, output_type=KnowledgeAnswers)
+                                       input_text=prompt2, output_type=KnowledgeAnswers,
+                                       attempts=self.parameters.request_attempts)
             if run is None or run.status != "completed":
                 self.record("width/answer", status=_status(run), error=_error(run))
                 if self.ledger.exhausted:
@@ -635,7 +640,7 @@ class Pipeline:
             input_text=(f"\n                Given superset: {context.identifier}\n\n"
                         f"                Given relationship: {context.relation}\n\n"
                         f"                Given subset: {element}\n                "),
-            output_type=SupersetCheck,
+            output_type=SupersetCheck, attempts=self.parameters.request_attempts,
         )
         if check is None or check.status != "completed":
             self.record("depth/superset", status=_status(check), error=_error(check))
@@ -653,7 +658,7 @@ class Pipeline:
                 input_text=(f"\n                Certain answer: {element}\n\n"
                             f"                Identifier: {context.identifier}\n\n"
                             f"                Relationship: {context.relation}\n                "),
-                output_type=NewQuery,
+                output_type=NewQuery, attempts=self.parameters.request_attempts,
             )
             if generated is None or generated.status != "completed":
                 self.record("depth/query", status=_status(generated), error=_error(generated))
@@ -679,7 +684,7 @@ class Pipeline:
                             f"                        Auxiliary query: {now_query}\n"
                             f"                        Element to be replaced: {last_identifier} \n"
                             "                        "),
-                output_type=QueryMerge,
+                output_type=QueryMerge, attempts=self.parameters.request_attempts,
             )
             if merged is None or merged.status != "completed":
                 self.record("depth/merge", status=_status(merged), error=_error(merged))
@@ -695,6 +700,7 @@ class Pipeline:
                 "depth/merge_judge",
                 instructions="按用户消息中的要求比较问题复杂度并输出 JSON。",
                 input_text=compare, output_type=QueryJudgement,
+                attempts=self.parameters.request_attempts,
             )
             if judged is None or judged.status != "completed":
                 self.record("depth/merge_judge", status=_status(judged), error=_error(judged))
