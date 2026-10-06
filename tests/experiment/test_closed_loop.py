@@ -203,3 +203,23 @@ def test_taskcraft_generation_receives_the_experiment_seed(tmp_path, monkeypatch
     assert generated == [("h1", config.random_seed)]
     assert released == ["cache"]
     assert (Path(config.output_dir) / "evaluation" / "tasks.json").exists()
+
+
+@pytest.mark.parametrize("name,source", [
+    ("taskcraft-physicianbench", "physicianbench-comparison"),
+    ("taskcraft-medagentbench", "medagentbench-flash"),
+])
+def test_taskcraft_configs_only_change_the_method_and_run_identity(name, source):
+    """两份比较配置只改 method、run_id、output_dir，其余字段与公共配置完全相等。"""
+    root = Path(__file__).parents[2] / "configs"
+    derived = json.loads((root / f"{name}.json").read_text())
+    original = json.loads((root / f"{source}.json").read_text())
+
+    ExperimentConfig.model_validate_json((root / f"{name}.json").read_text())
+    assert derived["method"] == "taskcraft"
+    assert set(derived) == set(original)
+    for field in ("method", "run_id", "output_dir"):
+        assert derived[field] != original[field]
+        derived.pop(field)
+        original.pop(field)
+    assert derived == original

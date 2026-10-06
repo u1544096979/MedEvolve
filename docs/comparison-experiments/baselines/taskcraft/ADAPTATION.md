@@ -113,6 +113,8 @@ MedAgentBench 实测（同一脚本，患者 `S6534835`，同样预算）：
 
 配置要求：生成预算低于该量级时，原子阶段的内置核验无法完成，输出为空批，失败原因保留在 `trace`。深度阶段按源码 `max_step=10` 限制单次检索的 action step 数，规划与反思的模型请求由累计预算承担；解题 Agent 在同类大 snapshot 患者上出现过 131k token 超过 128k 上下文，需在公共层收窄工具返回量。
 
+两份冻结比较配置 `configs/taskcraft-physicianbench.json`、`configs/taskcraft-medagentbench.json` 分别取自公共的 `physicianbench-comparison.json` 与 `medagentbench-flash.json`，只改 `method`、`run_id`、`output_dir`；模型、患者、数据版本、预算、方向与评测保持公共值，MedAgentBench 的 1 model turn / 0 tool calls 照实使用，公共输出按预算截断。
+
 
 验证方式：`pytest tests/method/test_taskcraft.py`（替身运行层，覆盖阶段机制与共享边界）；`tests/method/test_taskcraft_live.py` 为可选端到端检查，配置 `MEDEVOLVE_TASKCRAFT_MANAGER`、`MEDEVOLVE_TASKCRAFT_PATIENT`、`MEDEVOLVE_TASKCRAFT_BUDGET` 后运行。
 
