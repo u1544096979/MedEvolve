@@ -64,6 +64,8 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 
 ## 4. 适配差异与源码缺陷对照
 
+前三项是源码缺陷的对照修复，其后各项是适配口径与协议映射。
+
 1. 原子过滤判据。源码 `filter_question`（`gen_atomic_task.py:418-444`）仅在核验返回 `error` 时拒绝，更严格的 `llm_score`、`agent_score` 判断在 `425-433` 被注释掉。适配保持该分支：无工具回答评分达到 1 分及以上或核验出错才拒绝，`agent_score` 只记录不用于拒绝。患者私有事实本就不在模型自身的知识内，该判据在病历域很少触发，实际筛选由「病历 Agent 能否作答」承担。
 2. superset 校验。源码把返回的 JSON 字典与字符串 `"invalid"` 比较（`gen_depth_based_task.py:67`），字典与该字符串不相等。适配按提示词声明的 `{"new_query": "valid"|"invalid"}` 判断，仅显式 `invalid` 时拒绝。
 3. 宽度结果组装。源码最终映射（`gen_width_based_task.py:234-241`）引用循环外的 `golden_answers`、`original_questions`，与当前分组不一致；评分又用响应里的稳定 ID 直接索引过滤后的局部列表（`gen_width_based_task.py:252-253`）。适配按每题自身的答案、原始问题与原始索引组装，评分按稳定 ID 在已通过分解检查的集合里查找；父题索引保持模型给定的顺序与重复项，越界或缺少父题的分组按模型输出失败丢弃整次响应重试（`gen_width_based_task.py:190-200` 的异常分支），不修剪成更小的组。
@@ -85,38 +87,102 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 19. 患者标识。病历工具按参数鉴权，本次开放的患者标识写入 Agent 说明。
 20. 原生协议分派。MedAgentBench 的工具列表不是函数工具，按名字过滤会得到空列表。生成阶段检测原生工具对象后按只读视图绑定，放行清单为 GET 与 FINISH；核验与反向检索的输出形态改为 `FINISH` 约定，机制分支与 PhysicianBench 一致。
 21. 原生接口范围。MedAgentBench 声明含 6 个 GET 与 3 个 POST，没有病历文书检索接口；依赖文书内容的结论在该环境下候选更少，机制不变。
+22. 强制终答的答案字段类型。达到 action step 上限后的终答请求按源码要求返回 `<think>/<answer>`，适配用 `AgentThought(think: str, answer: str)` 承载，再按源码 `safe_json_loads` 的位置解析 `answer`。PhysicianBench 机制验收里深度反向检索 14 次尝试中有 12 次的 `answer` 是 JSON 对象而非字符串，`AgentThought` 校验失败并记为 `ValidationError: ... Input should be a valid string`，该父题的整条深度链路随之失败；MedAgentBench 的深度阶段产出 6 个候选，其 12 次反向检索只有 1 次走到强制终答。该字段类型保持源码的字符串口径，未放宽，属于当前适配与 provider 结构化输出之间的已知缺口（证据见第 5 节）。
 
-## 5. 预算要求与实测用量
+## 5. 预算口径与真实运行结果
 
-`TaskCraftParameters` 默认值取自源码签名：`chunk_size=16384`、`max_candidate_conclusions=20`、`max_candidate_atomic=10`、`judge_samples=3`、`question_attempts=3`、`query_attempts=3`、`merge_attempts=5`、`extended_attempts=4`、`max_hops=2`、`width_attempts=3`；Agent 步数上限为 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10`。`max_candidate_atomic` 与共享生成预算共同决定单批候选数，小样本运行按预算取 3。
+`TaskCraftParameters` 默认值取自源码签名：`chunk_size=16384`、`max_candidate_conclusions=20`、`max_candidate_atomic=10`、`judge_samples=3`、`question_attempts=3`、`query_attempts=3`、`merge_attempts=5`、`extended_attempts=4`、`max_hops=2`、`width_attempts=3`；Agent 步数上限为 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10`。`max_candidate_atomic` 与共享生成预算共同决定单批候选数。
 
-实测（本机 Docker，种子 `fhir-full:v1`，患者 `MRN4460967357`，`gpt-4o-mini`，生成预算 150 轮 / 150 次工具）：
+机制验收与公共比较各用一组配置，预算口径不混用：
+
+| 用途 | 配置 | generator 预算 | 来源 |
+|---|---|---|---|
+| 机制验收 | `configs/taskcraft-mechanism-physicianbench.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-physicianbench.json` 复制，只改 `run_id`、`output_dir`、该预算 |
+| 机制验收 | `configs/taskcraft-mechanism-medagentbench.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-medagentbench.json` 复制，只改同三处 |
+| 公共比较 | `configs/taskcraft-physicianbench.json` | 8 轮 / 40 次工具 | 冻结公共值，未改动 |
+| 公共比较 | `configs/taskcraft-medagentbench.json` | 1 轮 / 0 次工具 | 冻结公共值，未改动 |
+
+800/800 是机制预算，用于让作者的阶段重试参数（`question_attempts=3`、`extended_attempts=4`、`max_hops=2`）与 `max_action_steps` 有空间跑完；它不进入公共比较口径。
+
+真实验收入口：
+
+```
+MEDEVOLVE_TASKCRAFT_LIVE_CONFIG=<机制配置> pytest tests/method/test_taskcraft_live.py -q -s
+```
+
+未给出配置路径时该测试跳过，不创建实例、不发起调用。一次运行把 `report.json`（状态、用量、候选数、阶段记录、选题）、`pipeline.json`（完整候选池、派生种子、分支顺序、筛选记录）、`result.json`（运行状态与完整 trace）、`config.json` 写入配置的 `output_dir`；目录已有产物时拒绝写入。阶段判据为：`atomic`、`depth`、`width` 各有至少一个带非空参考答案、可回查证据（`source_id` 属于当前患者轨迹）的候选，非原子候选必须带父题，且真实用量非零；`completed` 加空批不算阶段成功。
+
+### 5.1 PhysicianBench 机制验收
+
+运行目录 `outputs/taskcraft-mechanism-physicianbench`，患者 `MRN4460967357`，种子 `fhir-full:v1`，`gpt-4o-mini`，机制预算 800 轮 / 800 次工具。
 
 | 项 | 数值 |
 |---|---|
-| 生成状态 | completed，148 模型轮 / 130 次工具 / 5.85M tokens |
-| 分阶段模型轮数 | 原子 1+3+3+36，宽度 9，深度反向检索 96 |
-| 产出 | 1 题（宽度合并题），证据 `source_id` 全部属于当前患者 |
-| 公共评测 | 核验 `valid=true`，四维质量全 yes，解题未完成 |
-| 运行目录 | `outputs/taskcraft-live-20261003-094909` |
+| 生成状态 | completed；261 模型轮 / 17 次工具调用 / 447 995 tokens（输入 412 338，输出 35 657） |
+| 候选数 | atomic 4，width 1，depth 0 |
+| 原子阶段 | chunk 0 抽到 47 条结论，生成 10 题，核验接纳 4 题 |
+| 宽度阶段 | 合并 2 组，可分解性检查保留 1 组，产出 1 题 |
+| 深度阶段 | 4 道父题各 4 次尝试全部失败：反向检索 14 次尝试里 12 次终答字段类型不符、1 次无工具调用、1 次成功；superset 校验拒绝 2 次；核验 1 次 `llm_score=0.0`；`depth/result.extended=0` |
+| 候选证据 | 原子题 `Condition/2572`、`Condition/2573`、`Condition/2570`、`Condition/2568`；宽度题合并 `Condition/2570` 与 `Condition/2568`，父题为两道原子题 |
+| 最终选题 | 2 题，均为原子题（题型配额决定，宽度题未进入筛选记录） |
+| 过程异常 | 6 次出题因模型返回空 `task_type` 被拒；6 次原子核验记为 `action response carries no tool call`；17 次工具调用全部在开放患者范围内 |
+| 提交基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
 
-MedAgentBench 实测（同一脚本，患者 `S6534835`，同样预算）：
+阶段结论：`atomic` 与 `width` 产出真实候选并通过题面、证据、父题与用量判据；`depth` 在本次运行没有候选，四道父题都未在 `extended_attempts=4` 内完成扩展，失败原因见上表「深度阶段」行，完整失败记录留在 `pipeline.json` 与 `report.json` 的 `stage_records` 里。该环境在 800/800 机制预算下没有深度候选。
+
+同一配置的另一次运行 `outputs/taskcraft-mechanism-physicianbench-attempt1` 保留为失败记录：原子 40 条结论的 `source_ids` 全为空，证据门槛拒绝全部 10 题，`atomic.accepted=0`，整批 `status=failed`（227 轮 / 16 次工具 / 332 106 tokens）。该次运行里 16 次工具调用有 5 次返回 `PatientAccessError: Patient 4460967357 is outside the allowed patient scope`（模型把 `MRN4460967357` 写成 `4460967357`）；结论里 `source_ids` 由模型给出，这一轮的模型没有按追加约束填写。
+
+### 5.2 MedAgentBench 机制验收
+
+运行目录 `outputs/taskcraft-medagentbench`，患者 `S2874099`，种子 `jyxsu6/medagentbench@sha256:3fb83d7ed71c5476f9eb6212bd440a909ef7505922bbc757dc488a8fc0701966`，`deepseek-v4.1-flash`，机制预算 800 轮 / 800 次工具。
 
 | 项 | 数值 |
 |---|---|
-| 轨迹 | 686 条记录、191064 字符；容器峰值 3.36 GiB / 4 GiB |
-| 生成状态 | completed，70 模型轮 / 18 次工具调用 |
-| 分阶段模型轮数 | 原子 1+3+3+27，宽度 2，深度 34 |
-| 产出 | 1 题（原子题，证据 `MedicationRequest/780913`） |
-| 公共评测 | 核验 `valid=true`；解题与评测模型调用出现 175k token 超过 128k 上下文 |
-| 运行目录 | `outputs/taskcraft-live-20261004-040400` |
+| 生成状态 | completed；686 模型轮 / 187 次工具调用 / 4 115 580 tokens（输入 3 091 613，输出 1 023 967），墙钟 2 小时 11 分 |
+| 候选数 | atomic 10，depth 6，width 4 |
+| 轨迹 | 898 条来源、234 000 字符，按 `chunk_size=16384` 分为 15 块 |
+| 原子阶段 | chunk 0 抽到 75 条结论，生成 10 题，核验接纳 10 题，证据为 `Procedure/726139` 等 10 条真实记录 |
+| 深度阶段 | 31 次反向检索：12 次成功、14 次 superset 校验拒绝、5 次硬失败；核验 12 次；6 道父题扩展成功，每道带一个父题，证据为父题证据与 superset 关系来源的合并 |
+| 宽度阶段 | 合并检查保留 4 组，产出 4 题，父题数 2–3 |
+| 最终选题 | 1 题（请求方向为药物处方与诊断与解释，候选均为诊断与解释，另一方向的配额没有候选） |
+| 过程异常 | 5 次反向检索硬失败：2 次模型返回 `{"name": "final_answer", ...}` 而非 `{"action": ...}`，3 次收到 `PatientAccessError: Only FHIR search URLs are supported`；1 次核验返回 `LLM can solve this task`（作者的无法工具作答过滤分支）；均按作者重试参数处理 |
+| 提交基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
 
-配置要求：生成预算低于该量级时，原子阶段的内置核验无法完成，输出为空批，失败原因保留在 `trace`。深度阶段按源码 `max_step=10` 限制单次检索的 action step 数，规划与反思的模型请求由累计预算承担；解题 Agent 在同类大 snapshot 患者上出现过 131k token 超过 128k 上下文，需在公共层收窄工具返回量。
+阶段结论：`atomic`、`depth`、`width` 均产出带参考答案、可回查证据与父题的真实候选。
 
-两份冻结比较配置 `configs/taskcraft-physicianbench.json`、`configs/taskcraft-medagentbench.json` 分别取自公共的 `physicianbench-comparison.json` 与 `medagentbench-flash.json`，只改 `method`、`run_id`、`output_dir`；模型、患者、数据版本、预算、方向与评测保持公共值，MedAgentBench 的 1 model turn / 0 tool calls 照实使用，公共输出按预算截断。
+### 5.3 冻结公共比较
 
+两份公共配置按提交状态原样运行：`python -m experiments.run --config <公共配置>`。
 
-验证方式：`pytest tests/method/test_taskcraft.py`（替身运行层，覆盖阶段机制与共享边界）；`tests/method/test_taskcraft_live.py` 为可选端到端检查，配置 `MEDEVOLVE_TASKCRAFT_MANAGER`、`MEDEVOLVE_TASKCRAFT_PATIENT`、`MEDEVOLVE_TASKCRAFT_BUDGET` 后运行。
+| 项 | PhysicianBench | MedAgentBench |
+|---|---|---|
+| 运行目录 | `outputs/taskcraft-physicianbench` | `outputs/taskcraft-medagentbench` |
+| 请求题数 / 生成次数 | 2 / 1 | 2 / 1 |
+| 生成状态 | budget_exhausted，用满 8 轮 | budget_exhausted，用满 1 轮 |
+| 停止位置 | 原子结论抽取完成，随后 7 次出题因空 `task_type` 被拒，第 8 轮预算耗尽；原子池为空，两个分支记 `cumulative_budget_exhausted` | 第 1 轮预算耗尽，轨迹已就绪 |
+| 最终题数 | 0 | 0 |
+| 公共核验 / 质量评价 / 解题完成 | 无记录（未出题，未发起评测） | 无记录 |
+| 失败类别 | 无 | 无 |
+| 生成成本 | 8 轮 / 0 次工具 / 18 067 tokens | 1 轮 / 0 次工具 / 27 088 tokens（输入 8 114，输出 18 974） |
+| 评测成本 | 0 | 0 |
+
+两个环境的公共预算都不足以走完原子阶段，公共输出为题数 0 的真实截断，未以机制预算的输出代替。
+
+### 5.4 离线检查
+
+```
+pytest -q tests/method tests/runtime tests/experiment tests/environment tests/evaluation -W error
+→ 141 passed, 4 skipped
+
+pytest -q experiments -W error
+→ 4 passed, 3 failed
+  FAILED experiments/test_common.py::test_unimplemented_method_is_explicit[workflow]
+  FAILED experiments/test_common.py::test_unimplemented_method_is_explicit[selfgen]
+  FAILED experiments/test_common.py::test_unimplemented_method_is_explicit[envexplore]
+```
+
+`experiments` 的三项失败来自 venv 的 editable 安装把主检出 `/Users/guagua/code/MedEvolve/methods` 命名空间并入本工作区：主检出里已有 `workflow`、`selfgen`、`envexplore` 三个方法包，于是「未实现方法应显式报错」的断言不成立。它们与本方法无关，也不随本次改动变化。未给出 `MEDEVOLVE_TASKCRAFT_LIVE_CONFIG` 时 `tests/method/test_taskcraft_live.py` 跳过且不发起调用。
+
 
 ## 6. 未映射能力与影响
 
