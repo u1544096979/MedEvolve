@@ -46,11 +46,16 @@ class Ledger:
             tools=tools, output_type=output_type, max_action_steps=max_action_steps))
 
     def tool(self, stage: str, *, name: str, arguments, output) -> None:
-        """把一次真实工具调用记入公共账本，使累计工具预算与失败成本可见。"""
+        """把一次真实工具调用记入公共账本，使累计工具预算与失败成本可见。
+
+        工具调用不发起模型请求，因此记录不带 token 字段；同时显式声明
+        ``runs_without_known_tokens=0``，使聚合用量不把该记录计为缺少 token 的运行。
+        """
         self.budget.records.append((stage, RunResult(
             trace=[{"type": "tool_start", "name": name, "arguments": arguments},
                    {"type": "tool_output", "name": name, "output": output}],
-            usage={"model_turns": 0, "tool_calls": 1}, status="completed")))
+            usage={"model_turns": 0, "tool_calls": 1, "runs_without_known_tokens": 0},
+            status="completed")))
 
     def limit_turns(self) -> int:
         return self.budget.limit.max_model_turns

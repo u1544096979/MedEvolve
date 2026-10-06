@@ -15,7 +15,7 @@ from contracts import (
 from environments import get_tools
 from environments.errors import EnvironmentUnavailable, PatientAccessError
 from environments.medagentbench import NativeTools
-from methods.common import GenerationBudget
+from methods.common import GenerationBudget, summarize_results
 from methods.taskcraft.agent import run_search_agent, step_kind
 from methods.taskcraft.environment import bind_generation_tools, is_native
 from methods.taskcraft import READ_ONLY_TOOLS, TaskCraftParameters, generate_tasks
@@ -878,6 +878,22 @@ async def test_action_response_with_tools_and_final_answer_keeps_the_loop(monkey
     early = [item for item in run.trace if item["type"] == "action" and item["step"] < 3]
     assert [item.get("action_output") for item in early] == [None, None]
     assert all(item["observations"] is not None for item in early)
+
+
+@pytest.mark.asyncio
+async def test_tool_records_do_not_inflate_runs_without_known_tokens(monkeypatch):
+    """工具调用记录没有 token 字段，但不计入 runs_without_known_tokens。"""
+    fake = FakeRuntime()
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    await ledger.llm("atomic/clean", instructions="i", input_text="t",
+                     output_type=AnswerList)
+    ledger.tool("depth/backward/tool", name="fhir_observation_search_labs",
+                arguments={"patient": PATIENT}, output="{}")
+
+    usage = summarize_results(budget.records).usage
+    assert usage["model_turns"] == 1
+    assert usage["tool_calls"] == 1
+    assert usage["runs_without_known_tokens"] == 0
 
 
 @pytest.mark.asyncio

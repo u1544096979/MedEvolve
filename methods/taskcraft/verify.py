@@ -1,6 +1,6 @@
 """TaskCraft 内置核验：移植 agent_tools.VerifyAgent（提交 1e405e0）。
 
-源码路径：agent_tools.py:141-243。
+源码路径：agent_tools.py:132-189。
 每个问题先尝试无工具回答，回答得分达到满分即判为可由模型自身解决；
 再交给病历工具 Agent 回答并打分。两个分数都保留，外层重试重新走一遍整个流程。
 
@@ -146,7 +146,7 @@ async def verify_query(ledger: Ledger, query: str, golden_answer, tools: list, *
             # 源码：评分返回 None 时比较运算抛错，走外层重试分支。
             last_error = "LLM score unavailable"
             continue
-        # agent_tools.py:184-185：无工具回答已满分，说明该结论不是原子结论，立即返回。
+        # agent_tools.py:154-155：无工具回答已满分，说明该结论不是原子结论，立即返回。
         if llm_score >= 1:
             return _failed(query, golden_answer, "LLM can solve this task")
 
@@ -167,7 +167,7 @@ async def verify_query(ledger: Ledger, query: str, golden_answer, tools: list, *
             continue
         agent_score = await score_recall(ledger, golden_answer, agent_answer,
                                          samples=samples, stage=f"{stage}/agent_score")
-        # 源码 agent_tools.py:194-204 直接返回评分结果（包括 None），不重试；
+        # 源码 agent_tools.py:164-173 直接返回评分结果（包括 None），不重试；
         # 阶段按源码分支处理：原子过滤只看出错，深度扩展把空分数当作未通过。
         return VerifyOutcome(
             query=query, golden_answer=golden_answer, llm_score=llm_score,
