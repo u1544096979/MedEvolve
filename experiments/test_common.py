@@ -118,8 +118,10 @@ def test_free_selection_accepts_same_type_without_changing_direction_mode():
     assert failed.status == "failed" and failed.usage["model_turns"] == 1
 
 
-@pytest.mark.parametrize("method", ["taskcraft"])
-def test_unimplemented_method_is_explicit(method):
+@pytest.mark.parametrize("method", ["workflow", "singleshot", "selfgen", "envexplore", "taskcraft"])
+def test_unimplemented_method_is_explicit(method, monkeypatch):
+    # 已接入的方法改为指向不存在的实现模块，验证入口仍显式报错。
+    monkeypatch.setitem(runner.METHOD_MODULES, method, f"methods.missing_{method}")
     with pytest.raises(ValueError, match=f"Method {method} is not implemented"):
         runner.resolve_generator(method)
 

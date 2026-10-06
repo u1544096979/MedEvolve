@@ -195,3 +195,61 @@ def test_summary_ignores_legacy_quality_records():
     assert summarize_difficulty([legacy]) == {}
     assert summarize_quality([legacy, current])["task_clarity"]["mean"] == 4.0
     assert summarize_difficulty([legacy, current])["reasoning_depth"]["distribution"] == {"2": 1}
+def test_taskcraft_generation_receives_the_experiment_seed(tmp_path, monkeypatch):
+    """公共分派把实验种子绑定到 TaskCraft 入口，其他方法入口不变。"""
+    released, generated, trajectories = [], [], {}
+
+    async def create(config):
+        return EnvironmentInstance(instance_id="cache", endpoint="fake", environment="fake")
+
+    async def prepare(instance, patient):
+        trajectories[patient] = PatientTrajectory(patient_id=patient, environment="fake",
+                                                  text=patient, sources=[])
+        return trajectories[patient]
+
+    async def release(config, instance):
+        released.append(instance.instance_id)
+
+    async def generate(trajectory, environment, directions, runtime, *, random_seed=None):
+        assert trajectory is trajectories[trajectory.patient_id]
+        assert len(directions) == 2 and environment.name == "fake"
+        generated.append((trajectory.patient_id, random_seed))
+        return result({"questions": [{"instruction": "问题", "task_type": directions[0].task_type,
+                                      "reference_answer": "答案", "evidence": []}]})
+
+    async def evaluate(task, trajectory, environment, config, environments=None):
+        return EvaluationResult(task_id=task.id, observed_state={}, status="invalid", runs=[])
+
+    for name, function in dict(create_environment=create, prepare_trajectory=prepare,
+                               release_environment=release, evaluate_task=evaluate).items():
+        monkeypatch.setattr(runner, name, function)
+    monkeypatch.setattr("methods.taskcraft.generate_tasks", generate)
+
+    config = config_for(tmp_path / "taskcraft")
+    config = config.model_copy(update={"method": "taskcraft", "evolution_patients": [],
+                                       "round_patients": []})
+    asyncio.run(runner.run_experiment(config))
+
+    assert generated == [("h1", config.random_seed)]
+    assert released == ["cache"]
+    assert (Path(config.output_dir) / "evaluation" / "tasks.json").exists()
+
+
+@pytest.mark.parametrize("name,source", [
+    ("taskcraft-physicianbench", "physicianbench-comparison"),
+    ("taskcraft-medagentbench", "medagentbench-flash"),
+])
+def test_taskcraft_configs_only_change_the_method_and_run_identity(name, source):
+    """两份比较配置只改 method、run_id、output_dir，其余字段与公共配置完全相等。"""
+    root = Path(__file__).parents[2] / "configs"
+    derived = json.loads((root / f"{name}.json").read_text())
+    original = json.loads((root / f"{source}.json").read_text())
+
+    ExperimentConfig.model_validate_json((root / f"{name}.json").read_text())
+    assert derived["method"] == "taskcraft"
+    assert set(derived) == set(original)
+    for field in ("method", "run_id", "output_dir"):
+        assert derived[field] != original[field]
+        derived.pop(field)
+        original.pop(field)
+    assert derived == original

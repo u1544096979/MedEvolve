@@ -107,6 +107,9 @@ async def run_experiment(config: ExperimentConfig) -> None:
     generator = resolve_generator(config.method)
     if config.compare_initial_strategy and config.method != "medevolve":
         raise ValueError("Initial strategy comparison requires medevolve")
+    if config.method == "taskcraft":
+        # 实验种子只在方法内部以可选关键字传递，不进入 RuntimeConfig。
+        generator = importlib.import_module("methods.taskcraft").bind_generator(config.random_seed)
     if "generator" not in config.runtime.models or "generator" not in config.runtime.budgets:
         raise ValueError("runtime requires generator model and cumulative generator budget")
     if config.method == "workflow":
