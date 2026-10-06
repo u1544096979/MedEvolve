@@ -14,11 +14,40 @@ VERIFIER = """核验题目和参考答案是否受 evidence_records 中的原始
 工具故障或无法取得数据不能当作任务无效；这种情况下不要输出核验结论，让运行失败。
 输出 Verification。"""
 
-QUALITY = """评价医疗任务的质量。分别评价 clinical_value（临床价值）、
-correctness（正确性）、longitudinal_integration（纵向整合需求）、clarity（清晰度）。
-dimensions 必须恰好包含这四个键，各维度包含非空字符串 judgment 和 reason。
-依据题目、参考答案、证据、患者轨迹和核验结果作出判断，不设加权总分。
-决策点之后的真实治疗不是唯一正确方案。输出 QualityReview。"""
+QUALITY = """评价医疗任务的质量。分别评价四个维度，每个维度给出1-5分的score和评分理由reason。
+
+factual_accuracy（事实准确性）：
+5分=所有事实完全准确；4分=核心准确但有次要瑕疵；3分=多数准确但有1-2处非关键错误；
+2分=关键事实错误；1分=多处严重错误或编造数据。
+
+clinical_soundness（临床合理性）：
+5分=推理严密，方案符合标准实践；4分=基本合理但不够严谨；3分=方向正确但推理简单；
+2分=存在明显漏洞；1分=推理错误或方案有风险。
+
+evidence_sufficiency（证据充分性）：
+5分=每个关键事实都有明确evidence；4分=主要结论有evidence但细节不完整；3分=核心结论有evidence但推理步骤缺引用；
+2分=关键结论缺evidence；1分=主要依赖未支持的推断。
+
+task_clarity（题目清晰度）：
+5分=目标明确，背景完整，无歧义；4分=基本清晰但个别细节需推断；3分=方向明确但缺背景或要求不具体；
+2分=目标模糊或矛盾；1分=无法理解或严重歧义。
+
+输出QualityJudgment，四个维度各包含score（整数1-5）和reason（字符串）。
+依据task、reference_answer、evidence、trajectory和verification结果评价。"""
+
+DIFFICULTY = """评估医疗任务的难度。
+
+complexity_metrics已在输入中提供（evidence_count、resource_type_count、time_span_days）。
+
+评估reasoning_depth（推理深度），1-4分：
+
+1分=事实查询：直接从记录读取事实，无需推理。例如"患者血压是多少"。
+2分=单步推理：基于记录+临床知识做简单判断。例如"该血压值是否异常"。
+3分=整合推理：跨多条记录比较、识别趋势、整合多维信息。例如"血压控制效果如何"。
+4分=临床决策：综合多维度证据、权衡风险收益、制定方案。例如"调整降压药方案"。
+
+评分依据task.instruction的要求和evidence的复杂度。reason说明为何归为该层级。
+输出DifficultyJudgment，包含reasoning_depth（整数1-4）和reason（字符串）。"""
 
 SOLVER = """使用提供的环境工具完成患者的医疗任务。仅操作指定患者，遵守可见时间范围。
 需要写入时执行环境原生操作；最终答案概述结论及实际完成的操作。
