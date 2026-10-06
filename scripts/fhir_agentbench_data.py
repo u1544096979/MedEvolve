@@ -27,6 +27,15 @@ from typing import Any, BinaryIO
 
 import httpx
 
+# 直接执行脚本时脚本目录会取代项目根目录，先保证项目包可导入。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from server.fhir_agentbench import (  # noqa: E402 - 需先修正 sys.path
+    HAPI_IMAGE,
+    POSTGRES_IMAGE,
+    resource_digest,
+)
+
 DATA_VERSION = "2.1.0"
 EXPECTED_PATIENTS = 100
 EXPECTED_TOTAL_RESOURCES = 928_935
@@ -57,13 +66,6 @@ DOCKER_TIMEOUT = 60.0
 SERVICE_START_TIMEOUT = 300.0
 READY_POLL_INTERVAL = 2.0
 DATABASE_TIMEOUT = 1800.0
-
-HAPI_IMAGE = (
-    "hapiproject/hapi@sha256:4d59628d42b3556b2dcd274d26054a43ba53697ebdae0fd71e6a5475065ed22d"
-)
-POSTGRES_IMAGE = (
-    "postgres@sha256:6b0faa930dc29e5af5af9b50081ad496fad106b85a88ad66aea01f11d4494733"
-)
 SUPPORTED_ARCHITECTURES = {"arm64", "aarch64"}
 
 MANAGED_LABEL = "medevolve.managed"
@@ -287,16 +289,6 @@ def verify_checksums(data_dir: Path) -> str | None:
 
 def resource_source_id(resource: dict) -> str:
     return f"{resource['resourceType']}/{resource['id']}"
-
-
-def resource_digest(resource: dict) -> str:
-    """服务端生成的 meta 不参与比较，其余字段按规范化 JSON 计算 sha256。"""
-
-    normalized = {key: value for key, value in resource.items() if key != "meta"}
-    payload = json.dumps(
-        normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 # --- 批量导入 ---------------------------------------------------------------

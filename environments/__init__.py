@@ -121,7 +121,7 @@ def _trajectory_resource(resource: dict) -> dict:
 
 
 def _check_environment(name: str) -> None:
-    if name not in {"PhysicianBench", "MedAgentBench"}:
+    if name not in {"PhysicianBench", "MedAgentBench", "FHIR-AgentBench"}:
         raise EnvironmentUnavailable(
             f"{name} is unavailable: original implementation is not integrated"
         )
@@ -135,9 +135,11 @@ def _check_decision_point(decision_point: str | None) -> None:
 
 
 async def create_environment(config: EnvironmentConfig) -> EnvironmentInstance:
-    if config.name not in {"PhysicianBench", "MedAgentBench"}:
+    if config.name not in {"PhysicianBench", "MedAgentBench", "FHIR-AgentBench"}:
         raise EnvironmentUnavailable(f"{config.name} is unavailable")
-    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
+    # 本地 FHIR 实例需要恢复完整数据库种子，等待时间远长于镜像启动。
+    timeout = 2160 if config.name == "FHIR-AgentBench" else 240
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         response = await client.post(
             config.manager_url.rstrip("/") + "/instances", json=config.model_dump()
         )
@@ -241,7 +243,9 @@ async def release_environment(
 ) -> None:
     if config.name != instance.environment:
         raise ValueError("Configuration environment does not match the instance")
-    async with httpx.AsyncClient(timeout=90, trust_env=False) as client:
+    # 双容器实例要依次回收两个容器、数据库卷与私有网络。
+    timeout = 180 if config.name == "FHIR-AgentBench" else 90
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         response = await client.delete(
             config.manager_url.rstrip("/") + "/instances/" + instance.instance_id
         )
