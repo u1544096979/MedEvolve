@@ -194,7 +194,7 @@ async def generate_tasks(
         output_type=BatchReview,
     )
     if checked.status != "completed":
-        return _finish(budget, selected, focuses, status=checked.status, error=f"check:{checked.error}")
+        return _finish(budget, selected, focuses, status=checked.status, error=f"check: {checked.error}")
     try:
         decisions = _decisions(BatchReview.model_validate(checked.output), candidates)
     except Exception as exc:
