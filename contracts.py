@@ -83,6 +83,8 @@ class ModelConfig(BaseModel):
     api_key_env: str
     instructions_role: Literal["system", "user"] = "system"
     parallel_tool_calls: bool = True
+    context_window: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
 
 
 class Budget(BaseModel):

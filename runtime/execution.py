@@ -78,6 +78,7 @@ async def call_llm(*, instructions: str, input_text: str,
             response = await client.chat.completions.create(
                 model=model.model, messages=messages,
                 response_format={"type": "json_object"},
+                **({"max_tokens": model.max_output_tokens} if model.max_output_tokens is not None else {}),
             )
             trace.append({"type": "model_response", "response": response.model_dump(mode="json")})
             if response.usage is not None:

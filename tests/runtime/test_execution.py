@@ -229,3 +229,12 @@ def test_opencode_still_rejects_wrong_schema_and_invalid_structure():
     for raw in ['{"answer":', '{"wrong":"field"}']:
         with pytest.raises(ModelBehaviorError):
             schema.validate_json(raw)
+
+
+@pytest.mark.asyncio
+async def test_single_call_respects_configured_output_limit(monkeypatch):
+    requests = install_transport(monkeypatch, [FINAL_MESSAGE])
+    result = await call_llm(instructions="Answer", input_text="patient", output_type=SolverAnswer,
+        model=MODEL.model_copy(update={"max_output_tokens": 512}))
+    assert result.status == "completed"
+    assert requests[0]["max_tokens"] == 512
