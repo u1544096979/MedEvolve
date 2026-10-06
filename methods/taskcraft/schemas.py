@@ -1,11 +1,13 @@
 """各阶段模型输出结构，对应源码提示词声明的 JSON 约定。"""
 
-from pydantic import BaseModel, Field, JsonValue
+import json
+
+from pydantic import BaseModel, Field, JsonValue, field_validator
 
 __all__ = [
     "AgentThought", "AnswerList", "AnswerScore", "BackwardContext", "CleanedQuestion",
     "Conclusion", "ConclusionList", "DecompositionReport", "DecompositionState",
-    "FinalThought", "InitialQuestion", "KnowledgeAnswer", "KnowledgeAnswers", "MergedQuestion",
+    "InitialQuestion", "KnowledgeAnswer", "KnowledgeAnswers", "MergedQuestion",
     "MergedQuestions", "NativeAction", "NewQuery", "QueryJudgement", "QueryMerge",
     "SearchAction", "SupersetCheck", "ToolCall", "TrajectoryScore",
 ]
@@ -97,18 +99,26 @@ class KnowledgeAnswers(BaseModel):
     answers: list[KnowledgeAnswer]
 
 
-# 检索 Agent 的请求结构：源码 oagents 的提示词要求 <think>/<answer> 两段，
-# 公共运行层使用结构化输出承载同一语义。
+def thought_text(value: JsonValue) -> str:
+    """源码 extract_think_and_answer 的文本化：字符串保持原样，其余取 JSON 文本。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+# 检索 Agent 的请求结构：源码 oagents 的提示词要求 <think>/<answer> 两段。
+# 规划、反思与达到 action 上限后的强制终答都走 extract_think_and_answer：两段都是自由文本，
+# 不解析 JSON，因此模型把任务要求的对象直接放进 answer 时，按源码取它的 JSON 文本。
 class AgentThought(BaseModel):
-    think: str = ""
-    answer: str = ""
+    think: JsonValue = ""
+    answer: JsonValue = ""
 
-
-# 达到 action 上限后的强制终答：源码 FinalAnswerTool 的 answer 声明为 any，
-# 可以返回任意 JSON 值，SearchAgent.forward 再对文本形态跑 safe_json_loads。
-class FinalThought(BaseModel):
-    think: str = ""
-    answer: JsonValue = None
+    @field_validator("think", "answer")
+    @classmethod
+    def _as_text(cls, value: JsonValue) -> str:
+        return thought_text(value)
 
 
 # 源码 reflection_step 的 process reward model 输出。

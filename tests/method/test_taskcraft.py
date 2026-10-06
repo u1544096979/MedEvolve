@@ -116,7 +116,7 @@ class FakeRuntime:
                  decompose_states=None, width_answer="无法确定", backward_failure=False,
                  agent_action_rounds=1, tool_calls_per_action=1, fail_agent_runs=0,
                  score_failures=(), final_answer_with_tools=False, backward_failures=0,
-                 final_answer_as_object=False):
+                 final_answer_as_object=False, planning_answer_as_object=False):
         self.task_types = list(task_types)
         self.conclusions = conclusions if conclusions is not None else [
             {"conclusion": "2024-03-05 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
@@ -144,6 +144,9 @@ class FakeRuntime:
         self.final_answer_with_tools = final_answer_with_tools
         # 强制终答的 answer 是直接给出 JSON 值还是序列化后的 JSON 文本。
         self.final_answer_as_object = final_answer_as_object
+        # 规划的 answer 是自由文本还是任务要求的 JSON 对象。
+        self.planning_answer_as_object = planning_answer_as_object
+        self.planning_answer_object = {"identifier": BLOCK_B, "relation": "该问题条目下的检验结果"}
         self.backward_failures = backward_failures
         self.llm_calls = []
         self.agent_calls = []
@@ -201,6 +204,22 @@ class FakeRuntime:
         return {"tool_calls": [],
                 "final_answer": self._final_answer(instructions, as_list=False)}
 
+    def _model_response(self, output_type, payload):
+        """与 runtime.call_llm 同一口径：返回前按本次请求声明的结构校验。"""
+        try:
+            output = output_type.model_validate(payload).model_dump(mode="json")
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            return RunResult(trace=[{"type": "run_error", "error": error}],
+                             usage={"model_turns": 1, "tool_calls": 0},
+                             status="failed", error=error)
+        return completed(output)
+
+    def _thought(self, think, text):
+        """源码 extract_think_and_answer 的 <think>/<answer>；answer 也常带任务要求的 JSON 对象。"""
+        answer = self.planning_answer_object if self.planning_answer_as_object else text
+        return self._model_response(AgentThought, {"think": think, "answer": answer})
+
     async def call_llm(self, *, model, instructions, input_text, output_type):
         self.llm_calls.append(output_type.__name__)
         self.llm_instructions.append(instructions)
@@ -228,21 +247,18 @@ class FakeRuntime:
             payload = {"think": "按记忆给出答案",
                        "answer": (answer if self.final_answer_as_object
                                   else json.dumps(answer, ensure_ascii=False))}
-            # 与 runtime.call_llm 同一口径：返回前按本次请求声明的结构校验。
-            output_type.model_validate(payload)
-            return completed(payload)
+            return self._model_response(output_type, payload)
         if output_type is AgentThought:
             if "Below I will present you a task." in input_text:
-                return completed({"think": "先核对该片段已知事实",
-                                  "answer": "### 1. Facts given in the task\n病历片段"})
+                return self._thought("先核对该片段已知事实",
+                                     "### 1. Facts given in the task\n病历片段")
             if "You are a world expert at making efficient plans" in input_text:
-                return completed({"think": "先检索后作答",
-                                  "answer": "1. 用病历工具检索该记录"})
+                return self._thought("先检索后作答", "1. 用病历工具检索该记录")
             if "We previously constructed a fact list" in input_text:
-                return completed({"think": "保留已学到的事实",
-                                  "answer": "### 1. Facts given in the task\n病历片段"})
+                return self._thought("保留已学到的事实",
+                                     "### 1. Facts given in the task\n病历片段")
             if "You are now tasked with updating the action plan" in input_text:
-                return completed({"think": "继续检索", "answer": "1. 继续用病历工具检索"})
+                return self._thought("继续检索", "1. 继续用病历工具检索")
             raise AssertionError(f"unexpected AgentThought input: {input_text[:80]}")
         if output_type is TrajectoryScore:
             return completed({"analysis": "轨迹仍在推进", "score": 8})
@@ -1100,6 +1116,27 @@ async def test_search_agent_keeps_planning_reflection_and_action_steps_apart(mon
     assert ("reflection", 6) in steps
     assert [kind for kind, _ in steps].count("action") == 7
     assert fake.agent_runs == 1
+
+
+@pytest.mark.parametrize("as_object", [False, True])
+@pytest.mark.asyncio
+async def test_planning_answer_keeps_author_text_form(monkeypatch, as_object):
+    """源码 planning_step 是自由文本补全：answer 里的 JSON 对象按其文本进入记忆与计划。"""
+    fake = FakeRuntime(planning_answer_as_object=as_object)
+    ledger, budget, tools = agent_ledger(monkeypatch, fake)
+    run = await run_search_agent(
+        ledger=ledger, stage="depth/backward", instructions="只使用当前患者的病历工具",
+        input_text="该患者 2024-03-05 的血钾结果是多少？", tools=tools,
+        output_type=AnswerList, max_action_steps=20)
+
+    assert run.status == "completed", run.error
+    facts_text = "### 1. Facts given in the task\n病历片段"
+    plan_text = "1. 用病历工具检索该记录"
+    object_text = json.dumps(fake.planning_answer_object, ensure_ascii=False)
+    expected = (object_text, object_text) if as_object else (facts_text, plan_text)
+    planning = next(item for item in run.trace if item["type"] == "planning")
+    assert (planning["facts"], planning["plan"]) == expected
+    assert planning["facts_think"] == "先核对该片段已知事实"
 
 
 @pytest.mark.asyncio
