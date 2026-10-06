@@ -14,6 +14,7 @@ from contracts import (
     SolverInput, Task, Verification,
 )
 from . import prompts
+from .session import EvaluationEnvironments
 
 JUDGE_COUNT = 3
 TIME_FIELDS = (
@@ -156,8 +157,26 @@ def _compute_complexity(task: Task, trajectory: PatientTrajectory) -> Complexity
 
 async def evaluate_task(task: Task, trajectory: PatientTrajectory,
                         environment: EnvironmentConfig,
-                        config: EvaluationConfig) -> EvaluationResult:
-    """Evaluate one task using fixed models and separate seeded instances."""
+                        config: EvaluationConfig,
+                        environments: EvaluationEnvironments | None = None) -> EvaluationResult:
+    """Evaluate one task.
+
+    ``environments`` carries reusable instances and the container budget of the run.
+    Without it the call stays self-contained and creates a fresh instance per phase.
+    """
+    session = environments if environments is not None else EvaluationEnvironments(sharing=False)
+    try:
+        return await _evaluate_task(task, trajectory, environment, config, session)
+    finally:
+        if environments is None:
+            await session.close()
+
+
+async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
+                         environment: EnvironmentConfig,
+                         config: EvaluationConfig,
+                         session: EvaluationEnvironments) -> EvaluationResult:
+    """Evidence verification, quality review, isolated solving and state review."""
     result = EvaluationResult(
         task_id=task.id, observed_state={}, status="failed", runs=[]
     )
@@ -214,38 +233,43 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
             return run
 
         phase = "environment_error"
-        instance = await env.create_environment(environment)
+        # 实例获取与释放失败归为环境故障；正文故障保留正文设置的阶段。
+        body_failed = False
         try:
-            # Verification may inspect the full timeline, including future evidence.
-            evidence_records = []
-            for evidence in task.evidence:
+            async with session.instance(environment, phase="verify") as instance:
+                try:
+                    # Verification may inspect the full timeline, including future evidence.
+                    evidence_records = []
+                    for evidence in task.evidence:
+                        phase = "environment_error"
+                        resource = await env.read_evidence(
+                            instance, task.patient_id, evidence.source_id
+                        )
+                        evidence_records.append({"source_id": evidence.source_id, "resource": resource})
+                        phase = "model_error"
+                        run = await model_run(
+                            runtime.call_llm, role="verifier", schema=Verification,
+                            instructions=prompts.EVIDENCE_VERIFIER,
+                            payload={"evidence": evidence.model_dump(), "resource": resource},
+                        )
+                        checked = _output(run, Verification)
+                        if not checked.valid:
+                            result.verification = checked
+                            break
+                    else:
+                        run = await model_run(
+                            runtime.call_llm, role="verifier", schema=Verification,
+                            instructions=prompts.VERIFIER,
+                            payload={"task": material["task"], "evidence_records": evidence_records},
+                        )
+                        result.verification = _output(run, Verification)
+                except BaseException:
+                    body_failed = True
+                    raise
+        except BaseException:
+            if not body_failed:
                 phase = "environment_error"
-                resource = await env.read_evidence(
-                    instance, task.patient_id, evidence.source_id
-                )
-                evidence_records.append({"source_id": evidence.source_id, "resource": resource})
-                phase = "model_error"
-                run = await model_run(
-                    runtime.call_llm, role="verifier", schema=Verification,
-                    instructions=prompts.EVIDENCE_VERIFIER,
-                    payload={"evidence": evidence.model_dump(), "resource": resource},
-                )
-                checked = _output(run, Verification)
-                if not checked.valid:
-                    result.verification = checked
-                    break
-            else:
-                run = await model_run(
-                    runtime.call_llm, role="verifier", schema=Verification,
-                    instructions=prompts.VERIFIER,
-                    payload={"task": material["task"], "evidence_records": evidence_records},
-                )
-                result.verification = _output(run, Verification)
-        finally:
-            phase_before_release = phase
-            phase = "environment_error"
-            await env.release_environment(environment, instance)
-            phase = phase_before_release
+            raise
         if not result.verification.valid:
             result.status = "invalid"
             return result
@@ -267,28 +291,32 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
         ], complexity)
 
         phase = "environment_error"
-        instance = await env.create_environment(environment)
+        body_failed = False
         try:
-            tools = await env.get_tools(
-                instance, [task.patient_id], decision_point=task.decision_point,
-                tool_result_limit=environment.tool_result_limit,
-            )
-            phase = "model_error"
-            result.solver_run = await model_run(
-                runtime.run_agent, role="solver", schema=SolverAnswer,
-                instructions=prompts.SOLVER,
-                payload=SolverInput(
-                    instruction=task.instruction, patient_id=task.patient_id,
-                    decision_point=task.decision_point,
-                ).model_dump(), tools=tools,
-            )
-            phase = "environment_error"
-            result.observed_state = await env.read_state(instance, task)
-        finally:
-            phase_before_release = phase
-            phase = "environment_error"
-            await env.release_environment(environment, instance)
-            phase = phase_before_release
+            async with session.instance(environment, phase="solve") as instance:
+                try:
+                    tools = await env.get_tools(
+                        instance, [task.patient_id], decision_point=task.decision_point,
+                        tool_result_limit=environment.tool_result_limit,
+                    )
+                    phase = "model_error"
+                    result.solver_run = await model_run(
+                        runtime.run_agent, role="solver", schema=SolverAnswer,
+                        instructions=prompts.SOLVER,
+                        payload=SolverInput(
+                            instruction=task.instruction, patient_id=task.patient_id,
+                            decision_point=task.decision_point,
+                        ).model_dump(), tools=tools,
+                    )
+                    phase = "environment_error"
+                    result.observed_state = await env.read_state(instance, task)
+                except BaseException:
+                    body_failed = True
+                    raise
+        except BaseException:
+            if not body_failed:
+                phase = "environment_error"
+            raise
         phase = "model_error"
         answer = _output(result.solver_run, SolverAnswer)
         # Review execution evidence without replaying the solver's prompts and model requests.
