@@ -26,6 +26,8 @@ from environments.fhir import FHIRClient
 from environments.fhir_agentbench import (
     REFERENCE_ROUNDS,
     SUPPORTED_TYPES,
+    UnsupportedResourceType,
+    _check_resource_type,
     get_native_tools,
     read_patient_resources,
     read_source,
@@ -433,23 +435,47 @@ async def test_shared_type_read_by_id_has_no_patient_param(fake):
 
 
 @pytest.mark.asyncio
-async def test_unsupported_resource_type_fails_before_any_request(fake):
+async def test_unsupported_resource_type_is_reported_as_a_correctable_error(fake):
+    """参数错误交回模型：官方 description 固定，模型无法预知允许的类型。"""
     tools = get_native_tools(instance(), ["a"])
-    for name, params in (
-        (
-            "get_resources_by_patient_fhir_id",
-            {"resource_type": "MedicationStatement", "patient_fhir_id": "a"},
-        ),
-        (
-            "get_resources_by_resource_id",
-            {"resource_type": "MedicationStatement", "resource_id": "ms1"},
-        ),
-    ):
-        with pytest.raises(ValueError, match="Unsupported FHIR resource type"):
-            await invoke(tools, name, **params)
+    raw = await invoke_raw(
+        tools,
+        "get_resources_by_patient_fhir_id",
+        resource_type="AllergyIntolerance",
+        patient_fhir_id="a",
+    )
+    assert isinstance(raw, str)
+    payload = json.loads(raw)
+    assert set(payload) == {"error"}
+    assert "Unsupported FHIR resource type: AllergyIntolerance" in payload["error"]
+    for resource_type in SUPPORTED_TYPES:
+        assert resource_type in payload["error"]
     assert not fake.requests
     assert "MedicationAdministration" in SUPPORTED_TYPES
     assert "MedicationStatement" not in SUPPORTED_TYPES
+
+
+@pytest.mark.asyncio
+async def test_unsupported_resource_type_by_id_is_reported_the_same_way(fake):
+    tools = get_native_tools(instance(), ["a"])
+    result = await invoke(
+        tools,
+        "get_resources_by_resource_id",
+        resource_type="AllergyIntolerance",
+        resource_id="x",
+    )
+    assert set(result) == {"error"}
+    assert "Unsupported FHIR resource type: AllergyIntolerance" in result["error"]
+    for resource_type in SUPPORTED_TYPES:
+        assert resource_type in result["error"]
+    assert not fake.requests
+
+
+def test_check_resource_type_raises_a_dedicated_value_error():
+    with pytest.raises(UnsupportedResourceType) as failure:
+        _check_resource_type("AllergyIntolerance")
+    assert isinstance(failure.value, ValueError)
+    assert "Expected one of" in str(failure.value)
 
 
 @pytest.mark.asyncio

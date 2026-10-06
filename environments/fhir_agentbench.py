@@ -9,7 +9,8 @@
 - 官方 ``fhir_client.py`` 删除记录里的 ``text``、``meta`` 后仍用 ``id=`` 检索并按固定
   Google Cloud 端点连接；本地服务用 FHIR R4 支持的 ``_id``，客户端连接当前实例地址。
 - 官方 ``except Exception: return {"error": str(e)}`` 会把失败变成看起来成功的返回；
-  这里失败抛异常，交给既有运行错误通道，空结果仍是 ``{}``。
+  这里只有不可预知的参数错误（资源类型不在允许范围内）按官方形状交回模型纠正，
+  其余失败抛异常，交给既有运行错误通道，空结果仍是 ``{}``。
 - 官方磁盘缓存会在实例之间共享结果；本适配不写磁盘，读取缓存只在实例内生效。
 - 官方不核对分页链接归属与患者范围；这里分页必须留在当前实例内，共享资源只能读到
   开放患者引用可达的记录。
@@ -113,9 +114,13 @@ TOOL_SCHEMAS = [
 ]
 
 
+class UnsupportedResourceType(ValueError):
+    """``resource_type`` 不在官方允许范围内：这是模型可自行纠正的参数错误。"""
+
+
 def _check_resource_type(resource_type: str) -> None:
     if resource_type not in SUPPORTED_TYPES:
-        raise ValueError(
+        raise UnsupportedResourceType(
             f"Unsupported FHIR resource type: {resource_type}. "
             f"Expected one of: {', '.join(SUPPORTED_TYPES)}"
         )
@@ -466,13 +471,20 @@ def get_native_tools(
     schemas = {schema["name"]: schema for schema in TOOL_SCHEMAS}
 
     async def get_resources_by_resource_id(resource_type: str, resource_id: str) -> dict:
-        records = await reader.by_id(resource_type, resource_id)
+        try:
+            records = await reader.by_id(resource_type, resource_id)
+        except UnsupportedResourceType as error:
+            # 官方 description 固定，模型无法预知允许的类型；只有这类参数错误可纠正。
+            return json.dumps({"error": str(error)}, ensure_ascii=False)
         return json.dumps(_grouped_tool_output(records), ensure_ascii=False)
 
     async def get_resources_by_patient_fhir_id(
         resource_type: str, patient_fhir_id: str
     ) -> dict:
-        records = await reader.by_patient(resource_type, patient_fhir_id)
+        try:
+            records = await reader.by_patient(resource_type, patient_fhir_id)
+        except UnsupportedResourceType as error:
+            return json.dumps({"error": str(error)}, ensure_ascii=False)
         return json.dumps(_grouped_tool_output(records), ensure_ascii=False)
 
     tools = []
