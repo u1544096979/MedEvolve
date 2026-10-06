@@ -315,6 +315,10 @@ async def prepare_trajectory(
     instance: EnvironmentInstance, patient_id: str
 ) -> PatientTrajectory:
     _check_environment(instance.environment)
+    if instance.environment == "FHIR-AgentBench":
+        from .fhir_agentbench_trajectory import prepare
+
+        return await prepare(instance, patient_id)
     client = FHIRClient(instance.endpoint, [patient_id])
     if instance.environment == "MedAgentBench":
         resources = await _snapshot(client, patient_id)

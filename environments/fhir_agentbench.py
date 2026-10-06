@@ -13,14 +13,17 @@
 - 官方磁盘缓存会在实例之间共享结果；本适配不写磁盘，读取缓存只在实例内生效。
 - 官方不核对分页链接归属与患者范围；这里分页必须留在当前实例内，共享资源只能读到
   开放患者引用可达的记录。
+- 患者材料读取优先用 ``Patient/$everything``，仅在服务端明确不支持时逐类型分页回退；
+  回退与引用补齐都先核对能力声明的检索参数，再按 ``ResourceType/id`` 去重。
 """
 
 import json
 
+import httpx
 from agents import Tool, function_tool
 
 from contracts import EnvironmentInstance, JsonObject
-from environments.errors import PatientAccessError
+from environments.errors import EnvironmentUnavailable, PatientAccessError
 from environments.fhir import FHIRClient, patient_id, references
 
 SUPPORTED_TYPES = (
@@ -36,8 +39,9 @@ SUPPORTED_TYPES = (
     "Medication",
 )
 
-# 官方 supported_types 里本地不支持 patient= 检索的共享资源类型。
-SHARED_RESOURCE_TYPES = ("Medication", "Location")
+# 官方 supported_types 里本地不支持 patient= 检索的共享资源类型；Organization 由
+# 患者记录引用后才可读，用于补齐机构名称等原始信息。
+SHARED_RESOURCE_TYPES = ("Medication", "Location", "Organization")
 
 # 共享资源没有患者归属：只有从开放患者可读记录中引用可达的记录才可读。
 SHARED_REFERENCING_TYPES = {
@@ -48,7 +52,30 @@ SHARED_REFERENCING_TYPES = {
         "MedicationDispense",
     ),
     "Location": ("Encounter",),
+    "Organization": ("Encounter", "Procedure"),
 }
+
+# 服务端不支持 Patient/$everything 时逐类型读取的患者临床类型。
+FALLBACK_RESOURCE_TYPES = (
+    "Patient",
+    "Encounter",
+    "Condition",
+    "Observation",
+    "MedicationRequest",
+    "MedicationAdministration",
+    "MedicationStatement",
+    "MedicationDispense",
+    "Procedure",
+    "Specimen",
+)
+
+# 患者记录引用后需要补齐的记录类型：共享资源加上回退读取可能漏掉的临床关联记录。
+COMPLETION_RESOURCE_TYPES = tuple(
+    resource_type for resource_type in FALLBACK_RESOURCE_TYPES if resource_type != "Patient"
+) + ("Medication", "Location", "Organization")
+
+# 只有这些状态明确表示服务端不支持完整患者读取，其余状态照常上报。
+UNSUPPORTED_STATUSES = frozenset({400, 404, 405, 501})
 
 PAGE_SIZE = 200
 
@@ -88,12 +115,21 @@ def _check_resource_type(resource_type: str) -> None:
         )
 
 
+def _dedupe(resources: list[dict]) -> list[dict]:
+    """按 ResourceType/id 去重，保留完整原始 JSON。"""
+    unique: dict[tuple[str, str], dict] = {}
+    for resource in resources:
+        unique[(resource.get("resourceType"), resource.get("id"))] = resource
+    return list(unique.values())
+
+
 class ScopedReader:
     """把一次运行的读取限制在当前实例与开放患者集合内。"""
 
     def __init__(self, instance: EnvironmentInstance, patients: frozenset[str]):
         self.client = FHIRClient(instance.endpoint, sorted(patients))
         self._referenced: dict[tuple[str, str], set[str]] = {}
+        self._search_params: dict[str, set[str]] | None = None
 
     @property
     def patient_ids(self) -> frozenset[str]:
@@ -156,7 +192,7 @@ class ScopedReader:
         key = (patient, resource_type)
         if key not in self._referenced:
             referenced: set[str] = set()
-            for referencing in SHARED_REFERENCING_TYPES[resource_type]:
+            for referencing in SHARED_REFERENCING_TYPES.get(resource_type, ()):
                 records = await self.client.search_all(
                     referencing, {"_count": PAGE_SIZE, "patient": patient}, {patient}
                 )
@@ -195,11 +231,126 @@ class ScopedReader:
             return await self.client.read_shared(source_id)
         return await self.client.read(source_id)
 
+    async def supported_search_params(self, resource_type: str) -> set[str]:
+        """读取服务端能力声明，返回该类型实际可用的检索参数名。"""
+        if self._search_params is None:
+            statement = await self.client._request("GET", "metadata")
+            declared: dict[str, set[str]] = {}
+            for rest in statement.get("rest", []):
+                for resource in rest.get("resource", []):
+                    name = resource.get("type")
+                    if not name:
+                        continue
+                    names = declared.setdefault(name, set())
+                    for param in resource.get("searchParam", []):
+                        if param.get("name"):
+                            names.add(param["name"])
+            self._search_params = declared
+        return self._search_params.get(resource_type, set())
+
+    async def _patient_param(self, resource_type: str) -> str:
+        supported = await self.supported_search_params(resource_type)
+        for name in ("patient", "subject"):
+            if name in supported:
+                return name
+        raise EnvironmentUnavailable(
+            f"FHIR server does not support patient search for {resource_type}"
+        )
+
+    async def _read_by_type(
+        self, identifier: str, selected: set[str]
+    ) -> list[dict]:
+        """完整患者读取不可用时的逐类型回退读取。"""
+        resources: list[dict] = []
+        for resource_type in FALLBACK_RESOURCE_TYPES:
+            if resource_type == "Patient":
+                params = {"_id": identifier, "_count": PAGE_SIZE}
+            else:
+                params = {
+                    await self._patient_param(resource_type): identifier,
+                    "_count": PAGE_SIZE,
+                }
+            resources.extend(
+                await self.client.search_all(resource_type, params, selected)
+            )
+        if not any(
+            resource.get("resourceType") == "Patient"
+            and resource.get("id") == identifier
+            for resource in resources
+        ):
+            raise ValueError(f"Patient search did not return Patient/{identifier}")
+        return resources
+
+    async def _read_referenced(
+        self, resource_type: str, identifiers: set[str], selected: set[str]
+    ) -> list[dict]:
+        """按 ID 读取引用记录；服务端没有 _id 时退回按患者检索后过滤。"""
+        supported = await self.supported_search_params(resource_type)
+        if "_id" in supported:
+            return await self.client.search_all(
+                resource_type,
+                {"_id": ",".join(sorted(identifiers)), "_count": PAGE_SIZE},
+                selected,
+            )
+        if resource_type in SHARED_RESOURCE_TYPES:
+            raise EnvironmentUnavailable(
+                f"FHIR server cannot read {resource_type} by ID"
+            )
+        patient = next(iter(selected))
+        records = await self.client.search_all(
+            resource_type,
+            {await self._patient_param(resource_type): patient, "_count": PAGE_SIZE},
+            selected,
+        )
+        return [record for record in records if record.get("id") in identifiers]
+
+    async def _complete_references(
+        self, resources: list[dict], selected: set[str]
+    ) -> list[dict]:
+        """扫描引用并按 ID 补齐材料里缺少的关联记录。"""
+        existing = {(r.get("resourceType"), r.get("id")) for r in resources}
+        wanted: dict[str, set[str]] = {}
+        for resource in resources:
+            for reference in references(resource):
+                resource_type, _, identifier = reference.partition("/")
+                if not identifier or resource_type not in COMPLETION_RESOURCE_TYPES:
+                    continue
+                if (resource_type, identifier) in existing:
+                    continue
+                wanted.setdefault(resource_type, set()).add(identifier)
+        added: list[dict] = []
+        for resource_type, identifiers in sorted(wanted.items()):
+            records = await self._read_referenced(resource_type, identifiers, selected)
+            missing = identifiers - {record.get("id") for record in records}
+            if missing:
+                raise ValueError(
+                    "FHIR server did not return referenced records: "
+                    + ", ".join(
+                        f"{resource_type}/{identifier}" for identifier in sorted(missing)
+                    )
+                )
+            added.extend(records)
+        return resources + added
+
     async def patient_resources(self, patient: str) -> list[dict]:
         selected = self._scope(patient)
         if len(selected) != 1:
             raise PatientAccessError("Patient resources require exactly one patient")
-        return await self.client.snapshot(next(iter(selected)))
+        identifier = next(iter(selected))
+        try:
+            resources = await self.client.snapshot(identifier)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in UNSUPPORTED_STATUSES:
+                raise
+        else:
+            return _dedupe(resources)
+        return _dedupe(await self._read_by_type(identifier, selected))
+
+    async def patient_material(self, patient: str) -> list[dict]:
+        """完整患者材料：患者关联记录加上引用可达的关联记录。"""
+        selected = self._scope(patient)
+        resources = await self.patient_resources(patient)
+        return _dedupe(await self._complete_references(resources, selected))
 
 
 _READERS: dict[tuple[str, str, frozenset[str]], ScopedReader] = {}
@@ -264,6 +415,12 @@ async def read_patient_resources(
     instance: EnvironmentInstance, patient_id: str
 ) -> list[dict]:
     return await _reader_for(instance, [patient_id]).patient_resources(patient_id)
+
+
+async def read_patient_material(
+    instance: EnvironmentInstance, patient_id: str
+) -> list[dict]:
+    return await _reader_for(instance, [patient_id]).patient_material(patient_id)
 
 
 async def read_source(
