@@ -23,17 +23,46 @@ QUALITY_DIMENSIONS = (
 )
 
 
+def _quality_scores(evaluation: dict) -> list[int] | None:
+    review = evaluation.get("quality")
+    if not isinstance(review, dict):
+        return None
+    scores = []
+    for dimension in QUALITY_DIMENSIONS:
+        assessment = review.get(dimension)
+        if not isinstance(assessment, dict) or not isinstance(assessment.get("score"), int):
+            return None
+        scores.append(assessment["score"])
+    return scores
+
+
+def _difficulty_score(evaluation: dict) -> dict | None:
+    score = evaluation.get("difficulty")
+    if not isinstance(score, dict) or not isinstance(score.get("reasoning_depth"), int):
+        return None
+    metrics = score.get("complexity_metrics")
+    if not isinstance(metrics, dict):
+        return None
+    if not all(isinstance(metrics.get(field), int)
+               for field in ("evidence_count", "resource_type_count")):
+        return None
+    return {"reasoning_depth": score["reasoning_depth"],
+            "evidence_count": metrics["evidence_count"],
+            "resource_type_count": metrics["resource_type_count"]}
+
+
 def summarize_quality(evaluations: list[dict]) -> JsonObject:
-    reviews = [evaluation["quality"] for evaluation in evaluations
-               if evaluation.get("quality")]
-    if not reviews:
+    # Legacy records keep the retired `dimensions` shape and cannot be aggregated.
+    score_lists = [scores for evaluation in evaluations
+                   if (scores := _quality_scores(evaluation)) is not None]
+    if not score_lists:
         return {}
     summary = {}
-    for dimension in QUALITY_DIMENSIONS:
-        scores = [review[dimension]["score"] for review in reviews]
+    for index, dimension in enumerate(QUALITY_DIMENSIONS):
+        scores = [score_list[index] for score_list in score_lists]
         summary[dimension] = {
-            "mean": statistics.mean(scores),
-            "median": statistics.median(scores),
+            "mean": float(statistics.mean(scores)),
+            "median": float(statistics.median(scores)),
             "distribution": {str(score): count for score, count in sorted(Counter(scores).items())},
             "high_quality_rate": sum(score >= 4 for score in scores) / len(scores),
         }
@@ -41,21 +70,21 @@ def summarize_quality(evaluations: list[dict]) -> JsonObject:
 
 
 def summarize_difficulty(evaluations: list[dict]) -> JsonObject:
-    scores = [evaluation["difficulty"] for evaluation in evaluations
-              if evaluation.get("difficulty")]
-    if not scores:
+    entries = [entry for evaluation in evaluations
+               if (entry := _difficulty_score(evaluation)) is not None]
+    if not entries:
         return {}
-    depths = [score["reasoning_depth"] for score in scores]
-    evidence_counts = [score["complexity_metrics"]["evidence_count"] for score in scores]
-    resource_counts = [score["complexity_metrics"]["resource_type_count"] for score in scores]
+    depths = [entry["reasoning_depth"] for entry in entries]
+    evidence_counts = [entry["evidence_count"] for entry in entries]
+    resource_counts = [entry["resource_type_count"] for entry in entries]
     return {
         "reasoning_depth": {
-            "mean": statistics.mean(depths),
+            "mean": float(statistics.mean(depths)),
             "distribution": {str(depth): count for depth, count in sorted(Counter(depths).items())},
         },
         "complexity_metrics": {
-            "avg_evidence_count": statistics.mean(evidence_counts),
-            "avg_resource_types": statistics.mean(resource_counts),
+            "avg_evidence_count": float(statistics.mean(evidence_counts)),
+            "avg_resource_types": float(statistics.mean(resource_counts)),
         },
     }
 
