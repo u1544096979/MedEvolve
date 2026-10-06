@@ -98,6 +98,8 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
     async def call(stage, instructions, payload, schema):
         run = await budget.call_llm(stage, instructions=instructions,
             input_text=json.dumps(payload, ensure_ascii=False), output_type=schema)
+        # 不变量：common.GenerationBudget._execute 每次调用都恰好追加一条记录，
+        # 因此这里回填的一定是本次调用的记录。
         budget.records[-1] = (stage, run.model_copy(update={"trace": [
             {"type": "method_input", "input": payload}, *run.trace]}))
         return run
