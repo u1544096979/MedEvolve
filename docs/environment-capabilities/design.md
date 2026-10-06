@@ -11,7 +11,28 @@ MedAgentBench 的语义对应当前适配的官方提交 `99260117137b09f04837a8
 
 环境能力是确定的运行约束。主方法与对比方法接收相同的能力说明，环境探索指导补充实际观察到的工具参数、返回结构与限制，不能覆盖固定能力约束。
 
+固定能力的唯一来源为 `environments/capabilities.py`，六个方法统一调用 `get_capabilities` 与 `capability_instructions`；方法内部不另写环境名分支或复制 POST、持久化语义文案。
+
 PhysicianBench 的写入由 FHIR 服务保存到数据库，不改为独立实验文件。数据库即使采用文件存储，仍由数据库管理其资源与查询语义。实验输出中的请求和执行记录不代替环境状态。
+
+### 1.1 六个方法与适配范围
+
+| 方法 | 实现位置与实施范围 | 适配点 |
+| --- | --- | --- |
+| `medevolve` | main；本次实施 | 固定说明接入环境探索、任务生成与反馈；生成每题的 `execution_requirement`，保留数据探索和策略进化流程 |
+| `workflow` | main；本次实施 | 定位、按题型生成、内部检查接收同一说明；每题输出执行要求，保留五类候选池选两类及逐题生成规则 |
+| `selfgen` | main；本次实施 | 初稿、自检、修订接收同一说明；移除手写 `operation_semantics`，初稿和修订输出执行要求，保留方向映射及通过题不变约束 |
+| `taskcraft` | `codex/taskcraft-baseline`；合并后必做 | 所有候选生成、扩展与内置核验阶段接入同一说明；atomic、width、depth 候选保留执行要求，查询生成使用共享租约，移除分支携带的重复语义文案 |
+| `singleshot` | `codex/singleshot`；合并后必做 | 单次生成接入同一说明并输出执行要求，移除提示中的环境语义副本；统一公共接口时保留自主选题及两题可同类型的规则 |
+| `envexplore` | `codex/envexplore`、`codex/envexplore-v2`；合并后必做，两个分支对应同一个方法 | 原分支的工具生成接入同一说明与共享查询租约；v2 的一次环境探索和缓存轨迹生成接入同一说明，移除 `GENERATION_RULES` 中的语义副本；两版本均输出执行要求 |
+
+本次实施 main 上三个方法及公共契约，不合入另外三个方法的分支；另外三个方法在合并时必须完成对应适配才能验收。分支重用公共能力来源，不将分支中的旧副本带回 main。
+
+### 1.2 分支合并顺序
+
+先在 main 落地本方案的公共能力、生成校验、环境租约和并发调度，再将 `codex/taskcraft-baseline`、`codex/singleshot`、`codex/envexplore` 与 `codex/envexplore-v2` 分别 rebase 到更新后的 main，完成各自必做适配并验证后再合并。
+
+各分支均改动 `methods/common.py`，冲突必须按新公共契约处理；SingleShot 的 `output_constraints(task_types=...)` 已与 main 的 `output_constraints(directions, *, max_questions, candidate_pool)` 分叉，合并时统一输出字段和执行要求校验，同时保留 SingleShot 自主选题与 Workflow 候选池的不同选择规则，不以一份旧文件覆盖另一份。EnvExplore 两分支分别核对，按实际选定的版本完成合并验收，不将它们计为两个方法。
 
 ## 2. 任务生成、解题与评测
 
@@ -22,6 +43,8 @@ PhysicianBench 的写入由 FHIR 服务保存到数据库，不改为独立实�
 - PhysicianBench 可以生成要求真实创建资源的任务，解题在独立环境执行，评测检查实际资源与执行证据。
 
 生成、解题和评测均接收固定环境能力说明。各方法使用相同的能力约束和完成标准，不因方法不同而改变提交或写入的判定。
+
+六个方法生成的每题都必须包含 `execution_requirement`（`read_only`、`submit_request` 或 `database_write`），由公共输出约束和校验统一检查；旧任务的缺失字段仍由整体核验补齐，方法内部候选筛选或修订不得丢失该字段。
 
 提交任务检查实际 POST 的目标地址、提交内容和接受结果是否满足题目。格式合法或收到成功提示，不能代替药物、剂量、患者等任务条件的正确性检查。
 
@@ -63,7 +86,7 @@ PhysicianBench 的环境探索使用专门的独立种子实例，允许测试�
 
 ## 4. 验证
 
-1. 确认主方法、已接入对比方法、解题与评测均收到相同的固定环境能力约束。
+1. 本次验证 main 上的 `medevolve`、`workflow`、`selfgen` 及公共解题、评测；`taskcraft`、`singleshot`、`envexplore` 在各分支合并时逐项验证同一能力来源和执行要求，六方法全部完成适配才满足完整方法覆盖。
 2. 核对 MedAgentBench 的正确提交、错误提交及要求真实持久化的任务，分别检查正确性判定与环境能力匹配；数据库不应因模拟提交变化。
 3. 验证共享实例可以服务并发患者且不能执行真实写入，各患者的数据访问与任务记录保持独立。
 4. 验证 PhysicianBench 的试写探索和真实写入任务使用独立种子实例，不污染共享实例或其他任务。

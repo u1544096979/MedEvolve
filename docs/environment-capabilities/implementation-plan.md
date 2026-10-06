@@ -12,6 +12,7 @@
 
 - 依据 [设计文档](design.md)，保持 PhysicianBench 的真实 FHIR 写入及 MedAgentBench 的模拟 POST 语义。
 - 所有方法、环境探索、解题与评测使用相同的固定能力说明；探索指导不能覆盖这些约束。
+- 方法清单为 `medevolve`、`workflow`、`selfgen`、`taskcraft`、`singleshot`、`envexplore`：main 上前三项本次实施，worktree 中后三项为合并后必做项；固定能力和语义文案仅来自 `environments/capabilities.py`。
 - 共享查询实例的工具入口禁止真实写入，保留患者范围和原生请求格式；模拟 POST 可以执行。
 - 真实写入任务及 PhysicianBench 试写探索从独立种子开始，完成状态读取后释放容器与独立存储。
 - 患者并发与容器额度分开设置；同轮策略、方向采样、任务编号、输出归属和统计口径不随完成顺序改变。
@@ -23,15 +24,56 @@
 | 文件 | 职责 |
 | --- | --- |
 | `contracts.py`、新增 `environments/capabilities.py` | 能力、任务执行要求、租约契约与固定说明 |
-| `methods/common.py`、`methods/medevolve/__init__.py`、`methods/workflow/__init__.py` 及两方法提示文件 | 统一能力输入、任务要求输出与生成校验 |
+| `methods/common.py`、`methods/medevolve/__init__.py`、`methods/workflow/__init__.py`、`methods/selfgen/__init__.py` 及三个方法的提示文件 | main 本次实施：统一能力输入、任务要求输出与生成校验，移除方法内语义副本 |
 | `environments/fhir.py`、`environments/__init__.py`、`environments/medagentbench.py` | 租约客户端、共享实例写入阻断与原生工具适配 |
 | 新增 `server/pool.py`、`server/app.py`、`server/docker.py` | 同种子实例复用、全局容器额度、租约与生命周期 |
 | `evaluation/evaluator.py`、`evaluation/prompts.py` | 核验任务能力、选择实例、检查实际提交和状态变化 |
 | `experiments/runner.py`、新增 `experiments/concurrency.py` | 患者并发、顺序采样、结果写入、轮次屏障与会话清理 |
+| `docs/comparison-experiments/common/SPEC.md:46` | 同步公共规范：查询与模拟提交共享，真实写入及 PhysicianBench 试写探索隔离 |
+| `.worktrees/taskcraft/methods/taskcraft/{__init__,ledger,stages,environment}.py`、`.worktrees/taskcraft/methods/medevolve/prompts.py:44` | TaskCraft 合并后必做：阶段能力输入、候选执行要求、查询租约及重复语义清理 |
+| `.worktrees/singleshot/methods/singleshot/{__init__,prompts}.py`、`.worktrees/singleshot/methods/common.py` | SingleShot 合并后必做：能力输入与执行要求、语义副本清理及公共接口统一 |
+| `.worktrees/envexplore/methods/envexplore/{__init__,prompts}.py`、`.worktrees/envexplore-v2/methods/generation.py`、`.worktrees/envexplore-v2/methods/envexplore/__init__.py`、对应 `experiments/runner.py` | EnvExplore 两分支合并后必做：各版本的探索/生成能力输入、执行要求、租约与绑定入口 |
+
+## 六个方法适配清单
+
+行号对应当前 main 工作区及对应 worktree，合并后按函数或字段重新定位；本轮修订仅修改文档，下面的源文件变更由实施任务执行。
+
+| 方法 | 状态与文件定位 | 固定能力说明、执行要求和环境复用适配 |
+| --- | --- | --- |
+| `medevolve` | main，本次实施；`methods/medevolve/__init__.py:126`、`:147`、`:173`，`methods/medevolve/prompts.py:47` | 探索、生成和反馈指令统一追加 `capability_instructions`；生成返回执行要求，反馈按实际失败分类处理；处方提示保留药物、剂量、频次和证据规则，将提交/持久化语义交给统一来源；探索按环境能力租约路由 |
+| `workflow` | main，本次实施；`methods/workflow/__init__.py:111`、`:123`、`:148`、`:177`，`methods/workflow/prompts.py` | 定位、分类型生成、内部检查追加统一说明；每道候选及最终题目保留执行要求；保持 `candidate_pool=True` 的五类选两类、单题约束和公共预算 |
+| `selfgen` | main，本次实施；`methods/selfgen/__init__.py:83`、`:88`、`:94`、`:98`、`:111`、`:119`、`:130`，`methods/selfgen/prompts.py:8`、`:22` | 删除 94–95 行 `operation_semantics` 手写文案，第 88–89 行的环境名检查改用统一能力来源；调用包装器对初稿、自检和修订统一追加能力说明；提示不再依赖旧输入字段，事实规则提取不能重新复制环境语义；初稿/修订候选输出执行要求，最终过滤和通过题不变校验保留字段 |
+| `taskcraft` | worktree，合并后必做；分支 `codex/taskcraft-baseline`；`.worktrees/taskcraft/methods/medevolve/prompts.py:44`、`methods/taskcraft/__init__.py:55`、`:82`、`:95`，`methods/taskcraft/ledger.py:16`，`methods/taskcraft/stages.py:289`、`:389`、`:605`，`methods/taskcraft/environment.py:56`、`:88`（后五个路径均相对该 worktree） | 通过 Ledger 的模型/工具 Agent 调用统一注入能力说明；删除分支主方法提示第 44 行的提交/持久化语义副本，保留临床要求；atomic、width、depth 的生成输出与 `GeneratedQuestion` 构造传递执行要求，筛选不得丢失；查询生成改共享租约，保留原只读工具视图和随机种子绑定 |
+| `singleshot` | worktree，合并后必做；分支 `codex/singleshot`；`.worktrees/singleshot/methods/singleshot/prompts.py:13`、`:14`、`methods/singleshot/__init__.py:24`、`:33`、`:37`、`:44`，`methods/common.py:45`、`:65`（后三个路径相对该 worktree） | 删除 prompts 第 13–14 行两环境语义副本，单次生成追加统一说明并输出执行要求；将 `output_constraints(task_types=...)`、`validate_task_batch` 和 `GenerationBudget.finish(task_types=...)` 与更新后的公共接口统一；保留从五种题型自主选题、两题可同类型及一次调用，无额外探索或修订 |
+| `envexplore` | worktree，合并后必做；分支 `codex/envexplore`、`codex/envexplore-v2`；原分支 `.worktrees/envexplore/methods/envexplore/__init__.py:83`、`:100`、`:104`、`prompts.py:18`；v2 `.worktrees/envexplore-v2/methods/generation.py:5`、`:7`、`methods/envexplore/__init__.py:21`、`:38`，`experiments/runner.py:182`、`:194`（简写路径相对对应 worktree） | 原分支的工具生成追加统一说明、输出执行要求并使用共享查询租约，保留生成阶段只读限制；v2 删除 `GENERATION_RULES` 第 5 行字符串中的提交/持久化语义副本，保留事实规则，环境探索调用公共租约入口，生成绑定器保留固定初始策略与探索指导并追加统一能力；两个分支均按所选版本的原方法流程验收，计为一个方法 |
+
+## 公共接口与分支合并顺序
+
+先完成本计划五项任务，将 main 上三个方法、公共能力和执行要求校验、租约及并发调度落入 main；然后分别 rebase `codex/taskcraft-baseline`、`codex/singleshot`、`codex/envexplore`、`codex/envexplore-v2` 到更新后的 main，在各分支完成上表必做项与测试后再合并。分支之间不设未经确认的先后依赖，EnvExplore 两个版本分别核对并按选定版本合并。
+
+每个分支都改动 `methods/common.py`，rebase 时保留本方案的公共字段、能力约束和 `execution_requirement` 校验，逐项整合方法特有选择规则；禁止以分支旧 `common.py` 整文件覆盖新契约。
+
+SingleShot 的 `output_constraints(task_types=...)` 已与 main 的 `output_constraints(directions, *, max_questions, candidate_pool)` 分叉；其合并后必做项是同时统一 `output_constraints`、`validate_task_batch`、`GenerationBudget.finish` 和实验入口校验，公共字段与执行要求检查共用，选择规则分别处理。统一接口保留 main 参数，并增加互斥的 `task_types` 模式：
+
+```python
+def output_constraints(
+    directions: list[GenerationDirection] | None = None, *,
+    max_questions: int = 2, candidate_pool: bool = False,
+    task_types: list[TaskType] | None = None,
+) -> str: ...
+
+def validate_task_batch(
+    result: RunResult, directions: list[GenerationDirection] | None = None, *,
+    max_questions: int = 2, candidate_pool: bool = False,
+    task_types: list[TaskType] | None = None,
+) -> RunResult: ...
+```
+
+`task_types` 与 `directions`/`candidate_pool` 互斥；SingleShot 模式允许两个同类型问题，不能用 Workflow 的候选池每类最多一题规则替代。`GenerationBudget.finish` 保留原有 `output/status/error` 参数及方向路径，新增 `task_types` 关键字路径并委托同一个输出校验；`experiments/runner.py` 保留 SingleShot 的五种允许题型输入，按该模式校验输出，不提前抽样方向。main 本次实施不提前加入 SingleShot 的方法分派或改变现有选择规则。
 
 ## 任务 1：固定环境能力与生成要求
 
-**文件：** 修改 `contracts.py`、`methods/common.py`、两个已接入方法的实现与提示；新增 `environments/capabilities.py`、`tests/environment/test_capabilities.py`；修改 `tests/method/test_method.py`、`tests/method/test_workflow.py`。
+**文件：** 修改 `contracts.py`、`methods/common.py`、`methods/medevolve/{__init__,prompts}.py`、`methods/workflow/{__init__,prompts}.py`、`methods/selfgen/{__init__,prompts}.py`；新增 `environments/capabilities.py`、`tests/environment/test_capabilities.py`；修改 `tests/method/test_method.py`、`tests/method/test_workflow.py`、`tests/method/test_selfgen.py`。本任务直接覆盖 main 三个方法；另外三个方法按上表在分支合并时适配。
 
 **接口：**
 
@@ -86,7 +128,7 @@ def test_unknown_environment_has_no_assumed_capability():
         get_capabilities("unknown")
 ```
 
-生成测试捕获 `call_llm` 参数，分别断言 MedEvolve 的单次生成，以及 workflow 的定位、按题型生成、内部检查均收到同一个 `capability_instructions(trajectory.environment)`。使用同一替代输出检查两种方法都要求新生成题目的 `execution_requirement` 非空；更新现有生成测试的题目夹具，不改变题数或预算预期。方法测试中表示实际环境的 `test` 改为已接入环境名，纯类型解析夹具仍可以使用任意字符串。
+生成测试捕获 `call_llm` 参数，分别断言 MedEvolve 的单次生成、workflow 的定位/按题型生成/内部检查、selfgen 的初稿/自检/修订均收到同一个 `capability_instructions(trajectory.environment)`。对 main 三个方法使用相同的两环境能力测试矩阵，检查每道新生成或修订题目的 `execution_requirement` 非空，过滤后保留字段且通过题全部字段不变；selfgen 输入不再携带手写 `operation_semantics`。更新现有生成测试的题目夹具，不改变题数或预算预期。方法测试中表示实际环境的 `test` 改为已接入环境名，纯类型解析夹具仍可以使用任意字符串。
 
 - [ ] **2. 运行新增测试，确认能力模块缺失导致失败。**
 
@@ -115,11 +157,11 @@ def requirement_supported(name, requirement):
 
 `get_capabilities` 返回契约副本，未知环境抛出 `EnvironmentUnavailable`。固定中文说明明确查询能力、POST 是否持久化、不可要求的操作及三种执行要求的区别。
 
-MedEvolve 保持 `generate_tasks` 签名，从 `trajectory.environment` 取能力；workflow 保持签名，校验 `environment.name == trajectory.environment` 后取同一能力。将固定说明追加到角色指令，使轨迹、策略、探索输出不能覆盖它。环境探索与解题接入在任务 4 完成。
+MedEvolve 保持 `generate_tasks` 签名，从 `trajectory.environment` 取能力；workflow 与 selfgen 保持签名，校验 `environment.name == trajectory.environment` 后取同一能力。将固定说明追加到角色指令，使轨迹、策略、探索输出不能覆盖它。selfgen 在 `call` 包装器一次绑定能力说明，覆盖初稿、自检和修订，删除 `operation_semantics` 字段及其环境分支文案；`INPUT_RULES` 不再读取该字段。主方法提示中的处方规则仅保留临床要求和证据条件，selfgen 的 `_fact_rules` 保持事实规则提取，不从主方法或其他分支重新引入环境语义副本。环境探索与解题接入在任务 4 完成。
 
 生成提示要求模型根据题面填写执行要求：纯分析及查询为 `read_only`，只要求提交为 `submit_request`，要求资源真实创建或后续读取新增结果为 `database_write`。`methods/common.py` 的生成约束同步字段列表，`validate_task_batch` 拒绝新生成输出缺少要求；已保存的旧任务仍可解析，并在整体核验阶段补齐要求。
 
-新增失败分类用于能力不支持的题目，反馈明确该失败属于任务与环境不匹配，不作为临床难度提升。保持未实现方法的明确报错，不为本任务实现新的方法。
+新增失败分类用于能力不支持的题目，反馈明确该失败属于任务与环境不匹配，不作为临床难度提升。main 本次实施覆盖 `medevolve`、`workflow`、`selfgen`，不合入另外三个方法；`taskcraft`、`singleshot`、`envexplore` 已有 worktree 实现，其能力适配是合并验收的必做项。
 
 - [ ] **4. 运行能力和方法回归。**
 
@@ -127,7 +169,7 @@ MedEvolve 保持 `generate_tasks` 签名，从 `trajectory.environment` 取能�
 python -m pytest tests/environment/test_capabilities.py tests/method -q
 ```
 
-预期：两环境能力确定，两个已接入方法同等接收约束，原有调用数、题型及预算行为保持。
+预期：两环境能力确定，main 三个方法同等接收约束并输出执行要求，selfgen 的所有生成/自检/修订阶段覆盖统一说明，方法内不保留重复语义文案，原有调用数、题型及预算行为保持。
 
 - [ ] **5. 提交本任务的契约、提示与测试。**
 
@@ -530,7 +572,7 @@ python -m pytest tests/evaluation tests/method/test_method.py tests/integration/
 
 ## 任务 5：患者并发、结果归属与整体验证
 
-**文件：** 修改 `contracts.py`、`experiments/runner.py`、`configs/experiment.json`；新增 `experiments/concurrency.py`、`tests/experiment/test_concurrency.py`、`tests/environment/test_shared_live.py`；修改闭环、workflow 与 pipeline 测试的任务和环境夹具。
+**文件：** 修改 `contracts.py`、`experiments/runner.py`、`configs/experiment.json`、`docs/comparison-experiments/common/SPEC.md:46`；新增 `experiments/concurrency.py`、`tests/experiment/test_concurrency.py`、`tests/environment/test_shared_live.py`；修改闭环、workflow、selfgen 与 pipeline 测试的任务和环境夹具。
 
 **接口：**
 
@@ -603,10 +645,13 @@ worker 将生成结果、任务和评测结果提交给单一结果聚合器，�
 
 配置模板显式写 `patient_concurrency: 1`；使用者改为 5 可启用五患者并行，管理服务额度通过独立的 `MEDEVOLVE_MAX_INSTANCES` 设置，不在各方法配置里维护相互独立的容器上限。
 
+`docs/comparison-experiments/common/SPEC.md:46` 同步为：查询与模拟提交复用共享查询实例，真实写入任务和 PhysicianBench 试写探索使用独立种子实例，保留现有患者边界与决策点限制。
+
 - [ ] **4. 完成回归及不调用模型的真实环境检查。**
 
 ```bash
 python -m pytest tests/experiment tests/integration -q
+python -m pytest tests/method/test_method.py tests/method/test_workflow.py tests/method/test_selfgen.py -q
 python -m pytest tests --ignore=tests/environment/test_live_image.py --ignore=tests/environment/test_medagentbench_live.py --ignore=tests/environment/test_shared_live.py -q
 ```
 
@@ -630,4 +675,14 @@ MEDEVOLVE_MEDAGENTBENCH_TEST_IMAGE='<已加载的 MedAgentBench 不可变镜像 
 
 按五项任务顺序执行。每项完成后核对其接口、测试和提交，再进入下一项；不同时改动依赖尚未确定的模块。
 
-完成标准是固定能力说明覆盖所有已接入方法，五患者查询或模拟提交可共享实例并行执行，真实写入及试写探索隔离，总容器数受管理服务额度限制，结果与清理保持正确。
+本次 main 完成标准是固定能力说明和执行要求覆盖 `medevolve`、`workflow`、`selfgen`，五患者查询或模拟提交可共享实例并行执行，真实写入及试写探索隔离，总容器数受管理服务额度限制，结果与清理保持正确，公共 SPEC 与实例复用规则一致。
+
+### 合并后必做项验收
+
+| 方法 | rebase 后及合并前必须完成 | 验证文件 |
+| --- | --- | --- |
+| `taskcraft` | 适配清单中的 Ledger 能力注入、三类候选执行要求、共享查询租约全部接通；分支主方法第 44 行重复语义不带回 main；`methods/common.py` 保留新公共校验，保留方法预算和只读生成约束 | `tests/method/test_taskcraft.py`：捕获 atomic/width/depth 与内置核验指令、检查候选字段和筛选输出；补充共享租约创建/释放断言 |
+| `singleshot` | 删除 prompts 第 13–14 行语义副本；统一能力注入、执行要求、公共接口及实验入口校验；保留一次模型调用、自主选题、两题可同类型；与 Workflow 的 `max_questions/candidate_pool` 回归一起通过 | `tests/method/test_singleshot.py`、`tests/integration/test_singleshot_integration.py`，并回归 `tests/method/test_workflow.py` |
+| `envexplore` | 两分支均按适配清单核对，合并所选版本时接通统一能力、执行要求和对应租约路径；v2 `GENERATION_RULES` 中的语义副本不带回 main；保留所选版本的探索次数、策略绑定和方法预算 | 原分支 `tests/method/test_envexplore.py`；v2 另含 `tests/method/test_envexplore_environment.py`、`tests/method/test_generation_shared.py` |
+
+各分支验收均覆盖 PhysicianBench 与 MedAgentBench，检查所有相关生成阶段收到相同固定说明、每题执行要求经公共校验且内部筛选不丢字段；记录实际租约模式，不以生成阶段只读推定生成任务也是只读。六个方法均通过上述适配与验证后，才报告完整六方法覆盖；分支未合并时不将必做项标为已完成。
