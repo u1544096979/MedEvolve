@@ -15,6 +15,7 @@ from contracts import (
     RunResult,
     RuntimeConfig,
     TaskBatch,
+    TaskType,
 )
 from methods import workflow
 
@@ -24,6 +25,12 @@ def directions():
         GenerationDirection(task_type="诊断与解释", difficulty="整合纵向证据", weight=1),
         GenerationDirection(task_type="治疗规划", difficulty="整合纵向证据", weight=1),
     ]
+
+
+def directions_pool():
+    order: list[TaskType] = ["诊断与解释", "检查与风险分层", "治疗规划", "药物处方", "治疗重规划"]
+    return [GenerationDirection(task_type=task_type, difficulty="整合纵向证据", weight=1)
+            for task_type in order]
 
 
 def patient():
@@ -50,6 +57,13 @@ def completed(output, usage=None):
     return RunResult(output=output, trace=[{"raw": "response"}], usage=usage or {
         "model_turns": 1, "tool_calls": 0, "prompt_tokens": 10, "completion_tokens": 5,
     }, status="completed")
+
+
+def pool_selection():
+    return workflow.FocusSelection(focuses=[
+        dict(direction_index=0, clinical_focus="血压控制", source_ids=["Observation/o1"]),
+        dict(direction_index=3, clinical_focus="降压用药", source_ids=["MedicationRequest/m1"]),
+    ])
 
 
 def focus_selection():
@@ -80,6 +94,53 @@ def reviews(kept=(0,)):
 
 def substitute(results):
     return AsyncMock(side_effect=results)
+
+
+def test_selected_focuses_match_pool_and_reject_duplicates():
+    pool = directions_pool()
+    selection = pool_selection()
+
+    focuses = workflow._selected_focuses(selection, pool, patient())
+
+    assert [focus.direction_index for focus in focuses] == [0, 3]
+    assert focuses == selection.focuses
+    duplicate = selection.model_copy(update={"focuses": [selection.focuses[0]] * 2})
+    with pytest.raises(ValueError):
+        workflow._selected_focuses(duplicate, pool, patient())
+
+
+def test_selected_focuses_reject_three_focuses_missing_source_and_blank_topic():
+    pool = directions_pool()
+    selection = pool_selection()
+    third = dict(direction_index=2, clinical_focus="检查选择", source_ids=["Observation/o1"])
+    cases = [
+        selection.model_copy(update={"focuses": [*selection.focuses, third]}),
+        selection.model_copy(update={"focuses": [
+            selection.focuses[0],
+            selection.focuses[1].model_copy(update={"source_ids": ["Observation/missing"]}),
+        ]}),
+        selection.model_copy(update={"focuses": [
+            selection.focuses[0],
+            selection.focuses[1].model_copy(update={"clinical_focus": "   "}),
+        ]}),
+    ]
+
+    for case in cases:
+        with pytest.raises(ValueError):
+            workflow._selected_focuses(case, pool, patient())
+
+
+def test_selected_focuses_require_a_valid_task_pool():
+    selection = pool_selection()
+
+    with pytest.raises(ValueError):
+        workflow._selected_focuses(selection, directions(), patient())
+
+
+def test_locate_prompt_selects_by_fit_without_weight_sampling():
+    assert "分别为 0 和 1" not in workflow.LOCATE
+    assert "互不相同" in workflow.LOCATE
+    assert "权重" in workflow.LOCATE
 
 
 @pytest.mark.asyncio

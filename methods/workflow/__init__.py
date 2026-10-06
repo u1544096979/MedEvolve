@@ -22,7 +22,7 @@ __all__ = ["generate_tasks", "FocusSelection", "BatchReview"]
 
 
 class ClinicalFocus(BaseModel):
-    direction_index: int = Field(ge=0, le=1)
+    direction_index: int = Field(ge=0, le=4)
     clinical_focus: str
     source_ids: list[str]
 
@@ -64,6 +64,24 @@ def _focuses(selection: FocusSelection) -> list[ClinicalFocus]:
     if len(by_index) != 2 or set(by_index) != {0, 1}:
         raise ValueError("locate must return exactly one clinical focus per direction index")
     return [by_index[0], by_index[1]]
+
+
+def _selected_focuses(selection: FocusSelection, directions: list[GenerationDirection],
+                      trajectory: PatientTrajectory) -> list[ClinicalFocus]:
+    """Validate the two located task types against the candidate pool and trajectory."""
+    output_constraints(directions, candidate_pool=True)
+    focuses = selection.focuses
+    if len(focuses) != 2 or len({focus.direction_index for focus in focuses}) != 2:
+        raise ValueError("locate must select two distinct task types")
+    known = {source.source_id for source in trajectory.sources}
+    for focus in focuses:
+        if not 0 <= focus.direction_index < len(directions):
+            raise ValueError("focus index is outside candidate pool")
+        if not focus.clinical_focus.strip() or not focus.source_ids:
+            raise ValueError("focus requires a topic and evidence sources")
+        if set(focus.source_ids) - known:
+            raise ValueError("focus sources are absent from trajectory")
+    return focuses
 
 
 def _decisions(review: BatchReview, questions: list[GeneratedQuestion]) -> list[dict]:
