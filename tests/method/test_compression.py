@@ -34,6 +34,11 @@ def test_context_truncation_preserves_json_and_original_cache():
         compression_input(patient, model(100))
 
 
+def test_summary_preserves_partial_material_marker():
+    patient = trajectory().model_copy(update={"input_truncated": True})
+    assert json.loads(compression_input(patient, model(1000000)))["input_truncated"] is True
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failed", [False, True])
 async def test_compression_tool_one_call_scope_and_cost(monkeypatch, failed):
