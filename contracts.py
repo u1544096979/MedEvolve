@@ -34,6 +34,7 @@ class PatientTrajectory(BaseModel):
     environment: str
     text: str
     sources: list[Evidence]
+    input_truncated: bool = False
 
 
 class ExplorationGuidance(BaseModel):

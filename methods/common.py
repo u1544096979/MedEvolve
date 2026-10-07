@@ -156,6 +156,9 @@ class GenerationBudget:
         self.environment = environment
 
     def _instructions(self, instructions: str) -> str:
+        from runtime.context import PARTIAL_NOTE
+
+        instructions = f"{instructions}\n{PARTIAL_NOTE}"
         if self.environment is None:
             return instructions
         return f"{instructions}\n\n{capability_instructions(self.environment)}"

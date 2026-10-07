@@ -10,11 +10,15 @@ from agents import (
     RunConfig, RunHooks, Runner, Tool,
 )
 from agents.exceptions import AgentsException, MaxTurnsExceeded
+from agents.models.chatcmpl_converter import Converter
+from agents.run_config import ModelInputData
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from pydantic_core import to_jsonable_python
 
 from contracts import Budget, ModelConfig, RunResult
+from .context import (budget_entry, count_tokens, dumps, fit_history, input_limit,
+                      output_limit, prepare_input)
 
 
 _OPENCODE_SESSION = str(uuid4())
@@ -37,31 +41,32 @@ class _ToolBudgetExceeded(AgentsException):
 # 收尾调用可携带的工具结果上限（字符）：预算用尽后只靠已有结果作答。
 FINAL_ANSWER_CHARS = 120_000
 TOOL_RESULT_SNIPPET_CHARS = 4000
-
-
 async def _final_answer(*, client: AsyncOpenAI, model: ModelConfig, instructions: str,
                         input_text: str, trace: list[dict],
                         output_type: type[BaseModel]) -> RunResult:
     """轮次或工具预算用尽后的收尾调用：不再提供工具，只要求结构化答案。"""
-    digest = _tool_digest(trace)
-    payload = (
-        f"{input_text}\n\n"
+    ending = (
         "轮次或工具调用预算已用尽，不能再调用任何工具。\n"
         "只依据任务材料与下列已获得的工具结果，直接输出最终结构化答案；\n"
         "信息不足时按已有结果作答并说明限制，不要声称未验证的能力或未执行的操作。\n\n"
-        f"已获得的工具结果（可能被截断）：\n{digest or '（没有完成的工具结果）'}"
+        "已获得的工具结果（可能被截断）：\n"
     )
     note = ("\nReturn only a JSON object matching this schema:\n"
             + json.dumps(output_type.model_json_schema(), ensure_ascii=False))
+    input_text, entry = prepare_input(input_text, model,
+        instructions=instructions + note + ending, schema={})
+    base = count_tokens(instructions + note + input_text + ending, model)
+    digest = _tool_digest(trace, model=model, token_budget=input_limit(model) - base - 64)
+    payload = f"{input_text}\n\n{ending}{digest or '（没有完成的工具结果）'}"
+    entry["input_tokens_estimate"] = count_tokens(instructions + note + payload, model)
     messages = [{"role": model.instructions_role, "content": instructions + note},
                 {"role": "user", "content": payload}]
     usage = {"model_turns": 1, "tool_calls": 0}
-    trace_items = [{"type": "model_request", "stage": "final_answer", "messages": messages}]
+    trace_items = [entry, {"type": "model_request", "stage": "final_answer", "messages": messages}]
     response = await client.chat.completions.create(
         model=model.model, messages=messages,
         response_format={"type": "json_object"},
-        **({"max_tokens": model.max_output_tokens}
-           if model.max_output_tokens is not None else {}),
+        max_tokens=output_limit(model),
     )
     trace_items.append({"type": "model_response", "stage": "final_answer",
                         "response": response.model_dump(mode="json")})
@@ -73,7 +78,8 @@ async def _final_answer(*, client: AsyncOpenAI, model: ModelConfig, instructions
     return RunResult(output=output, trace=trace_items, usage=usage, status="completed")
 
 
-def _tool_digest(trace: list[dict]) -> str:
+def _tool_digest(trace: list[dict], *, model: ModelConfig | None = None,
+                 token_budget: int | None = None) -> str:
     """按时间倒序取工具结果，超出上限即停，最后按时间顺序拼接。"""
     outputs = {item.get("call_id"): item.get("output") for item in trace
                if item.get("type") == "tool_output"}
@@ -86,6 +92,8 @@ def _tool_digest(trace: list[dict]) -> str:
             text = text[:TOOL_RESULT_SNIPPET_CHARS] + "… [截断]"
         chunk = f"{name}({arguments}) -> {text}"
         if used + len(chunk) > FINAL_ANSWER_CHARS:
+            break
+        if model is not None and count_tokens("\n".join([*chunks, chunk]), model) > token_budget:
             break
         chunks.append(chunk)
         used += len(chunk)
@@ -134,6 +142,9 @@ async def call_llm(*, instructions: str, input_text: str,
     trace = []
     usage = {"model_turns": 0, "tool_calls": 0}
     try:
+        input_text, entry = prepare_input(input_text, model, instructions=instructions,
+                                          schema=output_type.model_json_schema())
+        trace.append(entry)
         async with _client(model) as client:
             messages = [
                 {"role": model.instructions_role, "content": instructions +
@@ -146,7 +157,7 @@ async def call_llm(*, instructions: str, input_text: str,
             response = await client.chat.completions.create(
                 model=model.model, messages=messages,
                 response_format={"type": "json_object"},
-                **({"max_tokens": model.max_output_tokens} if model.max_output_tokens is not None else {}),
+                max_tokens=output_limit(model),
             )
             trace.append({"type": "model_response", "response": response.model_dump(mode="json")})
             if response.usage is not None:
@@ -223,6 +234,31 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
             raise ValueError("Chat Completions runtime supports only SDK FunctionTool tools")
         if budget.max_model_turns == 0:
             raise MaxTurnsExceeded("Model turn budget exhausted")
+        tool_schemas = [Converter.tool_to_openai(tool) for tool in tools]
+        input_text, entry = prepare_input(input_text, model, instructions=instructions,
+            schema=output_type.model_json_schema(), tools=tool_schemas)
+        records.trace.append(entry)
+
+        def filter_input(data):
+            model_data = data.model_data
+            fixed = count_tokens((model_data.instructions or "") + dumps(tool_schemas)
+                                 + dumps(output_type.model_json_schema()), model)
+            seen_output = False
+
+            def group_start(item):
+                nonlocal seen_output
+                output = item.get("type") == "function_call_output"
+                start = seen_output and not output
+                seen_output = output
+                return start
+
+            items, dropped = fit_history(model_data.input, model, fixed_tokens=fixed,
+                prefix_count=2 if model.instructions_role == "user" else 1,
+                group_start=group_start)
+            records.trace.append(budget_entry(model, fixed + count_tokens(dumps(items), model),
+                                               history_items_dropped=dropped))
+            return ModelInputData(input=items, instructions=model_data.instructions)
+
         async with _client(model) as client:
             agent_instructions = instructions + (
                 "\n完成工具查询后，最终输出只返回符合以下 schema 的 JSON 对象，不加 Markdown 或正文。"
@@ -245,6 +281,7 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                 )(output_type, strict_json_schema=False),
                 model=OpenAIChatCompletionsModel(model=model.model, openai_client=client),
                 model_settings=ModelSettings(
+                    max_tokens=output_limit(model),
                     parallel_tool_calls=model.parallel_tool_calls,
                     extra_body={"response_format": {"type": "json_object"}}
                     if urlparse(model.base_url or "").hostname == "opencode.ai" else None,
@@ -256,7 +293,7 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
             try:
                 result = await Runner.run(
                     agent, agent_input, hooks=records, max_turns=loop_turns,
-                    run_config=RunConfig(tracing_disabled=True),
+                    run_config=RunConfig(tracing_disabled=True, call_model_input_filter=filter_input),
                 )
                 output = output_type.model_validate(result.final_output).model_dump(mode="json")
             except (MaxTurnsExceeded, _ToolBudgetExceeded) as exc:

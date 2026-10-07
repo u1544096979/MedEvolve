@@ -49,6 +49,7 @@ def _trajectory_input(trajectory: PatientTrajectory) -> dict:
         "environment": trajectory.environment,
         "text": trajectory.text,
         "sources": [{"source_id": source.source_id} for source in trajectory.sources],
+        "input_truncated": trajectory.input_truncated,
     }
 
 

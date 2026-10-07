@@ -48,6 +48,8 @@ OPENLUX_MODEL = {
     "api_key_env": "OPENLUX_API_KEY",
     "instructions_role": "system",
     "parallel_tool_calls": True,
+    "context_window": 128000,
+    "max_output_tokens": 16384,
 }
 EVALUATION_BUDGETS = {
     role: (30, 200) for role in ("verifier", "quality", "difficulty", "solver", "completion")

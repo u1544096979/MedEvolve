@@ -24,6 +24,7 @@ from environments.capabilities import capability_instructions, read_only_scope_i
 from runtime import call_llm, run_agent
 from methods.common import USAGE_FIELDS, normalize_usage, output_constraints, validate_task_batch
 from methods.generation import trajectory_payload
+from runtime.context import PARTIAL_NOTE
 from .compression import COMPRESSION, CompressedTrajectory, compression_input
 
 from .prompts import (
@@ -84,12 +85,12 @@ async def explore_data(
         model = runtime.models.get("trajectory_compressor")
         if model is None:
             return json.dumps({"error": "runtime.models.trajectory_compressor is not configured"})
+        environment = cache[patient_id].environment
+        instructions = COMPRESSION + "\n\n" + capability_instructions(environment)
         try:
-            input_text = compression_input(cache[patient_id], model)
+            input_text = compression_input(cache[patient_id], model, instructions=instructions)
         except ValueError as exc:
             return json.dumps({"error": str(exc)})
-        environment = trajectories[0].environment if trajectories else None
-        instructions = COMPRESSION + ("\n\n" + capability_instructions(environment) if environment else "")
         run = await call_llm(instructions=instructions, input_text=input_text,
                              output_type=CompressedTrajectory, model=model)
         compression_runs.append({"patient_id": patient_id, "result": run.model_dump(mode="json")})
@@ -176,7 +177,7 @@ async def generate_tasks(
         raise ValueError("directions must contain exactly two generation positions")
     result = await call_llm(
         instructions=GENERATION + "\n" + output_constraints(directions) + "\n\n"
-                     + capability_instructions(trajectory.environment),
+                     + capability_instructions(trajectory.environment) + "\n" + PARTIAL_NOTE,
         input_text=json.dumps(
             {
                 "trajectory": _trajectory_input(trajectory),

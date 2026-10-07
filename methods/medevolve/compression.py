@@ -5,6 +5,8 @@ import json
 from pydantic import BaseModel
 
 from contracts import ModelConfig, PatientTrajectory
+from environments.fitting import fit_trajectory
+from runtime.context import count_tokens, dumps, input_limit
 
 
 class CompressedTrajectory(BaseModel):
@@ -19,28 +21,25 @@ COMPRESSION = """压缩患者轨迹，供数据探索理解数据组织和病程
 """
 
 
-def compression_input(trajectory: PatientTrajectory, model: ModelConfig) -> str:
-    if model.context_window is None or model.max_output_tokens is None:
-        raise ValueError("trajectory_compressor requires context_window and max_output_tokens")
-    instructions = (COMPRESSION + "\nReturn only a JSON object matching this schema:\n"
-                    + json.dumps(CompressedTrajectory.model_json_schema(), ensure_ascii=False))
-    # UTF-8 byte length conservatively bounds byte-based text tokenization.
-    available = (model.context_window - model.max_output_tokens
-                 - len(instructions.encode("utf-8")) - 4096)
-
-    def payload(length):
-        return json.dumps({"patient_id": trajectory.patient_id,
-                           "environment": trajectory.environment,
-                           "input_truncated": length < len(trajectory.text),
-                           "text": trajectory.text[:length]}, ensure_ascii=False)
-
-    if len(payload(0).encode("utf-8")) > available:
+def compression_input(trajectory: PatientTrajectory, model: ModelConfig, *,
+                      instructions: str = COMPRESSION) -> str:
+    schema_instructions = (instructions + "\nReturn only a JSON object matching this schema:\n"
+                           + json.dumps(CompressedTrajectory.model_json_schema(), ensure_ascii=False))
+    available = input_limit(model) - count_tokens(schema_instructions, model)
+    if available <= 0:
         raise ValueError("Compressor context window leaves no room for patient trajectory")
-    low, high = 0, len(trajectory.text)
-    while low < high:
-        middle = (low + high + 1) // 2
-        if len(payload(middle).encode("utf-8")) <= available:
-            low = middle
-        else:
-            high = middle - 1
-    return payload(low)
+
+    def payload(value: PatientTrajectory) -> str:
+        return dumps({
+            "patient_id": value.patient_id,
+            "environment": value.environment,
+            "input_truncated": value.input_truncated,
+            "text": value.text,
+            "sources": [source.model_dump(mode="json") for source in value.sources],
+        })
+
+    fitted = fit_trajectory(
+        trajectory, available,
+        measure=lambda value: count_tokens(payload(value), model),
+    )
+    return payload(fitted)

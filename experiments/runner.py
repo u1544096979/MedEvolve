@@ -15,7 +15,7 @@ from contracts import (
     TaskBatch, TaskType,
 )
 
-from environments.fitting import fit_trajectory, generation_budget_chars
+from runtime.context import fit_patient, input_limit
 from methods.common import normalize_usage, output_constraints, validate_task_batch
 from .scheduling import run_generation_evaluation
 
@@ -209,19 +209,25 @@ async def run_experiment(config: ExperimentConfig) -> None:
         # 生成输入受模型上下文限制，超预算患者按记录优先级裁剪；评测仍用原始轨迹。
         # 数据探索会把轨迹作为工具结果读入，同一患者可能被读多次，因此用更小的预算。
         generator_model = config.runtime.models["generator"]
-        budget = generation_budget_chars(
-            context_tokens=generator_model.context_window or 128000,
-            output_tokens=generator_model.max_output_tokens or 16384,
-        )
-        exploration_budget = budget // 2
-        generation, exploration = {}, {}
+        generation, exploration, generation_errors = {}, {}, {}
         for patient, trajectory in trajectories.items():
-            fitted = fit_trajectory(trajectory, budget)
+            try:
+                fitted = fit_patient(trajectory, generator_model)
+            except ValueError as exc:
+                generation_errors[patient] = str(exc)
+                fitted = trajectory
             if fitted is not trajectory:
                 _save(root / "fitted_trajectories" / f"{patient}.json",
                       fitted.model_dump(mode="json"))
             generation[patient] = fitted
-            exploration[patient] = fit_trajectory(trajectory, exploration_budget)
+            if config.method == "medevolve":
+                explorer_model = config.runtime.models.get("data_explorer", generator_model)
+                try:
+                    exploration[patient] = fit_patient(trajectory, explorer_model,
+                                                       input_limit(explorer_model) // 2)
+                except ValueError:
+                    # 摘要工具仍可读取原始缓存；原始病历不被破坏。
+                    exploration[patient] = trajectory
 
         guidance = None
         if config.guidance_path:
@@ -297,6 +303,9 @@ async def run_experiment(config: ExperimentConfig) -> None:
                 stage = f"{folder.name}/generate/{patient_index}"
 
                 async def generate_batch():
+                    if patient in generation_errors:
+                        return RunResult(trace=[], usage={"model_turns": 0, "tool_calls": 0},
+                                         status="failed", error=generation_errors[patient])
                     if config.runtime.budgets["generator"].max_model_turns == 0:
                         return RunResult(trace=[], usage={}, status="budget_exhausted",
                                          error="Generator model budget exhausted")
