@@ -24,6 +24,7 @@ from environments.capabilities import capability_instructions, read_only_scope_i
 from runtime import call_llm, run_agent
 from methods.common import USAGE_FIELDS, normalize_usage, output_constraints, validate_task_batch
 from methods.generation import trajectory_payload
+from runtime.context import PARTIAL_NOTE
 from .compression import COMPRESSION, CompressedTrajectory, compression_input
 
 from .prompts import (
@@ -176,7 +177,7 @@ async def generate_tasks(
         raise ValueError("directions must contain exactly two generation positions")
     result = await call_llm(
         instructions=GENERATION + "\n" + output_constraints(directions) + "\n\n"
-                     + capability_instructions(trajectory.environment),
+                     + capability_instructions(trajectory.environment) + "\n" + PARTIAL_NOTE,
         input_text=json.dumps(
             {
                 "trajectory": _trajectory_input(trajectory),

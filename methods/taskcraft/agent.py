@@ -18,6 +18,7 @@ import re
 from agents.tool_context import ToolContext
 
 from contracts import RunResult, SolverAnswer
+from runtime.context import HISTORY_NOTE, count_tokens, dumps, input_limit
 
 from .environment import is_native
 from .schemas import (
@@ -228,6 +229,33 @@ class _SearchRun:
     # -------------------------------------------------------------- 请求端
     async def request(self, name: str, *, kind: str, step: int, instructions: str,
                       input_text: str, output_type: type):
+        model = self.ledger.budget.model
+        fixed = count_tokens(self.ledger.budget._instructions(instructions)
+                             + dumps(output_type.model_json_schema()), model)
+        if fixed + count_tokens(input_text, model) > input_limit(model):
+            # 原始记忆保留在调用记录中；模型只读任务、当前规划与近期完整步骤。
+            for render in (_memory_messages, _memory_string):
+                history = render(self.memory)
+                if history not in input_text:
+                    continue
+                protected = {0, len(self.memory) - 1}
+                planning = [index for index, item in enumerate(self.memory)
+                            if item["kind"] in {"planning", "reflection"}]
+                if planning:
+                    protected.add(planning[-1])
+                kept = list(range(len(self.memory)))
+                for index in range(len(self.memory)):
+                    if index in protected:
+                        continue
+                    kept.remove(index)
+                    candidate = input_text.replace(history, HISTORY_NOTE + "\n" + render(
+                        [self.memory[number] for number in kept]), 1)
+                    if fixed + count_tokens(candidate, model) <= input_limit(model):
+                        input_text = candidate
+                        self.trace.append({"type": "context_history", "stage": name,
+                                           "steps_dropped": len(self.memory) - len(kept)})
+                        break
+                break
         run = await self.ledger.llm(f"{self.stage}/{name}", instructions=instructions,
                                     input_text=input_text, output_type=output_type)
         self._bill(run)

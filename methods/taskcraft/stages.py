@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from contracts import Evidence, GeneratedQuestion, PatientTrajectory
+from runtime.context import count_tokens, dumps, input_limit
 from pydantic import BaseModel
 
 from . import prompts
@@ -74,43 +75,58 @@ class Candidate:
     detail: dict = field(default_factory=dict)
 
 
-def split_text(text: str, chunk_size: int) -> list[str]:
+def split_text(text: str, chunk_size: int, *, measure=len) -> list[str]:
     """移植 split_text_intelligently：按分隔符优先级切分，不引入重叠。"""
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
-    return _split(text, _SEPARATORS, chunk_size)
+    return _split(text, _SEPARATORS, chunk_size, measure)
 
 
-def _split(text: str, separators: tuple[str, ...], chunk_size: int) -> list[str]:
+def _split(text: str, separators: tuple[str, ...], chunk_size: int, measure) -> list[str]:
     if not text:
         return []
-    if len(text) <= chunk_size or not separators:
-        return [text] if len(text) <= chunk_size else _hard_split(text, chunk_size)
+    if measure(text) <= chunk_size or not separators:
+        return [text] if measure(text) <= chunk_size else _hard_split(text, chunk_size, measure)
     separator, rest = separators[0], separators[1:]
     if separator == "":
-        return _hard_split(text, chunk_size)
+        return _hard_split(text, chunk_size, measure)
     chunks, buffer = [], ""
     for part in text.split(separator):
         if not part:
             continue
         joined = f"{buffer}{separator}{part}" if buffer else part
-        if len(joined) <= chunk_size:
+        if measure(joined) <= chunk_size:
             buffer = joined
             continue
         if buffer:
             chunks.append(buffer)
             buffer = ""
-        if len(part) <= chunk_size:
+        if measure(part) <= chunk_size:
             buffer = part
         else:
-            chunks.extend(_split(part, rest, chunk_size))
+            chunks.extend(_split(part, rest, chunk_size, measure))
     if buffer:
         chunks.append(buffer)
     return chunks
 
 
-def _hard_split(text: str, chunk_size: int) -> list[str]:
-    return [text[index:index + chunk_size] for index in range(0, len(text), chunk_size)]
+def _hard_split(text: str, chunk_size: int, measure) -> list[str]:
+    if measure is len:
+        return [text[index:index + chunk_size] for index in range(0, len(text), chunk_size)]
+    chunks = []
+    while text:
+        low, high = 0, len(text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            if measure(text[:middle]) <= chunk_size:
+                low = middle
+            else:
+                high = middle - 1
+        if low == 0:
+            raise ValueError("Model input budget cannot hold a single text character")
+        chunks.append(text[:low])
+        text = text[low:]
+    return chunks
 
 
 def _status(run) -> str:
@@ -235,6 +251,13 @@ class Pipeline:
     # ------------------------------------------------------------------ 原子生成
     async def atomic(self) -> list[Candidate]:
         chunks = split_text(self.trajectory.text, self.parameters.chunk_size)
+        model = self.ledger.budget.model
+        fixed = (self.ledger.budget._instructions(prompts.conclusion_extraction_prompt())
+                 + dumps(ConclusionList.model_json_schema())
+                 + "The document content to be processed is as follows: ")
+        available = input_limit(model) - count_tokens(fixed, model) - 256
+        chunks = [part for chunk in chunks for part in split_text(
+            chunk, available, measure=lambda text: count_tokens(text, model))]
         self.record("atomic/input", chunks=len(chunks), characters=len(self.trajectory.text))
         conclusions = []
         for index, chunk in enumerate(chunks):

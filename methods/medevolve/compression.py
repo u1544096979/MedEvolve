@@ -31,7 +31,7 @@ def compression_input(trajectory: PatientTrajectory, model: ModelConfig) -> str:
     def payload(length):
         return json.dumps({"patient_id": trajectory.patient_id,
                            "environment": trajectory.environment,
-                           "input_truncated": length < len(trajectory.text),
+                           "input_truncated": trajectory.input_truncated or length < len(trajectory.text),
                            "text": trajectory.text[:length]}, ensure_ascii=False)
 
     if len(payload(0).encode("utf-8")) > available:
