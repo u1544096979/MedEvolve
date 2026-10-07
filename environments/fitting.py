@@ -19,8 +19,8 @@ TYPE_PRIORITY = (
 )
 # 每条来源在 JSON 输入中的固定开销：source_id、字段名与转义余量。
 SOURCE_OVERHEAD_CHARS = 64
-# 行式轨迹里正文按记录平摊的估算偏差，先用留有余量的预算选择记录。
-LINE_MODE_MARGIN = 0.9
+# 预算收敛的最大轮数；每轮用实测体积修正目标，最后一轮之后按优先级硬裁剪。
+FIT_ROUNDS = 4
 
 
 def _priority(resource_type: str) -> tuple[int, str]:
@@ -33,7 +33,7 @@ def payload_chars(trajectory: PatientTrajectory) -> int:
     return len(json.dumps(trajectory.model_dump(mode="json"), ensure_ascii=False))
 
 
-def _select(records: list[dict], budget: int, always_keep: set[str]) -> list[dict]:
+def _select(records: list[dict], budget: int) -> list[dict]:
     """优先保留关键类型与轨迹中靠后的记录，返回选中的记录。"""
     kept: list[dict] = []
     used = 0
@@ -48,14 +48,14 @@ def _select(records: list[dict], budget: int, always_keep: set[str]) -> list[dic
 
     # 患者主记录无条件保留：缺它时任务没有对象，后续记录也失去归属。
     for record in records:
-        if record["type"] in always_keep:
+        if record["type"] == "Patient":
             kept.append(record)
             used += record["cost"]
 
     by_type: dict[str, list[dict]] = {}
     for record in records:
         by_type.setdefault(record["type"], []).append(record)
-    remaining = [resource_type for resource_type in by_type if resource_type not in always_keep]
+    remaining = [resource_type for resource_type in by_type if resource_type != "Patient"]
 
     # 一轮均分：总量不超过当前均分的类型整类保留，剩余预算留给更大的类型。
     while remaining:
@@ -76,6 +76,19 @@ def _select(records: list[dict], budget: int, always_keep: set[str]) -> list[dic
     return kept
 
 
+def _preference(record: dict) -> tuple:
+    """裁剪顺序：关键类型优先，同类内轨迹中靠后的记录优先。"""
+    return (*_priority(record["type"]), -record["order"])
+
+
+def _trim(records: list[dict], selected: set[int], budget: int, size_of) -> set[int]:
+    """按优先级逐条剔除，直到实测体积进入预算；患者主记录始终保留。"""
+    order = sorted(selected, key=lambda index: _preference(records[index]))
+    while len(order) > 1 and size_of(set(order)) > budget:
+        order.pop()
+    return set(order)
+
+
 def _records_for_blocks(blocks: list[str], sources: list[Evidence]) -> list[dict]:
     return [{"index": index, "type": source.source_id.split("/", 1)[0],
              "cost": len(block) + len(source.statement) + SOURCE_OVERHEAD_CHARS, "order": index}
@@ -85,13 +98,26 @@ def _records_for_blocks(blocks: list[str], sources: list[Evidence]) -> list[dict
 def _fit_paragraphs(trajectory: PatientTrajectory, blocks: list[str],
                     sources: list[Evidence], budget: int) -> PatientTrajectory:
     records = _records_for_blocks(blocks, sources)
-    selected = sorted(record["index"] for record in _select(records, budget, {"Patient"}))
-    return PatientTrajectory(
-        patient_id=trajectory.patient_id,
-        environment=trajectory.environment,
-        text="\n\n".join(blocks[index] for index in selected),
-        sources=[sources[index] for index in selected],
-    )
+
+    def build(selected: set[int]) -> PatientTrajectory:
+        order = sorted(selected)
+        return PatientTrajectory(
+            patient_id=trajectory.patient_id, environment=trajectory.environment,
+            text="\n\n".join(blocks[index] for index in order),
+            sources=[sources[index] for index in order],
+        )
+
+    selected = {record["index"] for record in _select(records, budget)}
+    for _ in range(FIT_ROUNDS):
+        candidate = build(selected)
+        size = payload_chars(candidate)
+        if size <= budget:
+            return candidate
+        estimate = sum(records[index]["cost"] for index in selected)
+        selected = {record["index"] for record in
+                    _select(records, max(int(budget * estimate / max(size, 1)), 1))}
+    return build(_trim(records, selected, budget,
+                       lambda indexes: payload_chars(build(indexes))))
 
 
 def _ids_in_line(line: str, known: set[str]) -> list[str]:
@@ -108,7 +134,6 @@ def _fit_lines(trajectory: PatientTrajectory, budget: int) -> PatientTrajectory:
     lines = trajectory.text.split("\n")
     sources = list(trajectory.sources)
     known = {source.source_id for source in sources}
-    text_share = max(len(trajectory.text) // max(len(sources), 1), 0)
     # 行首记录是这行呈现的对象，行内的其它 id 只是引用；按行首记录决定去留，
     # 否则保留一条被引用的记录会连带保留大量引用它的行。
     primary = []
@@ -125,25 +150,27 @@ def _fit_lines(trajectory: PatientTrajectory, budget: int) -> PatientTrajectory:
                         "cost": len(source.statement) + SOURCE_OVERHEAD_CHARS
                         + sum(len(lines[number]) for number in line_numbers),
                         "order": line_numbers[0], "lines": line_numbers})
-    retained = sources
-    text = trajectory.text
-    candidate = trajectory
-    target = int(budget * LINE_MODE_MARGIN)
-    for _ in range(3):
-        selected = _select(records, target, {"Patient"})
-        kept_ids = {sources[record["index"]].source_id for record in selected}
-        text = "\n".join(line for number, line in enumerate(lines)
-                         if primary[number] is None or primary[number] in kept_ids)
-        retained = [sources[record["index"]] for record in
-                    sorted(selected, key=lambda item: item["index"])]
-        candidate = PatientTrajectory(
+
+    def build(selected: set[int]) -> PatientTrajectory:
+        kept = {sources[index].source_id for index in selected}
+        return PatientTrajectory(
             patient_id=trajectory.patient_id, environment=trajectory.environment,
-            text=text, sources=retained,
+            text="\n".join(line for number, line in enumerate(lines)
+                           if primary[number] is None or primary[number] in kept),
+            sources=[source for index, source in enumerate(sources) if index in selected],
         )
-        if payload_chars(candidate) <= budget:
+
+    selected = {record["index"] for record in _select(records, budget)}
+    for _ in range(FIT_ROUNDS):
+        candidate = build(selected)
+        size = payload_chars(candidate)
+        if size <= budget:
             return candidate
-        target = max(int(target * budget / payload_chars(candidate) * 0.95), 1)
-    return candidate
+        estimate = sum(records[index]["cost"] for index in selected)
+        selected = {record["index"] for record in
+                    _select(records, max(int(budget * estimate / max(size, 1)), 1))}
+    return build(_trim(records, selected, budget,
+                       lambda indexes: payload_chars(build(indexes))))
 
 
 def fit_trajectory(trajectory: PatientTrajectory, budget_chars: int) -> PatientTrajectory:
