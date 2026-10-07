@@ -118,6 +118,7 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 | 机制验收 | `configs/taskcraft-mechanism-physicianbench.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-physicianbench.json` 复制，只改 `run_id`、`output_dir`、该预算 |
 | 机制验收 | `configs/taskcraft-mechanism-medagentbench.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-medagentbench.json` 复制，只改同三处 |
 | 机制验收 | `configs/taskcraft-mechanism-physicianbench-rerun3.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-mechanism-physicianbench.json` 复制，只改 `run_id`、`output_dir` |
+| 机制验收 | `configs/taskcraft-mechanism-physicianbench-rerun4.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-mechanism-physicianbench.json` 复制，只改 `output_dir` |
 | 机制验收 | `configs/taskcraft-mechanism-medagentbench-rerun.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-mechanism-medagentbench.json` 复制，只改同两处 |
 | 公共比较 | `configs/taskcraft-physicianbench.json` | 8 轮 / 40 次工具 | 冻结公共值，未改动 |
 | 公共比较 | `configs/taskcraft-medagentbench.json` | 1 轮 / 0 次工具 | 冻结公共值，未改动 |
@@ -134,7 +135,16 @@ MEDEVOLVE_TASKCRAFT_LIVE_CONFIG=<机制配置> pytest tests/method/test_taskcraf
 
 ### 5.1 PhysicianBench 机制验收
 
-参考运行目录 `outputs/taskcraft-mechanism-physicianbench-rerun3`，患者 `MRN4460967357`，种子 `fhir-full:v1`，`gpt-4o-mini`，机制预算 800 轮 / 800 次工具，墙钟 13 分 37 秒。
+当前实现上的 PhysicianBench 机制验收有两次独立采样，患者、种子、模型与机制预算相同：`MRN4460967357`、`fhir-full:v1`、`gpt-4o-mini`、800 轮 / 800 次工具。两次都在预算内自行结束（266 与 331 模型轮，上限 800），不是预算截断；两次的候选数不同，差异来自采样方差，不是一个样本就能代表的稳定结果。两次运行之间方法代码只有注释里的源码引文行号变化（`8bf4849`），行为一致。
+
+| 运行目录 | 实现提交 | 生成状态 | atomic | depth | width | 通过的阶段 | 墙钟 |
+|---|---|---|---|---|---|---|---|
+| `outputs/taskcraft-mechanism-physicianbench-rerun3` | `5a771a5` | completed，`error=null` | 2 | 0 | 0 | atomic | 13 分 37 秒 |
+| `outputs/taskcraft-mechanism-physicianbench-rerun4` | `0f78e13` | completed，`error=null` | 7 | 0 | 4 | atomic、width | 17 分 02 秒 |
+
+阶段是否通过按 `tests/method/test_taskcraft_live.py` 的合同判据：每阶段至少一个带非空参考答案与可回查证据的候选，非原子候选须带父题，`completed` 加空批不算通过。两次运行的阶段断言都失败在 `depth`（判据按 atomic、depth、width 的顺序逐阶段检查），所以 rerun4 的 `width` 没有被断言直接覆盖；其候选满足同一判据：每题都有非空参考答案与两个父题，证据来源是已通过核验的 7 条原子来源的子集。`depth` 在两次采样里都是零候选，`atomic` 两次都通过，`width` 在 rerun4 通过、在 rerun3 未通过。
+
+rerun3 明细（该次采样的 depth 与 width 都是零候选）：
 
 | 项 | 数值 |
 |---|---|
@@ -150,11 +160,28 @@ MEDEVOLVE_TASKCRAFT_LIVE_CONFIG=<机制配置> pytest tests/method/test_taskcraf
 | 实现提交 | `5a771a5`（分支 `codex/taskcraft-baseline`，运行于 05:55 开始、06:09 结束） |
 | 作者源码基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
 
-阶段结论：`atomic` 产出带参考答案与可回查证据的真实候选；`depth` 与 `width` 都没有通过验收，接纳候选均为 0。真实运行的阶段断言在 `depth` 上失败（`1 failed in 816.83s`），产物在断言前落盘。未通过的具体失败类别：
+rerun3 阶段结论：`atomic` 产出带参考答案与可回查证据的真实候选；`depth` 与 `width` 都没有通过验收，接纳候选均为 0。真实运行的阶段断言在 `depth` 上失败（`1 failed in 816.83s`），产物在断言前落盘。未通过的具体失败类别：
 
 1. `depth` 反向检索空响应。15 次 action 请求中 4 次返回空 action 对象 `{"tool_calls": [], "final_answer": null}`，结构化输出下记为生成失败 `action response carries no tool call`，取不到 `identifier`/`relation`，因此没有 superset。
 2. `depth` superset 提案全部被拒。4 次提案的 identifier 为空或为凭空构造的容器（`Patient's problem list`、`Phase of treatment for Condition/2571`、`Current patient's consultation phase`）。
 3. `width` 可分解性检查未通过。唯一的合并组在 `width/decompose` 上被判 `state != 1`，保留 0 组。
+
+rerun4 明细（该次采样的 depth 为零候选，width 产出 4 题）：
+
+| 项 | 数值 |
+|---|---|
+| 生成状态 | completed，`error=null`；331 模型轮 / 50 次工具调用 / 815 408 tokens（输入 774 880，输出 40 528） |
+| 候选数 | atomic 7，depth 0，width 4 |
+| 分支顺序 | `["width", "depth"]`（派生种子决定） |
+| 原子阶段 | 4 块文本、54 708 字符；chunk 0 抽到 43 条结论，候选上限 20；13 次出题因题型超出请求方向被拒，其余 7 题生成并全部通过核验（`agent_score` 1.0、0.67 各 1 题，0.0 五题） |
+| 宽度阶段 | 合并 4 组，可分解性检查保留 4 组，产出 4 题；每题两个父题，参考答案为两个父题答案的列表，证据为 `Condition/2571`、`Condition/2567` 等真实来源 |
+| 深度阶段 | 7 道父题各 4 次尝试全部失败；17 次反向检索：3 次成功、14 次硬失败（全部为 `action response carries no tool call`）；11 次 superset 提案全部被 `is_superset_valid` 拒绝（identifier 多为 `active problem list`、`Problem List for Patient` 一类容器）；3 次核验；`depth/result.extended=0` |
+| 最终选题 | 1 题（原子题；其余按 `task_type_quota_exhausted` 未进入） |
+| 无已知 token 的请求 | 0 次（`runs_without_known_tokens=0`） |
+| 实现提交 | `0f78e13`（运行于当前分支，墙钟 17 分 02 秒；方法代码与 `5a771a5` 只差注释引文行号） |
+| 作者源码基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
+
+rerun4 失败的阶段只有 `depth`，失败类别与 rerun3 同类：反向检索空 action 响应、superset 提案被拒、父题扩展在 `max_hops` 内没有走出一条有效链路。真实运行的阶段断言在 `depth` 上失败（`1 failed in 1021.82s`），产物在断言前落盘。
 
 修复前的 PhysicianBench 机制运行目录：
 
