@@ -16,7 +16,7 @@ from pathlib import Path
 BASELINES = ("singleshot", "selfgen", "workflow", "taskcraft", "envexplore")
 # 每个环境的并发与容器预算：PhysicianBench 解题要独立实例，其余环境整轮共用一个实例。
 SETTINGS = {
-    "physicianbench": {"MEDEVOLVE_RUN_CONCURRENCY": "4", "MEDEVOLVE_MAX_INSTANCES": "3"},
+    "physicianbench": {"MEDEVOLVE_RUN_CONCURRENCY": "6", "MEDEVOLVE_MAX_INSTANCES": "4"},
     "medagentbench": {"MEDEVOLVE_RUN_CONCURRENCY": "6", "MEDEVOLVE_MAX_INSTANCES": "2"},
     "fhir-agentbench": {"MEDEVOLVE_RUN_CONCURRENCY": "6", "MEDEVOLVE_MAX_INSTANCES": "1"},
 }
