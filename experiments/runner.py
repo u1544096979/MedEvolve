@@ -112,6 +112,8 @@ async def run_experiment(config: ExperimentConfig) -> None:
 
     root = Path(config.output_dir)
     root.mkdir(parents=True, exist_ok=True)
+    if config.guidance_path and not Path(config.guidance_path).exists():
+        raise ValueError(f"guidance_path does not exist: {config.guidance_path}")
     if (root / "config.json").exists():
         raise ValueError("Run directory already contains a run; choose a new output_dir")
     _save(root / "config.json", config.model_dump(mode="json"))
@@ -165,7 +167,12 @@ async def run_experiment(config: ExperimentConfig) -> None:
             await release_environment(config.environment, instance)
 
         guidance = None
-        if config.method == "medevolve":
+        if config.guidance_path:
+            guidance = ExplorationGuidance.model_validate_json(
+                Path(config.guidance_path).read_text(encoding="utf-8")
+            )
+            _save(root / "guidance.json", guidance.model_dump(mode="json"))
+        if config.method == "medevolve" and guidance is None:
             exploration_patients = random.Random(config.random_seed).sample(
                 config.evolution_patients, math.ceil(len(config.evolution_patients) * 0.5)
             )
