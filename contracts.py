@@ -86,8 +86,19 @@ class ModelConfig(BaseModel):
     api_key_env: str
     instructions_role: Literal["system", "user"] = "system"
     parallel_tool_calls: bool = True
+    structured_agent_output: bool = True
     context_window: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    fallback: "ModelConfig | None" = None
+
+    @model_validator(mode="after")
+    def validate_fallback(self):
+        if self.fallback is not None:
+            if self.fallback.model != self.model:
+                raise ValueError("fallback model must match the primary model")
+            if self.fallback.fallback is not None:
+                raise ValueError("fallback cannot define another fallback")
+        return self
 
 
 class Budget(BaseModel):
@@ -205,6 +216,15 @@ class RuntimeConfig(BaseModel):
 
 class EvaluationConfig(BaseModel):
     runtime: RuntimeConfig
+    judges: list[ModelConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_judges(self) -> "EvaluationConfig":
+        if self.judges and len(self.judges) != 3:
+            raise ValueError("judges must contain either zero or three models")
+        if self.judges and len({judge.model for judge in self.judges}) != 3:
+            raise ValueError("judge model names must be distinct")
+        return self
 
 
 class ExperimentConfig(BaseModel):
