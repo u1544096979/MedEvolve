@@ -27,12 +27,37 @@ COHORTS = {
 }
 
 
-def managed_containers() -> list[str]:
+MEMORY_LIMIT_GB = 6.0
+
+
+def managed_memory_gb() -> float:
+    """受管容器当前占用之和；多个环境并行时用它替代容器数量检查。"""
+    listed = subprocess.run(
+        ["docker", "ps", "-q", "--filter", "label=medevolve.managed=true"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    if not listed:
+        return 0.0
     result = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", "label=medevolve.managed=true"],
+        ["docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", *listed],
         capture_output=True, text=True, check=True,
     )
-    return [line for line in result.stdout.split() if line]
+    total = 0.0
+    for line in result.stdout.splitlines():
+        used = line.split("/")[0].strip()
+        for unit, factor in (("GiB", 1.0), ("MiB", 1 / 1024), ("KiB", 1 / 1048576)):
+            if used.endswith(unit):
+                total += float(used[: -len(unit)]) * factor
+                break
+    return total
+
+
+def memory_guard() -> int:
+    used = managed_memory_gb()
+    if used > MEMORY_LIMIT_GB:
+        print(f"[abort] managed containers already use {used:.1f} GiB", flush=True)
+        return 2
+    return 0
 
 
 def status_of(config_path: Path) -> str | None:
@@ -74,17 +99,15 @@ def run_glob(pattern: str, settings: dict, log_dir: Path) -> int:
         if status_of(config_path) == "completed":
             print(f"[skip] {config_path.name} completed", flush=True)
             continue
-        stray = managed_containers()
-        if stray:
-            print(f"[abort] {len(stray)} managed containers still running", flush=True)
-            return 2
+        guard = memory_guard()
+        if guard:
+            return guard
         code = run(config_path, settings, log_dir)
         if code != 0:
             return code
-        stray = managed_containers()
-        if stray:
-            print(f"[abort] {len(stray)} managed containers left after run", flush=True)
-            return 2
+        guard = memory_guard()
+        if guard:
+            return guard
     return 0
 
 
