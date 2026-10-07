@@ -89,6 +89,16 @@ class ModelConfig(BaseModel):
     structured_agent_output: bool = True
     context_window: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    fallback: "ModelConfig | None" = None
+
+    @model_validator(mode="after")
+    def validate_fallback(self):
+        if self.fallback is not None:
+            if self.fallback.model != self.model:
+                raise ValueError("fallback model must match the primary model")
+            if self.fallback.fallback is not None:
+                raise ValueError("fallback cannot define another fallback")
+        return self
 
 
 class Budget(BaseModel):
