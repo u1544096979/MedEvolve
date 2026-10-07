@@ -42,6 +42,7 @@ def harness(monkeypatch):
         state={"prescriptions": []}, fail=None, valid=True, evidence_valid=True,
         read_only_task=True,
         quality_scores=[4, 4, 4], depths=[2, 2, 2], blank_reason=None,
+        judge_counts={"quality": 0, "difficulty": 0},
     )
 
     async def create_environment(config):
@@ -74,7 +75,10 @@ def harness(monkeypatch):
 
     async def run(**kwargs):
         h.model_calls.append(kwargs)
-        role = kwargs["model"].model
+        role = {
+            Verification: "verifier", QualityJudgment: "quality",
+            DifficultyJudgment: "difficulty", SolverAnswer: "solver",
+        }.get(kwargs["output_type"], "completion")
         if h.fail == role:
             raise RuntimeError("model unavailable")
         if h.fail == role + "_budget":
@@ -107,15 +111,15 @@ def harness(monkeypatch):
             if overall and h.read_only_task is not None:
                 output["read_only_task"] = h.read_only_task
         elif role == "quality":
-            index = sum(1 for call in h.model_calls[:-1]
-                        if call["output_type"] is QualityJudgment)
+            index = h.judge_counts[role]
+            h.judge_counts[role] += 1
             reason = "" if h.blank_reason == "quality" else "supported"
             output = {key: {"score": h.quality_scores[index], "reason": reason}
                       for key in ("factual_accuracy", "clinical_soundness",
                                   "evidence_sufficiency", "task_clarity")}
         elif role == "difficulty":
-            index = sum(1 for call in h.model_calls[:-1]
-                        if call["output_type"] is DifficultyJudgment)
+            index = h.judge_counts[role]
+            h.judge_counts[role] += 1
             reason = "" if h.blank_reason == "difficulty" else "跨记录整合"
             output = {"reasoning_depth": h.depths[index], "reason": reason}
         elif role == "solver":
@@ -391,6 +395,51 @@ def test_three_judges_take_median_and_keep_raw_scores(harness):
                 if c["output_type"] is QualityJudgment]) == 3
     assert len([c for c in h.model_calls
                 if c["output_type"] is DifficultyJudgment]) == 3
+
+
+@pytest.mark.parametrize("count", [1, 2, 4])
+def test_evaluation_judges_reject_invalid_count(harness, count):
+    with pytest.raises(ValueError):
+        EvaluationConfig(runtime=harness.config.runtime, judges=[
+            ModelConfig(model=f"judge-{index}", api_key_env="UNUSED")
+            for index in range(count)
+        ])
+
+
+def test_evaluation_judges_allow_empty_or_three(harness):
+    assert EvaluationConfig(runtime=harness.config.runtime).judges == []
+    judges = [ModelConfig(model=f"judge-{index}", api_key_env="UNUSED")
+              for index in range(3)]
+    assert EvaluationConfig(runtime=harness.config.runtime, judges=judges).judges == judges
+
+
+def test_configured_judges_run_for_quality_and_difficulty_only(harness):
+    h = harness
+    h.config = EvaluationConfig(runtime=h.config.runtime, judges=[
+        ModelConfig(model=f"judge-{index}", api_key_env="UNUSED")
+        for index in range(3)
+    ])
+    h.quality_scores = [5, 3, 4]
+    h.depths = [4, 1, 3]
+    result = evaluate(h)
+    quality_calls = [call for call in h.model_calls
+                     if call["output_type"] is QualityJudgment]
+    difficulty_calls = [call for call in h.model_calls
+                        if call["output_type"] is DifficultyJudgment]
+    assert [call["model"].model for call in quality_calls] == [
+        "judge-0", "judge-1", "judge-2"]
+    assert [call["model"].model for call in difficulty_calls] == [
+        "judge-0", "judge-1", "judge-2"]
+    assert result.quality.factual_accuracy.score == 4
+    assert result.difficulty.reasoning_depth == 3
+    solver_call = next(call for call in h.model_calls
+                       if call["output_type"] is SolverAnswer)
+    assert solver_call["model"].model == "solver"
+    identities = [item["model_identity"] for run in result.runs for item in run.trace
+                  if item.get("type") == "model_identity"]
+    assert any(item == {"role": "quality", "model": "judge-0", "judge_index": 0}
+               for item in identities)
+    assert all("api_key" not in item for item in identities)
 
 
 def test_difficulty_receives_only_task_and_computed_complexity(harness):

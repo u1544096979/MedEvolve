@@ -1,5 +1,6 @@
 """Evidence verification, quality review, isolated solving and state review."""
 
+import asyncio
 import json
 import statistics
 from datetime import datetime, timezone
@@ -220,10 +221,12 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
         def role_instructions(instructions: str) -> str:
             return f"{capability_instructions(environment.name)}\n\n{instructions}"
 
-        async def model_run(entry, *, role, schema, instructions, payload, tools=None):
+        async def model_run(entry, *, role, schema, instructions, payload, tools=None,
+                            model=None, judge_index=None, record=True):
+            selected_model = model or config.runtime.models[role]
             kwargs = dict(
                 instructions=instructions, input_text=_json(payload),
-                output_type=schema, model=config.runtime.models[role],
+                output_type=schema, model=selected_model,
             )
             if tools is not None:
                 kwargs.update(tools=tools, budget=config.runtime.budgets[role])
@@ -233,7 +236,14 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
                 run = RunResult(
                     trace=[], usage={}, status="failed", error=str(exc)
                 )
-            result.runs.append(run)
+            identity = {"role": role, "model": selected_model.model}
+            if judge_index is not None:
+                identity["judge_index"] = judge_index
+            run = run.model_copy(update={"trace": [
+                *run.trace, {"type": "model_identity", "model_identity": identity}
+            ]})
+            if record:
+                result.runs.append(run)
             return run
 
         phase = "environment_error"
@@ -290,19 +300,29 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
 
         phase = "model_error"
         material["verification"] = result.verification.model_dump()
-        result.quality = _aggregate_quality_scores([
-            await model_run(runtime.call_llm, role="quality", schema=QualityJudgment,
-                            instructions=role_instructions(prompts.QUALITY), payload=material)
-            for _ in range(JUDGE_COUNT)
+        quality_judges = config.judges or [config.runtime.models["quality"]] * JUDGE_COUNT
+        quality_runs = await asyncio.gather(*[
+            model_run(runtime.call_llm, role="quality", schema=QualityJudgment,
+                      instructions=role_instructions(prompts.QUALITY), payload=material,
+                      model=quality_judges[index], judge_index=index, record=False)
+            for index in range(JUDGE_COUNT)
         ])
+        result.runs.extend(quality_runs)
+        result.quality = _aggregate_quality_scores(quality_runs)
         complexity = _compute_complexity(task, trajectory)
-        result.difficulty = _aggregate_difficulty_scores([
-            await model_run(runtime.call_llm, role="difficulty", schema=DifficultyJudgment,
-                            instructions=role_instructions(prompts.DIFFICULTY),
-                            payload={"task": material["task"],
-                                     "complexity_metrics": complexity.model_dump()})
-            for _ in range(JUDGE_COUNT)
-        ], complexity)
+        difficulty_judges = (
+            config.judges or [config.runtime.models["difficulty"]] * JUDGE_COUNT
+        )
+        difficulty_runs = await asyncio.gather(*[
+            model_run(runtime.call_llm, role="difficulty", schema=DifficultyJudgment,
+                      instructions=role_instructions(prompts.DIFFICULTY),
+                      payload={"task": material["task"],
+                               "complexity_metrics": complexity.model_dump()},
+                      model=difficulty_judges[index], judge_index=index, record=False)
+            for index in range(JUDGE_COUNT)
+        ])
+        result.runs.extend(difficulty_runs)
+        result.difficulty = _aggregate_difficulty_scores(difficulty_runs, complexity)
 
         phase = "environment_error"
         body_failed = False

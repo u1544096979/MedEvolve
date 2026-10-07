@@ -205,6 +205,13 @@ class RuntimeConfig(BaseModel):
 
 class EvaluationConfig(BaseModel):
     runtime: RuntimeConfig
+    judges: list[ModelConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_judges(self) -> "EvaluationConfig":
+        if self.judges and len(self.judges) != 3:
+            raise ValueError("judges must contain either zero or three models")
+        return self
 
 
 class ExperimentConfig(BaseModel):
