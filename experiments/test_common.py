@@ -14,7 +14,8 @@ from contracts import (Budget, EnvironmentInstance, EvaluationResult, Experiment
                        GenerationDirection, PatientTrajectory, RunResult, RuntimeConfig, TaskBatch,
                        TaskType)
 from experiments import runner, summarize_run
-from methods.common import GenerationBudget, normalize_usage, output_constraints, validate_task_batch
+from methods.common import (GenerationBudget, normalize_usage, output_constraints,
+                            summarize_results, validate_task_batch)
 
 
 def directions():
@@ -30,6 +31,7 @@ def result(questions=(), *, status="completed", usage=None):
 
 
 def question(task_type="诊断与解释", **kwargs):
+    kwargs.setdefault("decision_point", None)
     return dict(instruction="诊断问题", task_type=task_type, reference_answer="参考答案", evidence=[], **kwargs)
 
 
@@ -43,6 +45,43 @@ def test_constraints_keep_failed_cost_and_reject_extra_direction_or_time():
     assert validate_task_batch(result(), directions()).output == {"questions": []}
     assert validate_task_batch(result([question()]), directions()).status == "completed"
     assert normalize_usage({})["input_tokens"] is None
+
+
+def test_exhausted_batch_preserves_output_status_and_cost():
+    exhausted = result([question()]).model_copy(update={
+        "status": "budget_exhausted", "error": "Cumulative generator budget exhausted"
+    })
+    accepted = validate_task_batch(exhausted, directions())
+    assert accepted.status == "budget_exhausted"
+    assert accepted.output == exhausted.output
+    assert accepted.error == exhausted.error
+    assert accepted.usage["model_turns"] == 1
+    assert accepted.usage["total_tokens"] == 10
+
+    summary = summarize_results(
+        [("candidate", result([question()]))],
+        output=TaskBatch.model_validate(exhausted.output),
+        status="budget_exhausted", error=exhausted.error,
+    )
+    assert summary.output == exhausted.output
+    assert summary.status == "budget_exhausted"
+
+
+def test_exhausted_batch_still_rejects_invalid_fields_and_other_statuses():
+    invalid = result([question(decision_point="2020-01-01")]).model_copy(
+        update={"status": "budget_exhausted"}
+    )
+    rejected = validate_task_batch(invalid, directions())
+    assert rejected.status == "failed" and rejected.output is None
+    assert rejected.trace[-1]["type"] == "output_rejected"
+    missing = validate_task_batch(result(status="budget_exhausted"), directions())
+    assert missing.output is None
+    failed = result([question()]).model_copy(update={"status": "failed"})
+    assert validate_task_batch(failed, directions()).output is None
+
+    for questions in ([question(task_type="未知题型")], [question()] * 3):
+        exhausted = result(questions).model_copy(update={"status": "budget_exhausted"})
+        assert validate_task_batch(exhausted, directions()).output is None
 
 
 def test_selection_policy_rejects_incomplete_duplicate_or_mixed_input():

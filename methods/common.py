@@ -91,8 +91,10 @@ def validate_task_batch(result: RunResult, directions: list[GenerationDirection]
     allowed = _selection_policy(directions, task_types, max_questions=max_questions,
                                 candidate_pool=candidate_pool)
     result = result.model_copy(update={"usage": normalize_usage(result.usage)})
-    if result.status != "completed":
+    if result.status == "failed":
         return result.model_copy(update={"output": None})
+    if result.status == "budget_exhausted" and result.output is None:
+        return result
     try:
         batch = TaskBatch.model_validate(result.output)
         if len(batch.questions) > max_questions:
@@ -128,8 +130,13 @@ def summarize_results(records: list[tuple[str, RunResult]], *, output: TaskBatch
     usage["runs_without_known_tokens"] = sum(u.get("runs_without_known_tokens", int(u["total_tokens"] is None)) for u in usages)
     final = records[-1][1] if records else None
     final_status = status or (final.status if final else "completed")
-    return RunResult(output=(output.model_dump(mode="json") if output is not None else
-                             final.output if final else None) if final_status == "completed" else None,
+    if output is not None and final_status in {"completed", "budget_exhausted"}:
+        final_output = output.model_dump(mode="json")
+    elif final_status == "completed" and final is not None:
+        final_output = final.output
+    else:
+        final_output = None
+    return RunResult(output=final_output,
                      trace=[{"stage": stage, "result": run.model_dump(mode="json")}
                             for stage, run in records], usage=usage, status=final_status,
                      error=error or (final.error if final else None))

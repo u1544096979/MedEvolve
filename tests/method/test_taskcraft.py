@@ -858,6 +858,29 @@ async def test_cumulative_budget_exhaustion_keeps_usage_and_full_batch_cost(patc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("turns, expected", [(2, 0), (8, 0), (20, 1)])
+async def test_exhaustion_delivers_only_verified_candidates(patched, environment, turns, expected):
+    fake = FakeRuntime()
+    patched(fake)
+    run = await generate_tasks(
+        trajectory(), environment, directions(), runtime_config(max_model_turns=turns)
+    )
+    assert run.status == "budget_exhausted"
+    assert run.usage["model_turns"] == turns
+    # SearchAction requests also appear in agent_calls, so llm_calls is the
+    # non-duplicated count of all model turns.
+    assert len(fake.llm_calls) == turns
+    if expected == 0:
+        assert run.output is None
+    else:
+        batch = TaskBatch.model_validate(run.output)
+        assert len(batch.questions) == expected
+        accepted = {c["question"]["instruction"] for c in pipeline_pool(run)}
+        assert {q.instruction for q in batch.questions} <= accepted
+        assert run.trace[-1]["selection"]["selected"]
+
+
+@pytest.mark.asyncio
 async def test_stages_use_the_shared_budget_as_their_only_limit(patched, environment):
     """原子与扩展阶段不再按阶段份额或预留轮数截断，跑满共享生成预算才停。"""
     conclusions = [{"conclusion": f"2024-03-{index:02d} 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
@@ -1059,6 +1082,29 @@ async def test_ledger_retry_bills_every_attempt(monkeypatch):
     assert [record.status for _, record in ledger.budget.records] == ["failed", "completed"]
     assert ledger.exhausted is False
     assert ledger.used_turns() == 2
+
+
+@pytest.mark.asyncio
+async def test_tool_budget_exhaustion_blocks_verification_retries(monkeypatch):
+    fake = FakeRuntime()
+    ledger, budget, tools = agent_ledger(monkeypatch, fake, tool_calls=0)
+    used_at_stop = []
+    track = ledger._track
+
+    def record_stop(run):
+        if run.status == "budget_exhausted":
+            used_at_stop.append(ledger.used_turns())
+        return track(run)
+
+    monkeypatch.setattr(ledger, "_track", record_stop)
+    outcome = await verify_query(
+        ledger, "该患者的血钾结果是多少", "5.9 mmol/L", tools,
+        samples=3, stage="atomic/verify", instructions="仅检索当前患者",
+    )
+    assert outcome.error is not None
+    assert used_at_stop and ledger.exhausted
+    assert ledger.used_turns() == used_at_stop[0]
+    assert summarize_results(budget.records).usage["tool_calls"] == 0
 
 
 @pytest.mark.asyncio

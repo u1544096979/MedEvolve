@@ -163,9 +163,10 @@ async def run_experiment(config: ExperimentConfig) -> None:
             checkpoint()
         return result
 
-    async def parse(stage, result, schema):
+    async def parse(stage, result, schema, *, allow_budget_exhausted=False):
         try:
-            if result.status != "completed" or result.output is None:
+            allowed = {"completed", "budget_exhausted"} if allow_budget_exhausted else {"completed"}
+            if result.status not in allowed or result.output is None:
                 raise ValueError(result.error or result.status)
             return schema.model_validate(result.output)
         except Exception as exc:
@@ -313,7 +314,7 @@ async def run_experiment(config: ExperimentConfig) -> None:
                         return result
 
                     run = await invoke(stage, generate_batch)
-                    batch = await parse(stage, run, TaskBatch)
+                    batch = await parse(stage, run, TaskBatch, allow_budget_exhausted=True)
                     attempt = {"patient_id": patient, "requested": 2,
                                **selection_record,
                                "produced": len(batch.questions) if batch else 0,

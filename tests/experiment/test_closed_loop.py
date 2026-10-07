@@ -235,6 +235,44 @@ def test_taskcraft_generation_receives_the_experiment_seed(tmp_path, monkeypatch
     assert (Path(config.output_dir) / "evaluation" / "tasks.json").exists()
 
 
+@pytest.mark.parametrize("over_budget", [False, True])
+def test_exhausted_generation_is_evaluated_only_within_budget(tmp_path, monkeypatch, over_budget):
+    calls, _ = install_dependencies(monkeypatch)
+    config = config_for(tmp_path / "partial").model_copy(update={
+        "method": "taskcraft", "evolution_patients": [], "round_patients": []
+    })
+
+    async def generate(trajectory, environment, directions, runtime, *, random_seed=None):
+        return RunResult(
+            output={"questions": [{
+                "instruction": "患者诊断是什么", "task_type": directions[0].task_type,
+                "reference_answer": "答案", "evidence": [{
+                    "source_id": "Condition/1", "statement": "记录中的诊断"
+                }], "decision_point": None,
+            }]},
+            trace=[], status="budget_exhausted", error="Cumulative generator budget exhausted",
+            usage={"model_turns": runtime.budgets["generator"].max_model_turns + int(over_budget),
+                   "tool_calls": 0, "input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+
+    async def evaluate(task, trajectory, environment, config, environments=None):
+        calls["partial_evaluate"] += 1
+        return EvaluationResult(task_id=task.id, observed_state={}, status="invalid", runs=[])
+
+    monkeypatch.setattr("methods.taskcraft.generate_tasks", generate)
+    monkeypatch.setattr(runner, "evaluate_task", evaluate)
+    asyncio.run(runner.run_experiment(config))
+    root = Path(config.output_dir) / "evaluation"
+    attempts = json.loads((root / "attempts.json").read_text())
+    tasks = json.loads((root / "tasks.json").read_text())
+    assert attempts[0]["status"] == "budget_exhausted"
+    assert attempts[0]["usage"]["total_tokens"] == 15
+    assert attempts[0]["produced"] == len(tasks) == (0 if over_budget else 1)
+    assert calls["partial_evaluate"] == (0 if over_budget else 1)
+    summary = summarize_run(config.output_dir)
+    assert summary["evaluation"]["generation_statuses"] == {"budget_exhausted": 1}
+
+
 @pytest.mark.parametrize("name,source", [
     ("taskcraft-physicianbench", "physicianbench-comparison"),
     ("taskcraft-medagentbench", "medagentbench-flash"),

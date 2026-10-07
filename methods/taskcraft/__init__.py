@@ -84,7 +84,10 @@ async def generate_tasks(
         pipeline = Pipeline(trajectory, tools, directions, settings, ledger, random_seed)
         await pipeline.run()
         if ledger.exhausted:
+            selected = pipeline.select() if pipeline.pool else []
             result = budget.finish(directions, status="budget_exhausted",
+                                   output=TaskBatch(questions=[candidate.question for candidate in selected])
+                                   if selected else None,
                                    error="Cumulative generator budget exhausted in TaskCraft stages")
         elif not pipeline.pool:
             result = budget.finish(directions, status="failed",

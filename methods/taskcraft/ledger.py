@@ -25,6 +25,8 @@ class Ledger:
         """单次模型请求的重试：每次尝试自行记账后才重试，失败成本保留在公共账本中。"""
         last = None
         for attempt in range(attempts):
+            if self.exhausted:
+                return last
             if self.budget.remaining().max_model_turns == 0:
                 self.exhausted = True
                 return last
