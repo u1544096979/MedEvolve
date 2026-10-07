@@ -42,6 +42,27 @@ class _RepeatedToolCall(AgentsException):
     """同一工具与参数重复调用多次，说明 Agent 不再推进，需要收尾作答。"""
 
 
+def _parse_unstructured_agent_output(output: str, output_type: type[BaseModel]) -> dict:
+    """从非结构化 agent 的自然语言前缀或 Markdown 围栏中读取 JSON 对象。"""
+    decoder = json.JSONDecoder(strict=False)
+    for index, char in enumerate(output):
+        if char != "{":
+            continue
+        try:
+            value, end = decoder.raw_decode(output, index)
+        except ValueError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        suffix = output[end:].strip()
+        if suffix.startswith("```"):
+            suffix = suffix[3:].strip()
+        if suffix:
+            continue
+        return output_type.model_validate(value).model_dump(mode="json")
+    raise ValueError("未找到完整且符合结构的 JSON 对象")
+
+
 # 收尾调用可携带的工具结果上限（字符）：预算用尽后只靠已有结果作答。
 FINAL_ANSWER_CHARS = 120_000
 TOOL_RESULT_SNIPPET_CHARS = 4000
@@ -323,11 +344,21 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                     agent, agent_input, hooks=records, max_turns=loop_turns,
                     run_config=RunConfig(tracing_disabled=True, call_model_input_filter=filter_input),
                 )
-                output = (
-                    output_type.model_validate_json(result.final_output)
-                    if isinstance(result.final_output, str)
-                    else output_type.model_validate(result.final_output)
-                ).model_dump(mode="json")
+                if isinstance(result.final_output, str):
+                    try:
+                        output = output_type.model_validate_json(
+                            result.final_output
+                        ).model_dump(mode="json")
+                    except Exception:
+                        if model.structured_agent_output:
+                            raise
+                        output = _parse_unstructured_agent_output(
+                            result.final_output, output_type
+                        )
+                else:
+                    output = output_type.model_validate(
+                        result.final_output
+                    ).model_dump(mode="json")
             except (MaxTurnsExceeded, _ToolBudgetExceeded, _RepeatedToolCall) as exc:
                 if not reserved:
                     raise
