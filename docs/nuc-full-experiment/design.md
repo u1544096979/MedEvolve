@@ -27,3 +27,5 @@ PhysicianBench、MedAgentBench、FHIR-AgentBench 分别运行 MedEvolve、TaskCr
 ## 环境与验收
 
 同步代码、患者数据和三个 Docker 环境，保留旧结果备份，仅清理已识别的旧实验服务。先验证三个真实环境及模型结构化输出和工具调用；再运行小样本端到端实验，确认三裁判模型身份、解题模型身份及 token 落盘后启动全量。运行保存在 NUC 的持久进程中，并设置本会话的定期检查以处理实际故障。
+
+FHIR-AgentBench 的种子清单固定本机架构的 HAPI 与 PostgreSQL 摘要，启动时直接使用已校验清单中的镜像，避免镜像校验与实际容器使用不同来源。数据库 dump 与资源探针保持原校验。
