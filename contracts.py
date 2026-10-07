@@ -166,7 +166,7 @@ class EvaluationResult(BaseModel):
     observed_state: JsonObject
     status: Literal["completed", "invalid", "failed"]
     failure_category: Literal[
-        "clinical", "insufficient_evidence", "ambiguous_task", "tool_error",
+        "clinical", "insufficient_evidence", "unsupported_operation", "ambiguous_task", "tool_error",
         "environment_error", "model_error"
     ] | None = None
     runs: list[RunResult]

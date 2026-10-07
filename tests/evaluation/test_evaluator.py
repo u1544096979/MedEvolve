@@ -19,9 +19,10 @@ from evaluation import evaluate_task
 @pytest.fixture
 def harness(monkeypatch):
     task = Task(
-        id="task-1", patient_id="patient-1", environment="fixture", round_index=0,
-        source_method="private-method", instruction="为患者开具指定处方",
+        id="task-1", patient_id="patient-1", environment="PhysicianBench", round_index=0,
+        source_method="private-method", instruction="解释患者既有记录中的处方方案",
         task_type="药物处方", reference_answer="private-reference",
+        execution_requirement="read_only",
         evidence=[{"source_id": "source-1", "statement": "支持该任务的证据"}],
         decision_point="2026-01-01T00:00:00+08:00",
     )
@@ -36,9 +37,10 @@ def harness(monkeypatch):
     ))
     h = SimpleNamespace(
         task=task, trajectory=trajectory, config=config,
-        environment=EnvironmentConfig(name="fixture", manager_url="unused", seed_data="seed"),
+        environment=EnvironmentConfig(name="PhysicianBench", manager_url="unused", seed_data="seed"),
         created=[], released=[], tool_calls=[], model_calls=[], state_reads=[],
-        state={"prescriptions": []}, fail=None, valid=True,
+        state={"prescriptions": []}, fail=None, valid=True, evidence_valid=True,
+        read_only_task=True,
         quality_scores=[4, 4, 4], depths=[2, 2, 2], blank_reason=None,
     )
 
@@ -98,7 +100,12 @@ def harness(monkeypatch):
                 usage={}, status="failed", error="opaque runtime error",
             )
         if role == "verifier":
-            output = {"valid": h.valid, "reason": "checked original records"}
+            overall = sum(1 for call in h.model_calls[:-1]
+                          if call["output_type"] is Verification) > 0
+            output = {"valid": h.evidence_valid if not overall else h.valid,
+                      "reason": "checked original records"}
+            if overall and h.read_only_task is not None:
+                output["read_only_task"] = h.read_only_task
         elif role == "quality":
             index = sum(1 for call in h.model_calls[:-1]
                         if call["output_type"] is QualityJudgment)
@@ -115,8 +122,16 @@ def harness(monkeypatch):
             output = {"answer": "处方已创建"}
         else:
             payload = json.loads(kwargs["input_text"])
+            denied_write = any(
+                item.get("type") == "tool_output"
+                and isinstance(item.get("output"), dict)
+                and item["output"].get("kind") == "error"
+                and "write" in item["output"].get("reply", "").lower()
+                for item in payload["solver_trace"]
+            )
             output = {
-                "completed": bool(payload["observed_state"].get("prescriptions")),
+                "completed": not denied_write and
+                "tool_output" in json.dumps(payload["solver_trace"]),
                 "reason": "checked actual prescriptions",
             }
         trace = [{"role": role}]
@@ -152,30 +167,25 @@ def test_solver_receives_only_patient_question_and_decision_point(harness):
     for call in h.model_calls:
         assert "private-method" not in call["input_text"]
     assert h.tool_calls[0][1:] == ([h.task.patient_id], h.task.decision_point, True)
-    assert h.created[0] == h.state_reads[0]
+    assert h.state_reads == []
     assert len(result.runs) == 10
 
 
-@pytest.mark.parametrize("state, completed", [
-    ({"prescriptions": []}, False),
-    ({"prescriptions": [{"id": "rx-1"}]}, True),
-])
-def test_write_completion_uses_observed_state(harness, state, completed):
+def test_completion_uses_answer_and_query_trace_not_database_state(harness):
     h = harness
-    h.state = state
+    h.state = {"prescriptions": [{"id": "must-not-count"}]}
     result = evaluate(h)
     assert result.status == "completed"
-    assert result.observed_state == state
-    assert result.completion.completed is completed
-    assert result.failure_category == (None if completed else "clinical")
+    assert result.completion.completed is True
+    assert result.failure_category is None
     call = next(c for c in h.model_calls if c["output_type"] is CompletionReview)
-    assert json.loads(call["input_text"])["observed_state"] == state
     payload = json.loads(call["input_text"])
+    assert "observed_state" not in payload
     assert [item["type"] for item in payload["solver_trace"]] == ["tool_start", "tool_output"]
     assert "历史提示词" not in call["input_text"]
     assert payload["evidence_records"] == [{"source_id": "source-1", "statement": "轨迹证据"}]
     assert result.solver_run.trace[0]["instructions"] == "历史提示词"
-    assert h.state_reads == [h.created[0]]
+    assert h.state_reads == []
     assert h.released == h.created
 
 
@@ -199,12 +209,29 @@ def test_recovered_parameter_error_reaches_completion(harness, monkeypatch):
     result = evaluate(h)
     assert result.status == "completed"
     assert result.completion.completed is True
-    assert h.state_reads
+    assert h.state_reads == []
     completion_call = next(c for c in h.model_calls
                            if c["output_type"] is CompletionReview)
     payload = json.loads(completion_call["input_text"])
     assert payload["solver_trace"][0]["output"]["failure_category"] == "tool_error"
     assert payload["solver_trace"][1]["output"]["data"] == {"entry": []}
+
+
+def test_denied_write_in_solver_trace_cannot_count_as_completion(harness, monkeypatch):
+    async def denied_write_solver(**kwargs):
+        h = harness
+        h.model_calls.append(kwargs)
+        return RunResult(output={"answer": "已完成写入"}, usage={}, status="completed",
+            trace=[{"type": "tool_output", "name": "native_action", "output": {
+                "kind": "error", "reply": "write denied by read-only environment"}}])
+
+    monkeypatch.setattr(sys.modules["runtime"], "run_agent", denied_write_solver)
+    result = evaluate(harness)
+    assert result.status == "completed"
+    assert result.completion.completed is False
+    completion_call = next(call for call in harness.model_calls
+                           if call["output_type"] is CompletionReview)
+    assert "write denied by read-only environment" in completion_call["input_text"]
 
 
 @pytest.mark.parametrize("failure, category, instances, runs", [
@@ -219,7 +246,6 @@ def test_recovered_parameter_error_reaches_completion(harness, monkeypatch):
     ("solver_model_error", "model_error", 1, 9),
     ("solver_unknown_error", "model_error", 1, 9),
     ("solver_budget", "model_error", 1, 9),
-    ("state", "environment_error", 1, 9),
     ("completion", "model_error", 1, 10),
 ])
 def test_faults_release_instances_without_clinical_conclusions(
@@ -245,7 +271,7 @@ def test_faults_release_instances_without_clinical_conclusions(
 
 def test_invalid_task_stops_before_solver_and_releases_instance(harness):
     h = harness
-    h.valid = False
+    h.evidence_valid = False
     result = evaluate(h)
     assert result.status == "invalid"
     assert result.verification.valid is False
@@ -258,6 +284,63 @@ def test_invalid_task_stops_before_solver_and_releases_instance(harness):
     assert set(payload) == {"evidence", "resource"}
     assert payload["evidence"] == h.task.evidence[0].model_dump()
     assert "private-reference" not in h.model_calls[0]["input_text"]
+
+
+@pytest.mark.parametrize("valid, read_only_task, expected_category", [
+    (True, False, "unsupported_operation"),
+    (False, True, None),
+])
+def test_overall_verifier_rejects_out_of_scope_before_quality_and_solver(
+    harness, valid, read_only_task, expected_category
+):
+    h = harness
+    h.valid = valid
+    h.read_only_task = read_only_task
+    if not read_only_task:
+        h.task = h.task.model_copy(update={
+            "instruction": "提交处方请求并将其持久化",
+            "execution_requirement": "read_only",
+        })
+    result = evaluate(h)
+    assert result.status == "invalid"
+    assert result.verification.valid is False
+    assert result.failure_category == expected_category
+    assert result.solver_run is None
+    assert result.quality is None
+    assert result.difficulty is None
+    assert [call["output_type"] for call in h.model_calls] == [Verification, Verification]
+    assert result.verification.read_only_task is read_only_task
+    assert type(result).model_validate(result.model_dump()).failure_category == expected_category
+
+
+def test_overall_verifier_requires_read_only_field_and_old_task_uses_same_check(harness):
+    h = harness
+    h.task = h.task.model_copy(update={"execution_requirement": None})
+    h.read_only_task = None
+    result = evaluate(h)
+    assert result.status == "failed"
+    assert result.failure_category == "model_error"
+    assert "missing read_only_task" in result.observed_state["evaluation_error"]
+    assert result.solver_run is None
+    assert [call["output_type"] for call in h.model_calls] == [Verification, Verification]
+
+
+def test_old_read_only_query_task_passes_overall_verifier(harness):
+    h = harness
+    h.task = h.task.model_copy(update={"execution_requirement": None})
+    result = evaluate(h)
+    assert result.status == "completed"
+    assert result.verification.read_only_task is True
+    assert len([call for call in h.model_calls if call["output_type"] is QualityJudgment]) == 3
+    assert len([call for call in h.model_calls if call["output_type"] is DifficultyJudgment]) == 3
+
+
+def test_all_evaluator_roles_receive_read_only_capability(harness):
+    h = harness
+    evaluate(h)
+    for call in h.model_calls:
+        assert "本轮实验只允许基于既有患者记录" in call["instructions"]
+        assert "禁止任何持久化写入" in call["instructions"]
 
 
 @pytest.mark.parametrize("evidence, expected_reason", [

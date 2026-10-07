@@ -13,7 +13,7 @@ from contracts import (
     QualityDimension, QualityJudgment, QualityReview, RunResult, SolverAnswer,
     SolverInput, Task, Verification,
 )
-from environments.capabilities import read_only_scope_instructions
+from environments.capabilities import capability_instructions
 from . import prompts
 from .session import EvaluationEnvironments
 
@@ -217,6 +217,9 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
                 raise ValueError(f"missing evaluation budget: {role}")
         material = _review_material(task, trajectory)
 
+        def role_instructions(instructions: str) -> str:
+            return f"{capability_instructions(environment.name)}\n\n{instructions}"
+
         async def model_run(entry, *, role, schema, instructions, payload, tools=None):
             kwargs = dict(
                 instructions=instructions, input_text=_json(payload),
@@ -250,7 +253,7 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
                         phase = "model_error"
                         run = await model_run(
                             runtime.call_llm, role="verifier", schema=Verification,
-                            instructions=prompts.EVIDENCE_VERIFIER,
+                            instructions=role_instructions(prompts.EVIDENCE_VERIFIER),
                             payload={"evidence": evidence.model_dump(), "resource": resource},
                         )
                         checked = _output(run, Verification)
@@ -260,10 +263,18 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
                     else:
                         run = await model_run(
                             runtime.call_llm, role="verifier", schema=Verification,
-                            instructions=prompts.VERIFIER,
+                            instructions=role_instructions(prompts.VERIFIER),
                             payload={"task": material["task"], "evidence_records": evidence_records},
                         )
                         result.verification = _output(run, Verification)
+                        if result.verification.read_only_task is None:
+                            raise ValueError("overall verification missing read_only_task")
+                        if not result.verification.read_only_task:
+                            result.verification = result.verification.model_copy(update={
+                                "valid": False,
+                                "reason": result.verification.reason +
+                                "；任务要求超出只读查询范围",
+                            })
                 except BaseException:
                     body_failed = True
                     raise
@@ -273,19 +284,21 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
             raise
         if not result.verification.valid:
             result.status = "invalid"
+            if result.verification.read_only_task is False:
+                result.failure_category = "unsupported_operation"
             return result
 
         phase = "model_error"
         material["verification"] = result.verification.model_dump()
         result.quality = _aggregate_quality_scores([
             await model_run(runtime.call_llm, role="quality", schema=QualityJudgment,
-                            instructions=prompts.QUALITY, payload=material)
+                            instructions=role_instructions(prompts.QUALITY), payload=material)
             for _ in range(JUDGE_COUNT)
         ])
         complexity = _compute_complexity(task, trajectory)
         result.difficulty = _aggregate_difficulty_scores([
             await model_run(runtime.call_llm, role="difficulty", schema=DifficultyJudgment,
-                            instructions=prompts.DIFFICULTY,
+                            instructions=role_instructions(prompts.DIFFICULTY),
                             payload={"task": material["task"],
                                      "complexity_metrics": complexity.model_dump()})
             for _ in range(JUDGE_COUNT)
@@ -304,14 +317,12 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
                     phase = "model_error"
                     result.solver_run = await model_run(
                         runtime.run_agent, role="solver", schema=SolverAnswer,
-                        instructions=read_only_scope_instructions() + "\n\n" + prompts.SOLVER,
+                        instructions=role_instructions(prompts.SOLVER),
                         payload=SolverInput(
                             instruction=task.instruction, patient_id=task.patient_id,
                             decision_point=task.decision_point,
                         ).model_dump(), tools=tools,
                     )
-                    phase = "environment_error"
-                    result.observed_state = await env.read_state(instance, task)
                 except BaseException:
                     body_failed = True
                     raise
@@ -333,11 +344,10 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
                 item for item in result.solver_run.trace
                 if item.get("type") in {"tool_start", "tool_output", "run_error", "tool_budget"}
             ],
-            "observed_state": result.observed_state,
         }
         run = await model_run(
             runtime.call_llm, role="completion", schema=CompletionReview,
-            instructions=prompts.COMPLETION, payload=completion_material,
+            instructions=role_instructions(prompts.COMPLETION), payload=completion_material,
         )
         result.completion = _output(run, CompletionReview)
         result.status = "completed"

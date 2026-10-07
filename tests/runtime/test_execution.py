@@ -66,7 +66,9 @@ async def test_sdk_tool_loop(monkeypatch, output_type, output, instructions_role
         model=MODEL.model_copy(update={"instructions_role": instructions_role}),
         budget=Budget(max_model_turns=3, max_tool_calls=1))
     assert result.status == "completed", result.error
-    assert result.output == output
+    expected_output = ({**output, "read_only_task": None}
+                       if output_type is Verification else output)
+    assert result.output == expected_output
     assert calls == [1]
     assert requests[1]["messages"][-1]["role"] == "tool"
     assert requests[0]["response_format"]["type"] == "json_schema"

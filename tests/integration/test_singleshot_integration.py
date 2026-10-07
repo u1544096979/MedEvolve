@@ -35,9 +35,9 @@ async def test_singleshot_entry_uses_all_types_and_public_evaluation(name, tmp_p
             {"source_id": "Patient/p", "statement": '{"id":"p"}'}])))
     for fn in ("explore_data", "explore_environment", "analyze_feedback", "update_strategy"):
         monkeypatch.setattr(runner, fn, AsyncMock(side_effect=AssertionError("unexpected evolution")))
-    question = {"instruction": "说明记录", "task_type": "诊断与解释",
-        "reference_answer": "候选答案", "evidence": [{"source_id": "Patient/p", "statement": "记录事实"}],
-        "decision_point": None}
+        question = {"instruction": "说明记录", "task_type": "诊断与解释",
+            "reference_answer": "候选答案", "evidence": [{"source_id": "Patient/p", "statement": "记录事实"}],
+            "decision_point": None, "execution_requirement": "read_only"}
     llm = AsyncMock(return_value=RunResult(output={"questions": [question, question]},
         status="completed", trace=[], usage={"model_turns": 1, "tool_calls": 0,
                                              "input_tokens": 12, "output_tokens": 8}))

@@ -92,8 +92,8 @@ async def explore_data(*args):
     return await importlib.import_module("methods.medevolve").explore_data(*args)
 
 
-async def explore_environment(*args):
-    return await importlib.import_module("methods.medevolve").explore_environment(*args)
+async def explore_environment(*args, **kwargs):
+    return await importlib.import_module("methods.medevolve").explore_environment(*args, **kwargs)
 
 
 async def generate_tasks(*args):

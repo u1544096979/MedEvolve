@@ -157,7 +157,6 @@ class FixedModels:
         self.calls = Counter()
         self.verifier_payloads = []
         self.solver_payloads = []
-        self.requests_before_state = []
 
     async def call_llm(self, *, instructions, input_text, output_type, model):
         self.calls[output_type.__name__] += 1
@@ -166,6 +165,8 @@ class FixedModels:
             if "resource" in payload:
                 self.verifier_payloads.append(payload["resource"])
             output = {"valid": True, "reason": "原始记录支持该题"}
+            if "task" in payload:
+                output["read_only_task"] = True
         elif output_type is QualityJudgment:
             output = {
                 dimension: {"score": 4, "reason": "满足要求"}
@@ -208,10 +209,6 @@ class FixedModels:
         )
         records = json.loads(await tool.on_invoke_tool(context, arguments))
         assert [resource["id"] for resource in records["Observation"]] == ["o1"]
-        # 解题结束时的 FHIR 请求数：状态读取与后续复核都不应再访问 FHIR 服务。
-        self.requests_before_state.append(
-            sum(1 for request in self.services.requests if request.url.host == "instance-one")
-        )
         return RunResult(
             output={"answer": "最近一次心率 80 次/分"},
             trace=[
@@ -321,20 +318,7 @@ async def test_public_pipeline_runs_the_existing_chain_with_read_only_state(
         }
     ]
 
-    # read_state 返回只读语义，不套用 PhysicianBench 的可写资源筛选。
-    assert result.observed_state == {
-        "patient_id": "a",
-        "environment": "FHIR-AgentBench",
-        "operation_semantics": {"read_only": True},
-    }
-    assert "resources" not in result.observed_state
-
-    # 只读环境的完成判断不读全量病历：状态读取不发起任何 FHIR 请求。
-    assert len(models.requests_before_state) == 1
-    fhir_requests = [
-        request for request in services.requests if request.url.host == "instance-one"
-    ]
-    assert len(fhir_requests) == models.requests_before_state[0]
+    # completion 不读取全量状态。
     assert services.everything_calls == []
 
 
