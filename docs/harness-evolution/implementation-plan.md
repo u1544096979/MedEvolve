@@ -12,15 +12,15 @@
 
 1. 以 [实验设计](design.md) 为准：两环境、六任务来源、四基座，种子 42、重复 1 次，各组串行运行。
 2. 每来源抽样后按任务数 70/30 划分；训练数量向下取整，两集合非空、ID 不重叠，四基座使用相同划分。
-3. 每道训练题新会话，同题执行与反馈可以共用会话；每次尝试新医疗实例，执行、评审或评分结束后才释放。
-4. 固定程序版本、模型和原生限制；执行、学习、评审及两类测试用量分开记录，缺少 usage 时标记未知。后台调用限制不声明为统一硬预算。
+3. 每道训练题新会话，同题执行与反馈可以共用会话；合成任务只读，官方 Benchmark 按原生要求开放工具。每次尝试新医疗实例，执行、评审或评分结束后才释放，逐题实例不进入生成流程共享实例池。
+4. 固定程序版本、模型和原生限制；公共评审复用 `runtime/context.py` 的输入预算与完整记录选取，原生 Agent 内部调用由自身限制。执行、学习、评审及两类测试用量分开记录，缺少 usage 时标记未知。后台调用限制不声明为统一硬预算。
 5. 保留已有未提交修改。替代模型测试不产生付费请求；真实验收及正式实验只使用已授权模型和预算。四基座真实接入全部通过后才启动完整实验。
 
 ## 文件与职责
 
 | 文件 | 职责 |
 | --- | --- |
-| `harnesses/contracts.py`、`harnesses/datasets.py`、`configs/harness-evolution.json` | 复用数据契约，增加任务划分和本地程序配置 |
+| `contracts.py`、`harnesses/contracts.py`、`harnesses/datasets.py`、`configs/harness-evolution.json` | 项目共享数据契约、Harness 接口、任务划分和本地程序配置 |
 | `harnesses/local.py`、`harnesses/snapshots.py` | 本地子进程、初始目录、测试临时目录、经验保存 |
 | `harnesses/runners/{openclaw,hermes,ace,reflexion}.py` | 四份原生运行脚本，执行、学习和经验导出 |
 | `harnesses/medical_bridge.py`、`harnesses/feedback.py`、`harnesses/benchmarks/` | 复用工具与反馈，接入原生评分 |
@@ -28,11 +28,13 @@
 
 新增 Python 包包含 `__init__.py`，沿用 `pyproject.toml` 的 `harnesses*` 包发现。各基座依赖安装在各自环境，不合并到项目依赖中。工具桥绑定本地地址，使用现有调用身份和患者限制。
 
+实施前在当前 worktree 同步 main 的共享层，保留已提交方案和未提交修改，并验证合并后的共享层测试。共享 Pydantic 数据结构定义在根目录 `contracts.py`，runner 使用普通名称字典分派；新增测试的替代依赖在各文件内定义，异步测试显式标注 `@pytest.mark.asyncio`。训练与测试命令的测试放在 `tests/experiment/`。
+
 ## 任务 1：任务划分与本地运行配置
 
-**文件：** 修改 `harnesses/contracts.py`、`harnesses/datasets.py`、`configs/harness-evolution.json`；新增 `harnesses/local.py`、`tests/harness/test_splits.py`、`tests/harness/test_local.py`。
+**文件：** 修改 `contracts.py`、`harnesses/contracts.py`、`harnesses/datasets.py`、`configs/harness-evolution.json`；新增 `harnesses/local.py`、`tests/harness/test_splits.py`、`tests/harness/test_local.py`。
 
-**接口：** 保留 `freeze_datasets()` 和 `load_frozen()`；增加 `split_tasks()`。复用 `GroupKey`、`Snapshot`、`RunResult`、`TrainingFeedback`、`HarnessStep` 和 `HarnessAdapter` 协议。四个本地 runner 均实现该协议，构造参数接收配置、组目录和工具桥地址，不依赖容器执行。
+**接口：** 保留 `freeze_datasets()` 和 `load_frozen()`；增加 `split_tasks()`。`TaskSplit` 等共享数据模型定义在根目录 `contracts.py`，复用 Harness 已有数据字段和接口约定。四个本地 runner 提供 `start/execute/learn/freeze/close`，构造参数接收配置、组目录和工具桥地址。
 
 ```python
 from pathlib import Path
@@ -56,7 +58,7 @@ def split_tasks(tasks: list[Task], *, seed: int = 42) -> TaskSplit:
 ```
 
 - [ ] 写测试：10题得到7/3；改变输入顺序不改变划分；训练与测试ID互斥；单题报错；不同基座读取相同清单。执行 `python -m pytest tests/harness/test_splits.py -q`，确认新增功能尚未实现时失败。
-- [ ] 实现划分，manifest 保存比例、ID、患者重叠和源文件摘要。冻结输入时检查跨集合完全重复的题目，发现重复时报出题目ID并停止该组，不自动重写题目。近似题目与答案变体通过正式数据验收检查并记录。
+- [ ] 按 main 的新版 `Task`、`EvaluationResult` 解析输入，保留四项质量评分及难度；仅接受核验有效且 `read_only_task=True` 的任务，范围不匹配保留 `unsupported_operation`，缺只读核验的历史任务报告需重新核验。不兼容的旧质量结构明确报错，不静默降格。实现划分，manifest 保存比例、ID、患者重叠和源文件摘要；跨集合完全重复的题目时报出ID并停止该组，近似变体纳入数据验收。
 - [ ] 配置保存每个基座程序路径、上游提交、Python路径、初始状态模板和实验目录；沿用已授权模型配置及 `execute: false`。任务数须满足非空划分，单题夹具仍可用于组件测试。
 - [ ] 实现本地子进程与目录操作。子进程单独传入环境变量，保留宿主机 HOME；原始快照保存组内经验，测试复制到 `TemporaryDirectory`，以 `finally` 清理；导出明确包含的经验路径，排除原始会话和答案缓存。
 - [ ] 运行划分、本地目录及现有数据测试。提交：`feat(harness): 支持任务划分与本地实验目录`。
@@ -105,6 +107,8 @@ except (asyncio.TimeoutError, asyncio.CancelledError):
 
 新增仅供宿主调度使用的 `ToolSessions.inspect(session_id, *, client_id)`，返回已校验身份的 `ToolSession`，提供同一实例、动作和事件供评审读取；不增加向 Agent 暴露 FHIR 地址的 HTTP 接口。评分仍在实例关闭前进行。
 
+`ToolSessions.open(..., read_only: bool)` 显式接收工具权限并转发给 `get_tools()`；训练及合成测试传 `True`，官方 Benchmark 按原生要求传 `False`。MedAgentBench 复用 `ReadOnlyNativeTools`，只读会话的工具说明只列 GET、FINISH，POST 明确拒绝；PhysicianBench 只读会话不暴露创建工具。边界测试同时覆盖只读拒绝和原生任务所需写入可用。
+
 - [ ] 写 OpenClaw 测试：两道训练题会话不同，同题反馈沿用本题会话；输出技能保存重载后可读；个人配置路径和服务未被使用。写 Hermes 测试：两题新会话、组内记忆共享、测试关闭写入但保留读取。运行两份新增测试确认失败。
 - [ ] OpenClaw 直接启动固定版本 Gateway，显式传入本组配置、状态和工作目录，选择与个人服务无冲突的实验端口；保留子进程句柄。复用医疗插件，把本题工具会话写入本组状态目录，使用 `openclaw agent --agent medical --session-id ... --message-file ... --json` 执行。provider 的 base URL 直接取模型配置。
 - [ ] OpenClaw 每题生成新会话ID，保存该ID供反馈回合使用。解析原生响应中的答案文本、模型用量、工具信息和错误，转换成 `RunResult`；CLI 标准输出的日志不冒充答案。学习按锁定版本实际触发条件等待对应任务结束，历史 Workshop 记录不作为当前任务结束证据。
@@ -148,9 +152,9 @@ assert directory_digest(final_snapshot.path) == final_snapshot.digest
 
 ## 任务 4：生成任务测试与原生 Benchmark 评分
 
-**文件：** 新增 `harnesses/benchmarks/__init__.py`、`harnesses/benchmarks/physicianbench.py`、`harnesses/benchmarks/medagentbench.py`、`tests/harness/test_benchmarks.py`；复用 `evaluation/evaluator.py` 和 `harnesses/feedback.py`。
+**文件：** 新增 `harnesses/benchmarks/__init__.py`、`harnesses/benchmarks/physicianbench.py`、`harnesses/benchmarks/medagentbench.py`、`tests/harness/test_benchmarks.py`；修改 `contracts.py`、`evaluation/evaluator.py`、`evaluation/__init__.py`、`harnesses/feedback.py`，扩展 `tests/evaluation/test_evaluator.py`。
 
-**接口：** 定义以下数据结构和接口，不把参考答案传给 runner：
+**接口：** 以下数据结构定义在根目录 `contracts.py`，评分函数放在 `harnesses/benchmarks/`；不把参考答案传给 runner：
 
 ```python
 class BenchmarkCase(BaseModel):
@@ -176,13 +180,15 @@ async def score_case(case: BenchmarkCase, run: RunResult, *,
 - [ ] 写评分测试：正确及错误的答案和提交产生相应成绩；评分时实例未释放；评分异常记为 `scoring_error`；缺官方资产明确阻断。运行新增测试确认失败。
 - [ ] PhysicianBench 固定任务与评分源码提交 `c7efa8fd5b1e4744ada50668efe4b7e84023cbb0`，读取 `tasks/v1` 及各题患者映射。按官方 `scripts/run_eval.py` 的 pytest 入口提供 `JOB_DIR`、当前实例的 `FHIR_BASE_URL`、官方格式 `trajectory.log` 和输出文件；工具桥事件转换为官方事件字段，逐项保留判定结果。
 - [ ] MedAgentBench 固定提交 `99260117137b09f04837a8c18d18a1107efa55ae`，调用官方 `eval(case_data, results, fhir_api_base)` 和 `refsol.py`。GET、POST、FINISH记录按官方要求构造 `results`，POST保持模拟提交语义；缺参考函数时报 `benchmark_unavailable`。
-- [ ] 合成测试调用 `review_completion()`，使用真实 runner 答案、工具轨迹和同一实例状态，不重新调用公共解题器。原生评分器内的模型直接调用已授权 judge API，分别记录判定成本；更换 judge 模型后的分数仅作本实验内部比较。
+- [ ] 从 main 最新 `evaluate_task()` 提取 `review_completion(task, trajectory, solver_run, observed_state, config, *, record=None)`，保留当前完成判定材料、只读能力说明与失败语义；原有入口继续调用该函数，保留质量/难度三次判定及共享实例生命周期。合成测试只评价真实 runner 的答案和查询轨迹，不重新解题或以数据库写入作为完成条件。评审通过 `runtime.call_llm()` 自动应用公共输入预算；脚本可控辅助输入复用 `runtime.context.prepare_input()`，原始材料保留。原生 judge 直连授权 API，判定成本单列；更换 judge 模型后的分数仅作内部比较。
 - [ ] 运行评分测试和现有评价测试，提交：`feat(harness): 接入生成任务与原生Benchmark评分`。
 
 医疗实例生命周期在测试中必须满足：
 
 ```python
-session_id = await registry.open(solver_input, environment, client_id=client_id)
+session_id = await registry.open(
+    solver_input, environment, client_id=client_id, read_only=False
+)
 try:
     context = registry.inspect(session_id, client_id=client_id)
     run = await runner.execute(solver_input, session_id)
@@ -195,7 +201,7 @@ finally:
 
 ## 任务 5：训练、测试命令与四基座验收
 
-**文件：** 新增 `experiments/harness_train.py`、`experiments/harness_test.py`、`experiments/harness_summary.py`、`tests/harness/test_local_experiment.py`、`tests/harness/test_live_harnesses.py`；更新 `configs/harness-evolution.json`。
+**文件：** 新增 `experiments/harness_train.py`、`experiments/harness_test.py`、`experiments/harness_summary.py`、`tests/experiment/test_harness_local.py`、`tests/harness/test_live_harnesses.py`；更新 `configs/harness-evolution.json`。
 
 **接口：** 两个命令均支持 `--config --environment --harness --source --check`。`--check` 只验证本组合的数据、版本、程序、目录和评分器；实际运行需要配置 `execute: true` 及已授权模型和预算。未指定组合时依照配置顺序串行调用相同流程，不引入并行调度。
 
@@ -207,7 +213,7 @@ python -m experiments.harness_test --config configs/harness-evolution.json \
 ```
 
 - [ ] 写贯通测试，用四种替代原生组件运行10题7/3划分，断言仅7题反馈进入学习；测试分别读取初始状态与最终经验，官方题及3题测试反馈均不进入学习。断言新题会话不同、题间临时目录不同、评分后释放实例、快照不变。
-- [ ] 训练入口读取或创建共同冻结清单，准备独立组目录，按轮次执行训练题。每题执行前通过 `prepare_trajectory(context.instance, patient_id)` 保存本题初始患者材料；执行后调用 `read_state()`、`make_training_feedback()`。学习结束后关闭工具会话；基础设施故障跳过学习并记录，所有清理置于 `finally`。
+- [ ] 训练入口读取或创建共同冻结清单，准备独立组目录，按轮次执行训练题。每次尝试以 `read_only=True` 创建独立医疗实例，不借用生成流程的共享实例；通过 `prepare_trajectory(context.instance, patient_id)` 保存原始患者材料。执行后收集状态和真实工具轨迹，调用 `make_training_feedback()`；评审应用公共输入预算并记录缩减信息。学习结束后关闭工具会话，故障跳过学习并记录，所有清理置于 `finally`。
 - [ ] 测试入口分别运行初始状态和最终状态；每题复制经验到独立临时目录并启动新会话，关闭学习。合成测试使用公共评审，Benchmark使用任务4评分器；逐题保存原始结果，关闭进程与实例后丢弃目录。经验导出与重新加载的目录布局必须一致。
 - [ ] 汇总按环境、基座、来源分别保存两类测试成绩、基线、绝对提升、逐题分母和失败类型；按患者配对 bootstrap 1000次，种子42，小于两组时区间为空。成本按生成、执行、学习、评审及两类测试分开记录，缺价格或用量标记未知，生成成本按任务来源仅计一次。
 - [ ] 运行替代测试及四基座真实接入验收，独立提交命令与汇总改动：`feat(experiment): 提供Harness训练和测试命令`、`feat(experiment): 汇总两类测试成绩与成本`。真实验收缺程序、数据、授权或预算时报告未验证，不产生付费请求。
@@ -215,7 +221,7 @@ python -m experiments.harness_test --config configs/harness-evolution.json \
 正式运行前的验证命令：
 
 ```bash
-python -m pytest tests/harness tests/evaluation tests/environment -q
+python -m pytest tests/harness tests/experiment/test_harness_local.py tests/evaluation tests/environment -q
 python -m experiments.harness_train --config configs/harness-evolution.json --check
 python -m experiments.harness_test --config configs/harness-evolution.json --check
 ```
