@@ -28,7 +28,7 @@
 
 **接口：** 新增 `validate_tool_result_limit(limit: int) -> None` 与 `serialize_tool_result(value: object, limit: int, *, write: bool = False) -> str`。`get_tools` 的参数和返回类型保持现状，`contracts.py` 不增加配置字段。
 
-- [ ] **1. 添加行为测试。** 在新增测试文件使用以下测试主体，并导入 json、pytest 和上述两个接口：
+- [x] **1. 添加行为测试。** 在新增测试文件使用以下测试主体，并导入 json、pytest 和上述两个接口：
 
 ```python
 @pytest.mark.parametrize("limit", [500, 5000, 10000])
@@ -78,7 +78,7 @@ def test_limit_too_small_is_rejected():
 
 在现有 `test_tool_result_limit_truncates_fhir_results` 中替换尾缀断言：对默认、500、200000 三种上限解析返回 JSON，分别检查长度、裁剪计数、记录完整性和全量结果。增加一次 `get_tools(instance(), ["a"], tool_result_limit=1)` 的拒绝测试，断言 HTTP 请求列表为空。
 
-- [ ] **2. 运行新增与受影响测试，确认行为缺口。**
+- [x] **2. 运行新增与受影响测试，确认行为缺口。**
 
 ```bash
 python -m pytest tests/environment/test_tool_results.py tests/environment/test_patient_boundary.py -q
@@ -86,7 +86,7 @@ python -m pytest tests/environment/test_tool_results.py tests/environment/test_p
 
 预期：新增接口尚不存在或旧返回无法解析导致失败；记录失败位置，不修改患者边界测试的原有要求。
 
-- [ ] **3. 添加最小序列化实现并接入绑定入口。** 新模块仅负责长度验证、记录选择和序列化，可采用以下完整核心实现：
+- [x] **3. 添加最小序列化实现并接入绑定入口。** 新模块仅负责长度验证、记录选择和序列化，可采用以下完整核心实现：
 
 ```python
 import json
@@ -156,8 +156,8 @@ return serialize_tool_result(
 
 保持访问检查先于返回裁剪。错误返回也经过长度限制，使用结构化 `error`；过长错误用固定短提示替代，不能硬切。`EnvironmentUnavailable` 与 `UnsupportedDecisionPoint` 继续抛出。补充长错误响应测试，验证其 JSON 合法且长度受限。
 
-- [ ] **4. 运行任务测试并更新说明。** 使用步骤 2 的命令，预期全部通过。将 `docs/physicalbench-tool-output/README.md` 写为当前规则：可配置上限、完整记录、裁剪字段、最小配置值及单条和写入超限行为。
-- [ ] **5. 独立提交。**
+- [x] **4. 运行任务测试并更新说明。** 使用步骤 2 的命令，预期全部通过。将 `docs/physicalbench-tool-output/README.md` 写为当前规则：可配置上限、完整记录、裁剪字段、最小配置值及单条和写入超限行为。
+- [x] **5. 独立提交。**
 
 ```bash
 git add environments/tool_results.py environments/__init__.py tests/environment/test_tool_results.py tests/environment/test_patient_boundary.py docs/physicalbench-tool-output/README.md
@@ -170,7 +170,7 @@ git commit -m 'fix(environment): 按完整记录限制工具 JSON 返回'
 
 **接口：** `ENVIRONMENT_EXPLORATION: str` 保持原名称，`explore_environment` 和 `EnvironmentExploration` 接口不变。
 
-- [ ] **1. 修改共享提示词。** 在现有能力和患者边界规则后加入：
+- [x] **1. 修改共享提示词。** 在现有能力和患者边界规则后加入：
 
 ```text
 交付指导前必须实际调用本次环境工具，不能仅凭函数清单认定能力已验证。
@@ -184,15 +184,15 @@ git commit -m 'fix(environment): 按完整记录限制工具 JSON 返回'
 ```
 
 保留最终 JSON 和原生 FINISH 规则，不改变配置预算或原生动作格式。
-- [ ] **2. 检查两条探索通道。** 使用现有共享探索测试确认 PhysicianBench 和 MedAgentBench 均接收同一个 `ENVIRONMENT_EXPLORATION`；复用已有测试，在调用参数检查中增加 `instructions` 与该常量相等的断言。仅验证接线，不新增词句快照测试或模拟模型遵守提示词的测试。
-- [ ] **3. 运行兼容性测试。**
+- [x] **2. 检查两条探索通道。** 使用现有共享探索测试确认 PhysicianBench 和 MedAgentBench 均接收同一个 `ENVIRONMENT_EXPLORATION`；复用已有测试，在调用参数检查中增加 `instructions` 与该常量相等的断言。仅验证接线，不新增词句快照测试或模拟模型遵守提示词的测试。
+- [x] **3. 运行兼容性测试。**
 
 ```bash
 python -m pytest tests/method/test_envexplore_environment.py tests/runtime/test_native.py experiments/test_envexplore.py -q
 ```
 
 预期：共享探索、预算、释放和 FINISH 格式测试全部通过。提示词无法保证真实模型绝不重复；本任务不通过额外运行时机制扩大约束。
-- [ ] **4. 独立提交。**
+- [x] **4. 独立提交。**
 
 ```bash
 git add methods/medevolve/prompts.py tests/method/test_envexplore_environment.py
@@ -205,7 +205,7 @@ git commit -m 'fix(envexplore): 明确工具验证与探索停止规则'
 
 **接口：** `NativeTools.execute(action: str) -> JsonObject` 保持 GET/POST/FINISH 结构。可恢复的参数错误返回 `failure_category="tool_error"`、`status_code=400`；错误详情放在 `reply`。成功 GET 与真实环境故障保持原有接口。
 
-- [ ] **1. 添加分类与恢复测试。** 环境层采用 `httpx.MockTransport`，逐例返回：明确说明未知查询参数的 GET 400、明确说明筛选参数值无效的 GET 400、无参数错误信息的 GET 400、401、403、404、503，以及 ConnectError 和 ReadTimeout。前两类断言为 `tool_error`，其他类断言为 `environment_error`；患者越界继续使用现有访问拒绝测试。
+- [x] **1. 添加分类与恢复测试。** 环境层采用 `httpx.MockTransport`，逐例返回：明确说明未知查询参数的 GET 400、明确说明筛选参数值无效的 GET 400、无参数错误信息的 GET 400、401、403、404、503，以及 ConnectError 和 ReadTimeout。前两类断言为 `tool_error`，其他类断言为 `environment_error`；患者越界继续使用现有访问拒绝测试。
 
 参数错误响应样例：
 
@@ -252,35 +252,39 @@ async def test_parameter_error_recovered_before_finish(monkeypatch):
 ```
 
 另加“400 后直接 FINISH”“400 后预算耗尽”“503 后成功 GET 再 FINISH”三条序列，分别要求未恢复失败、预算耗尽和环境失败；保留已有无效 FINISH 和异常脱敏测试。
-- [ ] **2. 运行测试，确认旧分类导致失败。**
+- [x] **2. 运行测试，确认旧分类导致失败。**
 
 ```bash
 python -m pytest tests/environment/test_medagentbench.py tests/runtime/test_native.py -q
 ```
 
-- [ ] **3. 校准声明并实现分类。** Condition 描述改为 patient 与 category，不补入 status。检查 MedicationRequest 等 GET 描述与参数表的矛盾，只保留参数表明确声明的范围，不新增未经验证的参数。增加清单说明：查询只使用声明参数，服务拒绝参数时可修正重试。保持九个函数和现有 POST 字段。
+- [x] **3. 校准声明并实现分类。** Condition 描述改为 patient 与 category，不补入 status。检查 MedicationRequest 等 GET 描述与参数表的矛盾，只保留参数表明确声明的范围，不新增未经验证的参数。增加清单说明：查询只使用声明参数，服务拒绝参数时可修正重试。保持九个函数和现有 POST 字段。
 
 现有 `test_functions_are_unmodified_official_declaration` 依赖整文件哈希。改为验证九个函数、Condition 与 MedicationRequest 的 GET 参数集合，以及 POST 参数结构，保留上游版本和许可证出处；不要通过更新哈希继续声称声明未经修改。模块说明明确本地声明与错误分类适配。
 
-将 GET 的 HTTPStatusError 单独处理，分类核心如下；`_is_parameter_error` 在同一模块定义：
+将 GET 的 HTTPStatusError 单独处理：HTTP 400 记为可恢复的工具错误，其他状态沿用环境错误。
 
 ```python
 except httpx.HTTPStatusError as exc:
     response = exc.response
-    recoverable = response.status_code == 400 and _is_parameter_error(response)
+    if response.status_code == 400:
+        return {
+            "kind": "GET", "request": request,
+            "reply": (f"HTTP {response.status_code}: {response.text}. "
+                      "Correct the query parameters and retry."),
+            "status_code": response.status_code,
+            "failure_category": "tool_error",
+        }
     return {
         "kind": "GET", "request": request,
-        "reply": (f"HTTP {response.status_code}: {response.text}. "
-                  + ("Correct the query parameters and retry."
-                     if recoverable else "FHIR request failed.")),
-        "status_code": response.status_code,
-        "failure_category": "tool_error" if recoverable else "environment_error",
+        "reply": f"Error in sending the GET request: {exc}",
+        "failure_category": "environment_error",
     }
 ```
 
-`_is_parameter_error` 检查 OperationOutcome 的 `issue[].diagnostics` 与 `issue[].details.text`；非 JSON 时检查响应文本。只接受含 `parameter`、`search parameter` 或 `query parameter` 且明确含 unknown、unsupported、unrecognized、invalid、not supported 或 not recognized 的错误描述，匹配不区分大小写。没有这种明确诊断的 400 保持环境错误。ConnectError、ReadTimeout 和其他异常沿用环境错误。不要向服务发验证或重试请求。
+判定只看状态码，不解析 OperationOutcome 正文，也不向服务发验证或重试请求。非 400 的 HTTP 错误、ConnectError、ReadTimeout 和其他异常沿用环境错误与原回复文本。
 
-原生运行时增加一个 `pending_parameter_error` 标志，初始为 False：
+原生运行时增加一个 `pending_parameter_error` 标志，初始为 False；该标志只在解题运行中生效，环境探索运行以交付指导为完成条件，不因探到的参数错误判失败：
 
 ```python
 if result.get("failure_category") == "tool_error":
@@ -290,8 +294,8 @@ elif result.get("kind") == "GET" and not result.get("failure_category"):
 ```
 
 可恢复错误通过现有 `tool_output` 留痕，不追加终止性的 `run_error`，不设置 `env_failed`。合法 FINISH 时先保持现有环境失败优先判断，再检查 pending 标志：未恢复则返回 failed 和 tool_error，已恢复则按现有接口完成。真实环境失败标记不因成功 GET 清除；POST 不清除待恢复查询错误。预算耗尽和无效 FINISH 沿用现有规则，不新增查询去重或自动重试。
-- [ ] **4. 运行步骤 2 的测试并检查边界。** 预期参数错误恢复序列正常完成，原有环境故障、患者访问、原生 POST 和 FINISH 测试仍通过。
-- [ ] **5. 独立提交。**
+- [x] **4. 运行步骤 2 的测试并检查边界。** 预期参数错误恢复序列正常完成，原有环境故障、患者访问、原生 POST 和 FINISH 测试仍通过。
+- [x] **5. 独立提交。**
 
 ```bash
 git add environments/medagentbench-functions.json environments/medagentbench.py runtime/native.py tests/environment/test_medagentbench.py tests/runtime/test_native.py
@@ -304,7 +308,7 @@ git commit -m 'fix(medagentbench): 校准查询说明并支持参数错误恢复
 
 **接口：** 消费任务 3 的 completed `RunResult` 与包含参数错误、成功 GET 的 `tool_output` 执行记录；评测继续使用原有 `read_state` 和 `CompletionReview`。
 
-- [ ] **1. 添加恢复后的评价接线测试。** 复用现有 `harness`，保留 verifier、quality 和 completion 的原有模拟实现，只替换 solver：
+- [x] **1. 添加恢复后的评价接线测试。** 复用现有 `harness`，保留 verifier、quality 和 completion 的原有模拟实现，只替换 solver：
 
 ```python
 def test_recovered_parameter_error_reaches_completion(harness, monkeypatch):
@@ -336,7 +340,7 @@ def test_recovered_parameter_error_reaches_completion(harness, monkeypatch):
 ```
 
 此测试验证恢复状态与错误记录进入评测，不证明任意 FINISH 或任意操作已完成；完成真假仍使用现有状态判定测试覆盖。
-- [ ] **2. 运行相关离线回归。**
+- [x] **2. 运行相关离线回归。**
 
 ```bash
 python -m pytest tests/environment/test_tool_results.py tests/environment/test_patient_boundary.py tests/environment/test_medagentbench.py tests/runtime tests/method/test_envexplore_environment.py tests/method/test_envexplore.py tests/evaluation tests/integration experiments/test_envexplore.py experiments/test_envexplore_configs.py -q
@@ -344,7 +348,7 @@ git diff --check
 ```
 
 预期：上述受影响路径通过，无格式错误。测试使用本地模拟，不调用付费模型、不启动远程环境。提示词真实效果需要运行记录才能判断；本次交付不能声称已经证明真实模型完全遵循提示词。
-- [ ] **3. 核对最终改动并提交。** 确认 config 上限仍传入工具绑定，未增加病历压缩或查询宽容逻辑，提交内容不包含其他工作区改动。
+- [x] **3. 核对最终改动并提交。** 确认 config 上限仍传入工具绑定，未增加病历压缩或查询宽容逻辑，提交内容不包含其他工作区改动。
 
 ```bash
 git add tests/evaluation/test_evaluator.py docs/environment-tool-reliability/implementation-plan.md

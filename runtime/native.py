@@ -99,6 +99,10 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
         {"role": "user", "content": native_prompt},
     ]
     env_failed = False
+    # 参数错误恢复判定只适用于解题路径：探索运行以探测参数边界并产出指导为目的，
+    # 服务拒绝某个参数是探索的预期结果而非故障。
+    solving = output_type is SolverAnswer
+    pending_parameter_error = False
     try:
         if budget.max_model_turns == 0:
             return result_factory(model=model, trace=trace, usage=usage,
@@ -155,6 +159,12 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                         return result_factory(model=model, output=output, trace=trace,
                                               usage=usage, status="failed",
                                               error="FHIR access failed during this run")
+                    if solving and pending_parameter_error:
+                        trace.append({"type": "run_error", "failure_category": "tool_error",
+                                      "error": "Query parameter error was not corrected"})
+                        return result_factory(model=model, output=output, trace=trace,
+                                              usage=usage, status="failed",
+                                              error="Query parameter error was not corrected")
                     return result_factory(model=model, output=output, trace=trace,
                                           usage=usage, status="completed")
 
@@ -174,6 +184,11 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                         env_failed = True
                         trace.append({"type": "run_error", "failure_category": "environment_error",
                                       "error": _redact_secret(str(reply), model)})
+                    if solving:
+                        if result.get("failure_category") == "tool_error":
+                            pending_parameter_error = True
+                        elif result.get("kind") == "GET" and not result.get("failure_category"):
+                            pending_parameter_error = False
                 except Exception as exc:
                     tool_exception = True
                     env_failed = True

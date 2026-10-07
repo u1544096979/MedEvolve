@@ -178,6 +178,34 @@ def test_write_completion_uses_observed_state(harness, state, completed):
     assert h.released == h.created
 
 
+def test_recovered_parameter_error_reaches_completion(harness, monkeypatch):
+    h = harness
+    h.state = {"prescriptions": [{"id": "written"}]}
+    runtime_module = sys.modules["runtime"]
+
+    async def recovered_solver(**kwargs):
+        h.model_calls.append(kwargs)
+        return RunResult(output={"answer": "处方已创建"}, usage={}, status="completed",
+            trace=[
+                {"type": "tool_output", "name": "native_action", "output": {
+                    "kind": "GET", "failure_category": "tool_error",
+                    "status_code": 400, "reply": "Unknown search parameter status"}},
+                {"type": "tool_output", "name": "native_action", "output": {
+                    "kind": "GET", "reply": "query succeeded", "data": {"entry": []}}},
+            ])
+
+    monkeypatch.setattr(runtime_module, "run_agent", recovered_solver)
+    result = evaluate(h)
+    assert result.status == "completed"
+    assert result.completion.completed is True
+    assert h.state_reads
+    completion_call = next(c for c in h.model_calls
+                           if c["output_type"] is CompletionReview)
+    payload = json.loads(completion_call["input_text"])
+    assert payload["solver_trace"][0]["output"]["failure_category"] == "tool_error"
+    assert payload["solver_trace"][1]["output"]["data"] == {"entry": []}
+
+
 @pytest.mark.parametrize("failure, category, instances, runs", [
     ("evidence", "environment_error", 1, 0),
     ("verifier", "model_error", 1, 1),
