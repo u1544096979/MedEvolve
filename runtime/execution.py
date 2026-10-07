@@ -38,9 +38,22 @@ class _ToolBudgetExceeded(AgentsException):
     pass
 
 
+class _RepeatedToolCall(AgentsException):
+    """同一工具与参数重复调用多次，说明 Agent 不再推进，需要收尾作答。"""
+
+
 # 收尾调用可携带的工具结果上限（字符）：预算用尽后只靠已有结果作答。
 FINAL_ANSWER_CHARS = 120_000
 TOOL_RESULT_SNIPPET_CHARS = 4000
+# 同一工具与参数的重复次数上限；超过即停止循环并进入收尾作答。
+REPEATED_TOOL_CALL_LIMIT = 3
+
+
+def _is_context_overflow(exc: BaseException) -> bool:
+    text = str(exc)
+    return "context_length_exceeded" in text or "maximum context length" in text
+
+
 async def _final_answer(*, client: AsyncOpenAI, model: ModelConfig, instructions: str,
                         input_text: str, trace: list[dict],
                         output_type: type[BaseModel]) -> RunResult:
@@ -178,6 +191,7 @@ class _Records(RunHooks):
         self.trace = []
         self.model_turns = 0
         self.tool_calls = 0
+        self.repeats: dict[tuple, int] = {}
         self.tokens = {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
     async def on_llm_start(self, context, agent, system_prompt, input_items):
@@ -198,6 +212,15 @@ class _Records(RunHooks):
             self.trace.append({"type": "tool_budget", "name": tool.name,
                                "call_id": context.tool_call_id})
             raise _ToolBudgetExceeded("Function tool call budget exhausted")
+        key = (tool.name, str(context.tool_arguments))
+        self.repeats[key] = self.repeats.get(key, 0) + 1
+        if self.repeats[key] > REPEATED_TOOL_CALL_LIMIT:
+            self.trace.append({"type": "tool_repeat", "name": tool.name,
+                               "call_id": context.tool_call_id,
+                               "repeats": self.repeats[key]})
+            raise _RepeatedToolCall(
+                f"Tool {tool.name} called {self.repeats[key]} times with identical arguments"
+            )
         self.tool_calls += 1
         self.trace.append({"type": "tool_start", "name": tool.name,
                            "call_id": context.tool_call_id, "arguments": context.tool_arguments})
@@ -296,8 +319,21 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                     run_config=RunConfig(tracing_disabled=True, call_model_input_filter=filter_input),
                 )
                 output = output_type.model_validate(result.final_output).model_dump(mode="json")
-            except (MaxTurnsExceeded, _ToolBudgetExceeded) as exc:
+            except (MaxTurnsExceeded, _ToolBudgetExceeded, _RepeatedToolCall) as exc:
                 if not reserved:
+                    raise
+                final = await _final_answer(
+                    client=client, model=model, instructions=instructions,
+                    input_text=input_text, trace=records.trace, output_type=output_type,
+                )
+                return _result(
+                    model=model, output=final.output,
+                    trace=[*records.trace, *final.trace],
+                    usage=_merge_usage(records.usage(), final.usage), status="completed",
+                )
+            except Exception as exc:
+                # 上下文被工具结果填满时循环已无法继续，用收尾调用产出答案。
+                if not _is_context_overflow(exc):
                     raise
                 final = await _final_answer(
                     client=client, model=model, instructions=instructions,
