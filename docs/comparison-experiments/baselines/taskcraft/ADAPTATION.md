@@ -102,7 +102,7 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 | `width/answer` | `gen_width_based_task.py:135-137` | `retry_predict`(3) / `for _ in range(3)` | `attempts=3` / `width_attempts=3` |
 
 核验内部的无工具作答与评分请求按源码 `agent_tools.py:195` 的 `max_retries=1` 保持单次尝试；`VerifyAgent.forward` 的外层三次重试不变。
-25. 候选处理顺序。源码在两个入口各开多个 `ThreadPoolExecutor` 并发处理候选：结论抽取按块、原子过滤与出题按结论、核验按问题、评分判定按采样（`gen_atomic_task.py:175`、`404`、`465`，`agent_tools.py:193`）。适配全部顺序执行，并在两处提前结束：结论数达到 `max_candidate_conclusions`、生成问题数达到 `max_candidate_atomic` 后不再继续，预算耗尽时立即停止后续候选。效果是同一预算下完成的候选更少、顺序固定可复现，且提前终止与并发完成的候选集合可能不同；代价是单次运行的墙钟更长。
+25. 候选处理顺序。源码在两个入口各开多个 `ThreadPoolExecutor` 并发处理候选：结论抽取按块、原子过滤与出题按结论、核验按问题、评分判定按采样（`gen_atomic_task.py:175`、`404`、`465`，`agent_tools.py:193`）。适配全部顺序执行，并在三处提前结束：结论数达到 `max_candidate_conclusions`、生成问题数达到 `max_candidate_atomic` 后不再继续，预算耗尽时立即停止后续候选。效果是同一预算下完成的候选更少、顺序固定可复现，且提前终止与并发完成的候选集合可能不同；代价是单次运行的墙钟更长。
 26. 出题与清洗的拒绝分支。原子出题返回的 `task_type` 不在本次请求的 `directions` 内时，按拒绝记录 `atomic/question`，该结论不进入清洗与核验；`clean_qa` 返回空问题或空参考答案时，按拒绝记录 `atomic/clean`，该结论同样不生成候选。源码没有这两项判断（题型来自适配追加的约束，`clean_qa` 也不检查空值），因此效果是相同输入下适配的原子候选数可能少于源码，原因保留在 trace。
 
 ## 5. 预算口径与真实运行结果
@@ -117,6 +117,8 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 |---|---|---|---|
 | 机制验收 | `configs/taskcraft-mechanism-physicianbench.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-physicianbench.json` 复制，只改 `run_id`、`output_dir`、该预算 |
 | 机制验收 | `configs/taskcraft-mechanism-medagentbench.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-medagentbench.json` 复制，只改同三处 |
+| 机制验收 | `configs/taskcraft-mechanism-physicianbench-rerun3.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-mechanism-physicianbench.json` 复制，只改 `run_id`、`output_dir` |
+| 机制验收 | `configs/taskcraft-mechanism-medagentbench-rerun.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-mechanism-medagentbench.json` 复制，只改同两处 |
 | 公共比较 | `configs/taskcraft-physicianbench.json` | 8 轮 / 40 次工具 | 冻结公共值，未改动 |
 | 公共比较 | `configs/taskcraft-medagentbench.json` | 1 轮 / 0 次工具 | 冻结公共值，未改动 |
 
@@ -132,71 +134,74 @@ MEDEVOLVE_TASKCRAFT_LIVE_CONFIG=<机制配置> pytest tests/method/test_taskcraf
 
 ### 5.1 PhysicianBench 机制验收
 
-参考运行目录 `outputs/taskcraft-mechanism-physicianbench-rerun2`，患者 `MRN4460967357`，种子 `fhir-full:v1`，`gpt-4o-mini`，机制预算 800 轮 / 800 次工具，墙钟 19 分 08 秒。
+参考运行目录 `outputs/taskcraft-mechanism-physicianbench-rerun3`，患者 `MRN4460967357`，种子 `fhir-full:v1`，`gpt-4o-mini`，机制预算 800 轮 / 800 次工具，墙钟 13 分 37 秒。
 
 | 项 | 数值 |
 |---|---|
-| 生成状态 | completed，`error=null`；335 模型轮 / 43 次工具调用 / 751 911 tokens（输入 712 287，输出 39 624） |
-| 候选数 | atomic 6，width 3，depth 0 |
+| 生成状态 | completed，`error=null`；266 模型轮 / 44 次工具调用 / 573 811 tokens（输入 543 163，输出 30 648） |
+| 候选数 | atomic 2，depth 0，width 0 |
 | 分支顺序 | `["width", "depth"]`（派生种子决定） |
-| 原子阶段 | 4 块文本、54 708 字符；chunk 0 抽到 46 条结论，出题 20 次，核验接纳 6 题；11 次出题因模型返回空 `task_type` 被拒；9 次核验中 2 次返回 `LLM can solve this task`、1 次 `action response carries no tool call` |
-| 宽度阶段 | 合并 3 组，可分解性检查保留 3 组，产出 3 题，父题各 2 道 |
-| 深度阶段 | 6 道父题各 4 次尝试全部失败；反向检索 24 次：3 次成功、10 次 superset 校验拒绝、11 次硬失败（`depth/backward` 记录 14 条 = 3 成功 + 11 失败，另 10 次在 superset 处被拒）；40 次 action 请求中 11 次为空 action 响应，13 次 superset 提案中 10 次被 `is_superset_valid` 拒绝，3 个辅助问题全部未通过核验；`depth/result.extended=0` |
-| 候选证据 | 原子题 `Condition/2571`、`Condition/2572`、`Condition/2573`、`Condition/2570`、`Condition/2566`、`Condition/2568`；宽度题分别合并 `Condition/2571`+`Condition/2572`、`Condition/2573`+`Condition/2570`、`Condition/2566`+`Condition/2568`，各带两道父题 |
-| 最终选题 | 1 题（请求方向为药物处方与诊断与解释；候选均为诊断与解释，其余 8 题按 `task_type_quota_exhausted` 未进入） |
+| 原子阶段 | 4 块文本、54 708 字符；chunk 0 抽到 47 条结论，出题 10 次，核验接纳 2 题；6 次出题因题型超出请求方向被拒；10 次核验中 7 次 `action response carries no tool call`、1 次 `LLM can solve this task`、2 次无错误（`agent_score=0.0`） |
+| 宽度阶段 | 合并 1 组，可分解性检查保留 0 组，产出 0 题 |
+| 深度阶段 | 2 道父题各 4 次尝试全部失败；反向检索 8 次：0 次成功、4 次 superset 校验拒绝、4 次硬失败；15 次 action 请求中 4 次为空 action 响应，4 次 superset 提案全部被 `is_superset_valid` 拒绝；`depth/result.extended=0` |
+| 候选证据 | 原子题 `Condition/2571`、`Condition/2566` |
+| 最终选题 | 1 题（请求方向为药物处方与诊断与解释；候选均为诊断与解释，另一题按 `task_type_quota_exhausted` 未进入） |
 | 无已知 token 的请求 | 0 次（`runs_without_known_tokens=0`） |
-| 实现提交 | `4daa5cb`（分支 `codex/taskcraft-baseline`，运行于 04:32 开始、04:51 结束） |
+| 实现提交 | `5a771a5`（分支 `codex/taskcraft-baseline`，运行于 05:55 开始、06:09 结束） |
 | 作者源码基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
 
-阶段结论：`atomic` 与 `width` 产出带参考答案、可回查证据与父题的真实候选；`depth` 在 PhysicianBench 上没有通过验收，接纳候选为 0。三类失败都落在作者自身的判定分支上：
+阶段结论：`atomic` 产出带参考答案与可回查证据的真实候选；`depth` 与 `width` 都没有通过验收，接纳候选均为 0。真实运行的阶段断言在 `depth` 上失败（`1 failed in 816.83s`），产物在断言前落盘。未通过的具体失败类别：
 
-1. 反向检索空响应。`depth/backward` 的 40 次 action 请求中 11 次返回空 action 对象 `{"tool_calls": [], "final_answer": null}`。源码 `step` 在无工具调用时把返回内容直接当作终答，结构化输出下没有对应文本形态，适配把该情形记为生成失败（`action response carries no tool call`），由调用方的外层重试承担；这次尝试取不到 `identifier`/`relation`，因此没有 superset。作者未加保护的 `backward` 会把该内容直接交给 `safe_json_loads` 解析同一字段。
-2. superset 提案被 `is_superset_valid` 拒绝。13 次提案中 10 次判为无效：提案是元素自身（`Condition/2571`、`Condition/2568`），identifier 为空，或容器凭空构造（`Clinical Record of Treatment Plan`、`Condition Group for Condition/2573`、`problem-list-item`）。
-3. 辅助问题未通过核验。3 个 hop 产出了辅助问题，其中 2 个在 `depth/verify` 上因病历工具 Agent 得分为 0 被 `agent_score <= 0` 分支拒绝（例 `What date and time does the clinical encounter for patient ID 2571 take place?`，`agent_score=0.0`），第 3 个核验请求本身返回空 action 响应。
+1. `depth` 反向检索空响应。15 次 action 请求中 4 次返回空 action 对象 `{"tool_calls": [], "final_answer": null}`，结构化输出下记为生成失败 `action response carries no tool call`，取不到 `identifier`/`relation`，因此没有 superset。
+2. `depth` superset 提案全部被拒。4 次提案的 identifier 为空或为凭空构造的容器（`Patient's problem list`、`Phase of treatment for Condition/2571`、`Current patient's consultation phase`）。
+3. `width` 可分解性检查未通过。唯一的合并组在 `width/decompose` 上被判 `state != 1`，保留 0 组。
 
-PhysicianBench 保留的运行目录：
+修复前的 PhysicianBench 机制运行目录：
 
 | 运行目录 | 实现提交 | 内容 |
 |---|---|---|
 | `outputs/taskcraft-mechanism-physicianbench` | `41fe367` | completed；261 模型轮 / 17 次工具调用 / 447 995 tokens，墙钟 16 分 35 秒；atomic 4，width 1，depth 0；最终选题 2 题 |
+| `outputs/taskcraft-mechanism-physicianbench-rerun2` | `4daa5cb` | completed；335 模型轮 / 43 次工具调用 / 751 911 tokens，墙钟 19 分 08 秒；atomic 6，width 3，depth 0；最终选题 1 题 |
 | `outputs/taskcraft-mechanism-physicianbench-rerun` | `b8da4a9` | completed；262 模型轮 / 26 次工具调用 / 469 017 tokens，墙钟 14 分 45 秒；atomic 3，width 2，depth 0；3 次请求无已知 token；最终选题 1 题 |
 | `outputs/taskcraft-mechanism-physicianbench-attempt1` | `41fe367` | failed（原子阶段没有通过内置核验的候选）；227 模型轮 / 16 次工具调用 / 332 106 tokens，墙钟 12 分 56 秒；atomic 0，width 0，depth 0；最终选题 0 题 |
 
 ### 5.2 MedAgentBench 机制验收
 
-机制验收运行目录 `outputs/taskcraft-mechanism-medagentbench`（机制预算 800 轮 / 800 次工具），患者 `S2874099`，种子 `jyxsu6/medagentbench@sha256:3fb83d7ed71c5476f9eb6212bd440a909ef7505922bbc757dc488a8fc0701966`，`deepseek-v4.1-flash`。
+机制验收运行目录 `outputs/taskcraft-mechanism-medagentbench-rerun`（机制预算 800 轮 / 800 次工具），患者 `S2874099`，种子 `jyxsu6/medagentbench@sha256:3fb83d7ed71c5476f9eb6212bd440a909ef7505922bbc757dc488a8fc0701966`，`deepseek-v4.1-flash`。
 
 | 项 | 数值 |
 |---|---|
-| 生成状态 | completed；686 模型轮 / 187 次工具调用 / 4 115 580 tokens（输入 3 091 613，输出 1 023 967），墙钟 2 小时 11 分 |
-| 候选数 | atomic 10，depth 6，width 4 |
+| 生成状态 | completed；616 模型轮 / 196 次工具调用 / 5 155 301 tokens（输入 3 981 012，输出 1 174 289），墙钟 5 小时 02 分 |
+| 候选数 | atomic 10，depth 3，width 0 |
 | 轨迹 | 898 条来源、234 000 字符，按 `chunk_size=16384` 分为 15 块 |
-| 原子阶段 | chunk 0 抽到 75 条结论，生成 10 题，核验接纳 10 题，证据为 `Procedure/726139` 等 10 条真实记录 |
-| 深度阶段 | 31 次反向检索：12 次成功、14 次 superset 校验拒绝、5 次硬失败；核验 12 次；6 道父题扩展成功，每道带一个父题，证据为父题证据与 superset 关系来源的合并 |
-| 宽度阶段 | 合并检查保留 4 组，产出 4 题，父题数 2–3 |
-| 最终选题 | 1 题（请求方向为药物处方与诊断与解释，候选均为诊断与解释，另一方向的配额没有候选） |
-| 过程异常 | 5 次反向检索硬失败：2 次模型返回 `{"name": "final_answer", ...}` 而非 `{"action": ...}`，3 次收到 `PatientAccessError: Only FHIR search URLs are supported`；1 次核验返回 `LLM can solve this task`（作者的无法工具作答过滤分支）；均按作者重试参数处理 |
-| 实现提交 | `41fe367`（分支 `codex/taskcraft-baseline`，运行于 01:12 开始、03:23 结束） |
+| 原子阶段 | chunk 0 抽到 75 条结论，生成 10 题，核验接纳 10 题（`agent_score` 0.67–2.0），证据为 `Procedure/726139` 等 10 条真实记录 |
+| 深度阶段 | 31 次反向检索：10 次成功、11 次 superset 校验拒绝、10 次硬失败；21 次 superset 提案中 11 次被拒；核验 10 次；3 道父题扩展成功，每道带一个父题，证据为父题证据与 superset 关系来源的合并（17–18 条） |
+| 宽度阶段 | 合并 4 组，可分解性检查全部判为不可分解，保留 0 组，产出 0 题 |
+| 最终选题 | 2 题（均为原子题；扩展候选按 `task_type_quota_exhausted` 未进入） |
+| 过程异常 | 10 次反向检索硬失败：3 次 `NativeAction` 缺 `action` 字段、3 次 `AgentThought` 非 JSON、3 次 `PatientAccessError: Only FHIR search URLs are supported`、1 次 `BackwardContext` 校验失败；1 次请求无已知 token（`runs_without_known_tokens=1`） |
+| 实现提交 | `5a771a5`（分支 `codex/taskcraft-baseline`，运行于 05:57 开始、10:59 结束） |
 | 作者源码基线 | trace 内 `author_commit=1e405e0b02c4738654e2d885b16677b46c9fe969` |
 
-阶段结论：`atomic`、`depth`、`width` 均产出带参考答案、可回查证据与父题的真实候选。
+阶段结论：`atomic` 与 `depth` 产出带参考答案、可回查证据与父题的真实候选；`width` 没有通过验收，接纳候选为 0，失败类别是 4 个合并组在可分解性检查上全部被判 `state != 1`。真实运行的阶段断言在 `width` 上失败（`1 failed in 18119.30s`），产物在断言前落盘。
+
+修复前的运行目录 `outputs/taskcraft-mechanism-medagentbench`（实现提交 `41fe367`，686 模型轮 / 187 次工具调用 / 4 115 580 tokens，墙钟 2 小时 11 分，atomic 10 / depth 6 / width 4）保留作为修复前的对照，不代表当前代码。
 
 ### 5.3 冻结公共比较
 
-两份公共配置按提交状态原样运行：`python -m experiments.run --config <公共配置>`。
+两份公共配置按提交状态原样运行，只覆盖输出目录：`python -m experiments.run --config <公共配置> --output-dir <新目录>`。冻结预算 8/40 与 1/0 未改动。
 
 | 项 | PhysicianBench | MedAgentBench |
 |---|---|---|
-| 运行目录 | `outputs/taskcraft-physicianbench` | `outputs/taskcraft-medagentbench` |
+| 运行目录 | `outputs/taskcraft-physicianbench-rerun` | `outputs/taskcraft-medagentbench-rerun` |
 | 请求题数 / 生成次数 | 2 / 1 | 2 / 1 |
 | 生成状态 | budget_exhausted，用满 8 轮 | budget_exhausted，用满 1 轮 |
-| 停止位置 | 原子结论抽取完成，随后 7 次出题因空 `task_type` 被拒，第 8 轮预算耗尽；原子池为空，两个分支记 `cumulative_budget_exhausted` | 第 1 轮预算耗尽，轨迹已就绪 |
+| 停止位置 | 4 块 54 708 字符，chunk 0 抽到 48 条结论；出题 3 次中 1 次因题型超出请求方向被拒，第 8 轮预算在出题处耗尽（`generated=3`，`accepted=0`）；原子池为空，两个分支记 `cumulative_budget_exhausted` | 15 块 234 000 字符，chunk 0 抽到 75 条结论；第 1 轮预算在首次出题处耗尽（`generated=0`，`accepted=0`），两个分支记 `cumulative_budget_exhausted` |
 | 最终题数 | 0 | 0 |
 | 公共核验 / 质量评价 / 解题完成 | 无记录（未出题，未发起评测） | 无记录 |
 | 失败类别 | 无 | 无 |
-| 生成成本 | 8 轮 / 0 次工具 / 18 067 tokens | 1 轮 / 0 次工具 / 27 088 tokens（输入 8 114，输出 18 974） |
+| 生成成本 | 8 轮 / 0 次工具 / 16 059 tokens（输入 12 652，输出 3 407） | 1 轮 / 0 次工具 / 25 481 tokens（输入 8 114，输出 17 367） |
 | 评测成本 | 0 | 0 |
-| 实现提交 | `41fe367` | `41fe367` |
+| 实现提交 | `5a771a5` | `5a771a5` |
 
 两个环境的公共预算都不足以走完原子阶段，公共输出为题数 0 的真实截断，未以机制预算的输出代替。
 
