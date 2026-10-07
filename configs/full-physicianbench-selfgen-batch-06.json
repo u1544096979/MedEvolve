@@ -18,8 +18,8 @@
     },
     "budgets": {
       "generator": {
-        "max_model_turns": 6,
-        "max_tool_calls": 0
+        "max_model_turns": 800,
+        "max_tool_calls": 800
       }
     }
   },

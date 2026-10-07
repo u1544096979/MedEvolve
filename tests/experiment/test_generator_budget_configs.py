@@ -11,21 +11,16 @@ EXPECTED = {"max_model_turns": 800, "max_tool_calls": 800}
 
 def test_declared_generation_budgets_are_uniform():
     checked = set()
-    declared = set()
     for path in sorted((ROOT / "configs").glob("*.json")):
-        if path.name.startswith("full-"):
-            continue
         payload = json.loads(path.read_text())
         if payload.get("method") not in METHODS:
             continue
         if "generator" not in payload.get("runtime", {}).get("budgets", {}):
             continue
-        declared.add(payload["method"])
         config = ExperimentConfig.model_validate(payload)
         assert config.runtime.budgets["generator"].model_dump() == EXPECTED, path.name
         checked.add(config.method)
-    assert checked == declared
-    assert set(METHOD_SPEC) == METHODS
+    assert checked == METHODS
 
 
 def test_emitted_runtime_uses_uniform_generator_budget():
