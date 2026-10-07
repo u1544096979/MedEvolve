@@ -1,688 +1,458 @@
 # 环境能力与患者并行实施计划
 
-> 执行方式：在独立 worktree 中使用 executing-plans，按任务顺序实施并设置检查点。若用户选择子代理执行，则使用 subagent-driven-development。实施前读取 using-git-worktrees，基于项目当前分支与所需未提交修改建立隔离工作区。
+> 执行方式：使用 executing-plans 在独立 worktree 中按任务顺序实施；若用户选择子代理执行，则使用 subagent-driven-development。实施前读取 using-git-worktrees，保留项目当前分支所需的已完成改动。
 
-**目标：** 五个患者可并行生成、查询和模拟提交；真实写入任务与试写探索使用独立种子环境，受统一容器额度限制。
+**目标：** 同一个方法为多个患者并行生成，生成结束立即释放名额；所有最终 task 独立排队评测，生成与评测分别配置并发数，环境查询复用且真实写入隔离。
 
-**架构：** 环境能力由确定的公共契约提供，生成与公共核验明确任务的执行要求。环境管理服务维护共享查询实例、独立实例和租约；实验入口按患者并发执行，同轮结束后再汇总反馈和更新策略。
+**架构：** 保留现有六方法入口、累计预算、公共评测和结果写入锁。增加生成/评测调度器，扩展现有 EvaluationEnvironments 覆盖完整运行的实例申请；统一能力来源提供执行要求与实例路由依据。
 
-**技术栈：** Python >=3.10、Pydantic 2、asyncio、FastAPI、httpx、Docker、现有 Agents SDK、pytest 与 pytest-asyncio；不新增运行依赖。
+**技术栈：** Python >=3.10、asyncio、Pydantic 2、httpx、现有 Agents SDK、Docker、pytest 和 pytest-asyncio；不新增运行依赖。
 
 ## 全局约束
 
-- 依据 [设计文档](design.md)，保持 PhysicianBench 的真实 FHIR 写入及 MedAgentBench 的模拟 POST 语义。
-- 所有方法、环境探索、解题与评测使用相同的固定能力说明；探索指导不能覆盖这些约束。
-- 方法清单为 `medevolve`、`workflow`、`selfgen`、`taskcraft`、`singleshot`、`envexplore`：main 上前三项本次实施，worktree 中后三项为合并后必做项；固定能力和语义文案仅来自 `environments/capabilities.py`。
-- 共享查询实例的工具入口禁止真实写入，保留患者范围和原生请求格式；模拟 POST 可以执行。
-- 真实写入任务及 PhysicianBench 试写探索从独立种子开始，完成状态读取后释放容器与独立存储。
-- 患者并发与容器额度分开设置；同轮策略、方向采样、任务编号、输出归属和统计口径不随完成顺序改变。
-- 各任务独立验证与提交；Conventional Commits 的 description 和 body 使用中文。
-- 本计划中的模型测试使用替代运行器，不调用付费模型；真实环境检查使用已加载镜像，不拉取新镜像。
+- 依据 [设计](design.md)，只调整同一次实验的患者生成、task 评测和环境复用，不调度多个方法同时运行，不改 Harness。
+- 生成与评测分别控制；生成名额包含方法内部自检筛选，不包含公共评测；MedEvolve 本轮全部评测完成后才更新策略。
+- 六个方法均接入同一能力来源并输出执行要求；不改变原有题型选择、内部阶段顺序、随机流、预算及内置筛选。
+- 保持公共评测的逐条证据核验、整体核验、质量与难度各三次评分及中位数、独立解题和完成判断；不额外添加分类模型调用。
+- 所有环境申请进入同一运行会话额度；共享查询禁止真实写入，PhysicianBench 试写探索和需要真实写入的 task 使用独立种子。
+- MEDEVOLVE_MAX_INSTANCES 继续按逻辑实例计数；FHIR-AgentBench 一个实例含两个容器，验收区分实例数和实际容器数。
+- 实施测试使用替代模型，不发起付费调用；真实环境检查只使用已准备镜像或种子。提交按关注点分层，description 与 body 使用中文。
 
-## 文件与职责
+## 基线与文件职责
+
+main 已存在六个生成入口；`experiments/runner.py` 用一个患者名额包住生成和评测；`evaluation/session.py` 仅约束公共评测，TaskCraft 的生成和环境探索仍直接申请实例。SingleShot 的 task_types 与 Workflow 的 directions/candidate_pool 路径已在当前 `methods/common.py` 并存，沿用此接口，不重新设计分支合并。
 
 | 文件 | 职责 |
 | --- | --- |
-| `contracts.py`、新增 `environments/capabilities.py` | 能力、任务执行要求、租约契约与固定说明 |
-| `methods/common.py`、`methods/medevolve/__init__.py`、`methods/workflow/__init__.py`、`methods/selfgen/__init__.py` 及三个方法的提示文件 | main 本次实施：统一能力输入、任务要求输出与生成校验，移除方法内语义副本 |
-| `environments/fhir.py`、`environments/__init__.py`、`environments/medagentbench.py` | 租约客户端、共享实例写入阻断与原生工具适配 |
-| 新增 `server/pool.py`、`server/app.py`、`server/docker.py` | 同种子实例复用、全局容器额度、租约与生命周期 |
-| `evaluation/evaluator.py`、`evaluation/prompts.py` | 核验任务能力、选择实例、检查实际提交和状态变化 |
-| `experiments/runner.py`、新增 `experiments/concurrency.py` | 患者并发、顺序采样、结果写入、轮次屏障与会话清理 |
-| `docs/comparison-experiments/common/SPEC.md:46` | 同步公共规范：查询与模拟提交共享，真实写入及 PhysicianBench 试写探索隔离 |
-| `.worktrees/taskcraft/methods/taskcraft/{__init__,ledger,stages,environment}.py`、`.worktrees/taskcraft/methods/medevolve/prompts.py:44` | TaskCraft 合并后必做：阶段能力输入、候选执行要求、查询租约及重复语义清理 |
-| `.worktrees/singleshot/methods/singleshot/{__init__,prompts}.py`、`.worktrees/singleshot/methods/common.py` | SingleShot 合并后必做：能力输入与执行要求、语义副本清理及公共接口统一 |
-| `.worktrees/envexplore/methods/envexplore/{__init__,prompts}.py`、`.worktrees/envexplore-v2/methods/generation.py`、`.worktrees/envexplore-v2/methods/envexplore/__init__.py`、对应 `experiments/runner.py` | EnvExplore 两分支合并后必做：各版本的探索/生成能力输入、执行要求、租约与绑定入口 |
+| contracts.py、新增 environments/capabilities.py | 两个并发参数、固定能力、执行要求与核验字段 |
+| methods/common.py、methods/generation.py、六个方法实现与提示 | 公共字段校验、能力注入、候选字段保留与方法特有生成边界 |
+| evaluation/session.py、environments/__init__.py、environments/fhir.py、environments/errors.py | 全流程实例额度、共享借用、空闲回收与写入阻断 |
+| 新增 experiments/scheduling.py、experiments/runner.py、configs/experiment.json | 生成/评测队列、独立上限、即时保存、轮次屏障与有效参数记录 |
+| evaluation/evaluator.py、evaluation/prompts.py | 整体核验确定执行要求、解题路由及真实状态判定 |
+| tests/method、tests/evaluation、tests/experiment、tests/environment | 六方法兼容、两类名额、共享隔离、失败清理及既有评测回归 |
 
-## 六个方法适配清单
+源文件定位以本次代码核对为基线，执行时按对应函数重新定位，不能将已合入 main 的方法重新列为未实现。
 
-行号对应当前 main 工作区及对应 worktree，合并后按函数或字段重新定位；本轮修订仅修改文档，下面的源文件变更由实施任务执行。
+## 六方法实施清单
 
-| 方法 | 状态与文件定位 | 固定能力说明、执行要求和环境复用适配 |
+| 方法 | 当前文件定位 | 必做适配及不变量 |
 | --- | --- | --- |
-| `medevolve` | main，本次实施；`methods/medevolve/__init__.py:126`、`:147`、`:173`，`methods/medevolve/prompts.py:47` | 探索、生成和反馈指令统一追加 `capability_instructions`；生成返回执行要求，反馈按实际失败分类处理；处方提示保留药物、剂量、频次和证据规则，将提交/持久化语义交给统一来源；探索按环境能力租约路由 |
-| `workflow` | main，本次实施；`methods/workflow/__init__.py:111`、`:123`、`:148`、`:177`，`methods/workflow/prompts.py` | 定位、分类型生成、内部检查追加统一说明；每道候选及最终题目保留执行要求；保持 `candidate_pool=True` 的五类选两类、单题约束和公共预算 |
-| `selfgen` | main，本次实施；`methods/selfgen/__init__.py:83`、`:88`、`:94`、`:98`、`:111`、`:119`、`:130`，`methods/selfgen/prompts.py:8`、`:22` | 删除 94–95 行 `operation_semantics` 手写文案，第 88–89 行的环境名检查改用统一能力来源；调用包装器对初稿、自检和修订统一追加能力说明；提示不再依赖旧输入字段，事实规则提取不能重新复制环境语义；初稿/修订候选输出执行要求，最终过滤和通过题不变校验保留字段 |
-| `taskcraft` | worktree，合并后必做；分支 `codex/taskcraft-baseline`；`.worktrees/taskcraft/methods/medevolve/prompts.py:44`、`methods/taskcraft/__init__.py:55`、`:82`、`:95`，`methods/taskcraft/ledger.py:16`，`methods/taskcraft/stages.py:289`、`:389`、`:605`，`methods/taskcraft/environment.py:56`、`:88`（后五个路径均相对该 worktree） | 通过 Ledger 的模型/工具 Agent 调用统一注入能力说明；删除分支主方法提示第 44 行的提交/持久化语义副本，保留临床要求；atomic、width、depth 的生成输出与 `GeneratedQuestion` 构造传递执行要求，筛选不得丢失；查询生成改共享租约，保留原只读工具视图和随机种子绑定 |
-| `singleshot` | worktree，合并后必做；分支 `codex/singleshot`；`.worktrees/singleshot/methods/singleshot/prompts.py:13`、`:14`、`methods/singleshot/__init__.py:24`、`:33`、`:37`、`:44`，`methods/common.py:45`、`:65`（后三个路径相对该 worktree） | 删除 prompts 第 13–14 行两环境语义副本，单次生成追加统一说明并输出执行要求；将 `output_constraints(task_types=...)`、`validate_task_batch` 和 `GenerationBudget.finish(task_types=...)` 与更新后的公共接口统一；保留从五种题型自主选题、两题可同类型及一次调用，无额外探索或修订 |
-| `envexplore` | worktree，合并后必做；分支 `codex/envexplore`、`codex/envexplore-v2`；原分支 `.worktrees/envexplore/methods/envexplore/__init__.py:83`、`:100`、`:104`、`prompts.py:18`；v2 `.worktrees/envexplore-v2/methods/generation.py:5`、`:7`、`methods/envexplore/__init__.py:21`、`:38`，`experiments/runner.py:182`、`:194`（简写路径相对对应 worktree） | 原分支的工具生成追加统一说明、输出执行要求并使用共享查询租约，保留生成阶段只读限制；v2 删除 `GENERATION_RULES` 第 5 行字符串中的提交/持久化语义副本，保留事实规则，环境探索调用公共租约入口，生成绑定器保留固定初始策略与探索指导并追加统一能力；两个分支均按所选版本的原方法流程验收，计为一个方法 |
+| medevolve | methods/medevolve/__init__.py:122、:160、:186；methods/generation.py:5 | 环境探索使用运行会话；生成与反馈注入统一能力，生成执行要求；同轮指导和策略保持，轮次评测屏障保留 |
+| workflow | methods/workflow/__init__.py:117；methods/workflow/prompts.py | 定位、按类型生成、内部检查接入能力；候选和最终输出保留执行要求；五类选两类、每类最多一题、累计预算保持 |
+| selfgen | methods/selfgen/__init__.py:83、:94；methods/selfgen/prompts.py:8、:22 | 删除 operation_semantics 手写环境分支，由调用包装器统一注入能力；初稿/修订输出执行要求，过滤保留；通过题全字段不变，自检修订计入生成名额 |
+| singleshot | methods/singleshot/__init__.py:24；methods/singleshot/prompts.py:13–14 | 删除两行环境语义副本，单次生成注入能力并输出执行要求；沿用 task_types 和公共 finish 校验，不引入探索、修订或方向抽样 |
+| envexplore | methods/envexplore/__init__.py:21；methods/generation.py:5；experiments/runner.py 的固定指导绑定器 | 一次环境探索接入会话，生成注入同一能力、输出执行要求；删除 GENERATION_RULES 中提交/持久化语义副本，保留事实与证据规则；不增加数据探索或策略进化 |
+| taskcraft | methods/taskcraft/__init__.py:55；ledger.py:16；stages.py 的 Pipeline、atomic/width/depth 候选构造；schemas.py；environment.py:56、:88 | 生成借用共享查询实例；Ledger 统一注入能力；各阶段输出并保留最终执行要求；每患者独立 Pipeline/Ledger/预算/随机流，只读工具视图和内部核验保持 |
 
-## 公共接口与分支合并顺序
+TaskCraft 在研分支 `codex/taskcraft-baseline` 仍修改 `methods/taskcraft/stages.py`、`prompts.py` 与 `tests/method/test_taskcraft.py`，包括请求重试规则。若先合入在研改动，按合入后的结构适配；若先实施本方案，分支随后 rebase，逐项保留会话、能力、执行要求与原重试规则。不得以旧 stages.py 或测试文件覆盖任一侧行为，合入后重新跑该方法及公共并发回归。
 
-先完成本计划五项任务，将 main 上三个方法、公共能力和执行要求校验、租约及并发调度落入 main；然后分别 rebase `codex/taskcraft-baseline`、`codex/singleshot`、`codex/envexplore`、`codex/envexplore-v2` 到更新后的 main，在各分支完成上表必做项与测试后再合并。分支之间不设未经确认的先后依赖，EnvExplore 两个版本分别核对并按选定版本合并。
+## 任务 1：固定能力、执行要求与并发配置
 
-每个分支都改动 `methods/common.py`，rebase 时保留本方案的公共字段、能力约束和 `execution_requirement` 校验，逐项整合方法特有选择规则；禁止以分支旧 `common.py` 整文件覆盖新契约。
+**文件：** 修改 contracts.py；新增 environments/capabilities.py、tests/environment/test_capabilities.py；新增 tests/experiment/test_concurrency_config.py；修改 experiments/runner.py 的参数解析与配置保存。
 
-SingleShot 的 `output_constraints(task_types=...)` 已与 main 的 `output_constraints(directions, *, max_questions, candidate_pool)` 分叉；其合并后必做项是同时统一 `output_constraints`、`validate_task_batch`、`GenerationBudget.finish` 和实验入口校验，公共字段与执行要求检查共用，选择规则分别处理。统一接口保留 main 参数，并增加互斥的 `task_types` 模式：
-
-```python
-def output_constraints(
-    directions: list[GenerationDirection] | None = None, *,
-    max_questions: int = 2, candidate_pool: bool = False,
-    task_types: list[TaskType] | None = None,
-) -> str: ...
-
-def validate_task_batch(
-    result: RunResult, directions: list[GenerationDirection] | None = None, *,
-    max_questions: int = 2, candidate_pool: bool = False,
-    task_types: list[TaskType] | None = None,
-) -> RunResult: ...
-```
-
-`task_types` 与 `directions`/`candidate_pool` 互斥；SingleShot 模式允许两个同类型问题，不能用 Workflow 的候选池每类最多一题规则替代。`GenerationBudget.finish` 保留原有 `output/status/error` 参数及方向路径，新增 `task_types` 关键字路径并委托同一个输出校验；`experiments/runner.py` 保留 SingleShot 的五种允许题型输入，按该模式校验输出，不提前抽样方向。main 本次实施不提前加入 SingleShot 的方法分派或改变现有选择规则。
-
-## 任务 1：固定环境能力与生成要求
-
-**文件：** 修改 `contracts.py`、`methods/common.py`、`methods/medevolve/{__init__,prompts}.py`、`methods/workflow/{__init__,prompts}.py`、`methods/selfgen/{__init__,prompts}.py`；新增 `environments/capabilities.py`、`tests/environment/test_capabilities.py`；修改 `tests/method/test_method.py`、`tests/method/test_workflow.py`、`tests/method/test_selfgen.py`。本任务直接覆盖 main 三个方法；另外三个方法按上表在分支合并时适配。
-
-**接口：**
+**产出接口：**
 
 ```python
 # contracts.py
 ExecutionRequirement = Literal["read_only", "submit_request", "database_write"]
 
 class EnvironmentCapabilities(BaseModel):
-    name: Literal["PhysicianBench", "MedAgentBench"]
-    post_semantics: Literal["persistent", "accept_without_persistence"]
+    name: str
+    post_semantics: Literal["persistent", "accept_without_persistence", "unavailable"]
     supports_database_write: bool
 
-# GeneratedQuestion 增加字段；旧保存文件允许缺失。
+# GeneratedQuestion；允许读取旧保存任务，生成校验在任务 2 要求非空。
 execution_requirement: ExecutionRequirement | None = None
 
-# Verification 增加字段。单条证据核验可为空；整体任务核验必须返回。
+# Verification；单条事实核验可为空，整体核验在任务 5 要求填写。
 execution_requirement: ExecutionRequirement | None = None
 capability_supported: bool | None = None
 
-# EvaluationResult.failure_category 增加 unsupported_operation。
+# ExperimentConfig；缺省使用兼容回退，保存时填入有效值。
+generation_concurrency: int | None = Field(default=None, ge=1)
+evaluation_concurrency: int | None = Field(default=None, ge=1)
 
-# environments/capabilities.py
-def get_capabilities(name: str) -> EnvironmentCapabilities: ...
-def capability_instructions(name: str) -> str: ...
-def requirement_supported(
-    name: str, requirement: ExecutionRequirement
-) -> bool: ...
+# environments/capabilities.py 的接口
+# get_capabilities(name: str) -> EnvironmentCapabilities
+# capability_instructions(name: str) -> str
+# requirement_supported(name: str, requirement: ExecutionRequirement) -> bool
 ```
 
-- [ ] **1. 添加能力与要求测试。**
+- [ ] **1. 添加配置优先级和能力测试。**
 
 ```python
-import pytest
-from environments.capabilities import (
-    capability_instructions, get_capabilities, requirement_supported,
-)
-from environments.errors import EnvironmentUnavailable
+# tests/experiment/test_concurrency_config.py
+from contracts import ExperimentConfig
+from experiments.runner import concurrency_limits
 
-def test_medagentbench_acceptance_is_not_persistence():
-    capability = get_capabilities("MedAgentBench")
-    assert capability.post_semantics == "accept_without_persistence"
-    assert not capability.supports_database_write
+def test_config_overrides_legacy_limits(monkeypatch):
+    monkeypatch.setenv("MEDEVOLVE_RUN_CONCURRENCY", "9")
+    config = ExperimentConfig.model_construct(
+        generation_concurrency=5, evaluation_concurrency=2)
+    assert concurrency_limits(config) == (5, 2)
+
+def test_missing_config_uses_legacy_limits(monkeypatch):
+    monkeypatch.setenv("MEDEVOLVE_RUN_CONCURRENCY", "4")
+    config = ExperimentConfig.model_construct(
+        generation_concurrency=None, evaluation_concurrency=None)
+    assert concurrency_limits(config) == (4, 4)
+```
+
+```python
+# tests/environment/test_capabilities.py
+from environments.capabilities import get_capabilities, requirement_supported
+
+def test_medagentbench_submission_is_not_persistence():
+    assert get_capabilities("MedAgentBench").post_semantics == "accept_without_persistence"
     assert requirement_supported("MedAgentBench", "submit_request")
     assert not requirement_supported("MedAgentBench", "database_write")
-    assert "不持久化" in capability_instructions("MedAgentBench")
 
-def test_physicianbench_supports_persistence():
-    assert requirement_supported("PhysicianBench", "database_write")
-
-def test_unknown_environment_has_no_assumed_capability():
-    with pytest.raises(EnvironmentUnavailable):
-        get_capabilities("unknown")
+def test_fhir_agentbench_tools_are_read_only():
+    assert requirement_supported("FHIR-AgentBench", "read_only")
+    assert not requirement_supported("FHIR-AgentBench", "submit_request")
+    assert not requirement_supported("FHIR-AgentBench", "database_write")
 ```
 
-生成测试捕获 `call_llm` 参数，分别断言 MedEvolve 的单次生成、workflow 的定位/按题型生成/内部检查、selfgen 的初稿/自检/修订均收到同一个 `capability_instructions(trajectory.environment)`。对 main 三个方法使用相同的两环境能力测试矩阵，检查每道新生成或修订题目的 `execution_requirement` 非空，过滤后保留字段且通过题全部字段不变；selfgen 输入不再携带手写 `operation_semantics`。更新现有生成测试的题目夹具，不改变题数或预算预期。方法测试中表示实际环境的 `test` 改为已接入环境名，纯类型解析夹具仍可以使用任意字符串。
+补充两个配置字段的 0/负数 Pydantic 拒绝、部分显式设置、环境变量缺失/非法沿用默认 6、旧 Task 仍能加载、未知环境明确失败。
 
-- [ ] **2. 运行新增测试，确认能力模块缺失导致失败。**
+- [ ] **2. 运行新增测试确认缺失接口时失败。**
 
 ```bash
-python -m pytest tests/environment/test_capabilities.py -q
+python -m pytest tests/experiment/test_concurrency_config.py tests/environment/test_capabilities.py -q
 ```
 
-- [ ] **3. 实现固定能力与提示接入。**
+- [ ] **3. 实现契约与解析。**
 
 ```python
-CAPABILITIES = {
-    "PhysicianBench": EnvironmentCapabilities(
-        name="PhysicianBench", post_semantics="persistent",
-        supports_database_write=True,
-    ),
-    "MedAgentBench": EnvironmentCapabilities(
-        name="MedAgentBench", post_semantics="accept_without_persistence",
-        supports_database_write=False,
-    ),
-}
-
-def requirement_supported(name, requirement):
-    capability = get_capabilities(name)
-    return requirement != "database_write" or capability.supports_database_write
+# experiments/runner.py：沿用既有 run_concurrency 兼容解析。
+def concurrency_limits(config):
+    legacy = run_concurrency()
+    generation = config.generation_concurrency
+    evaluation = config.evaluation_concurrency
+    return (generation if generation is not None else legacy,
+            evaluation if evaluation is not None else legacy)
 ```
 
-`get_capabilities` 返回契约副本，未知环境抛出 `EnvironmentUnavailable`。固定中文说明明确查询能力、POST 是否持久化、不可要求的操作及三种执行要求的区别。
+固定表中 PhysicianBench 是 persistent/可写，MedAgentBench 是 accept_without_persistence/不可真实写，FHIR-AgentBench 是 unavailable/不可写。get_capabilities 返回契约副本，未知环境抛 EnvironmentUnavailable。requirement_supported 对 read_only 返回真，对 submit_request 检查 POST 是否开放，对 database_write 检查真实写能力。说明文本完整列出语义和三种执行要求，不允许探索指导覆盖。
 
-MedEvolve 保持 `generate_tasks` 签名，从 `trajectory.environment` 取能力；workflow 与 selfgen 保持签名，校验 `environment.name == trajectory.environment` 后取同一能力。将固定说明追加到角色指令，使轨迹、策略、探索输出不能覆盖它。selfgen 在 `call` 包装器一次绑定能力说明，覆盖初稿、自检和修订，删除 `operation_semantics` 字段及其环境分支文案；`INPUT_RULES` 不再读取该字段。主方法提示中的处方规则仅保留临床要求和证据条件，selfgen 的 `_fact_rules` 保持事实规则提取，不从主方法或其他分支重新引入环境语义副本。环境探索与解题接入在任务 4 完成。
+保存 config.json 前，将两个解析值填入本次 config 副本；不修改用户原配置文件。EvaluationResult 的失败分类增加 unsupported_operation，供任务 5 使用。
 
-生成提示要求模型根据题面填写执行要求：纯分析及查询为 `read_only`，只要求提交为 `submit_request`，要求资源真实创建或后续读取新增结果为 `database_write`。`methods/common.py` 的生成约束同步字段列表，`validate_task_batch` 拒绝新生成输出缺少要求；已保存的旧任务仍可解析，并在整体核验阶段补齐要求。
-
-新增失败分类用于能力不支持的题目，反馈明确该失败属于任务与环境不匹配，不作为临床难度提升。main 本次实施覆盖 `medevolve`、`workflow`、`selfgen`，不合入另外三个方法；`taskcraft`、`singleshot`、`envexplore` 已有 worktree 实现，其能力适配是合并验收的必做项。
-
-- [ ] **4. 运行能力和方法回归。**
+- [ ] **4. 运行契约和旧配置回归。**
 
 ```bash
-python -m pytest tests/environment/test_capabilities.py tests/method -q
+python -m pytest tests/experiment/test_concurrency_config.py tests/environment/test_capabilities.py tests/experiment/test_closed_loop.py -q
 ```
 
-预期：两环境能力确定，main 三个方法同等接收约束并输出执行要求，selfgen 的所有生成/自检/修订阶段覆盖统一说明，方法内不保留重复语义文案，原有调用数、题型及预算行为保持。
+- [ ] **5. 提交。** `feat(environment): 定义固定能力与独立并发参数`。
 
-- [ ] **5. 提交本任务的契约、提示与测试。**
+## 任务 2：六方法统一能力与生成字段
 
-提交说明：`feat(environment): 定义固定能力与任务执行要求`。
+**文件：** 修改 methods/common.py、methods/generation.py、methods/{medevolve,workflow,selfgen,singleshot,envexplore}/__init__.py 与各自提示文件；修改 methods/taskcraft/{__init__,ledger,schemas,stages,prompts}.py；修改 tests/method 中六方法对应测试与 test_generation_shared.py。
 
-## 任务 2：共享工具执行入口阻止真实写入
+**输入与产出：** 使用任务 1 的 capability_instructions 和 ExecutionRequirement；现有 generate_tasks 的位置参数保持。最终 TaskBatch 的每题包含执行要求，各方法私有候选输出保留该字段。
 
-**文件：** 修改 `contracts.py`、`environments/fhir.py`、`environments/__init__.py`、`environments/medagentbench.py`、`environments/errors.py`；新增 `tests/environment/test_read_only.py`；保留并扩展患者边界和原生动作测试。
-
-**接口：**
+- [ ] **1. 添加能力输入、缺字段拒绝和筛选保留测试。**
 
 ```python
-# EnvironmentInstance 增加默认值，旧独立实例保持可写行为。
-access_mode: Literal["shared_query", "isolated"] = "isolated"
-
-# environments/fhir.py
-def __init__(self, endpoint: str, patient_ids: list[str], *,
-             allow_database_write: bool = True): ...
-
-# environments/errors.py
-class ReadOnlyEnvironmentError(PatientAccessError):
-    pass
-```
-
-`get_tools` 保持原签名，通过 `instance.access_mode` 设置 `FHIRClient.allow_database_write`。MedAgentBench 的模拟 POST 仍执行解析与患者范围校验，不因共享访问模式被拒绝。
-
-- [ ] **1. 添加阻断测试。**
-
-```python
-import pytest
-from environments.errors import ReadOnlyEnvironmentError
-from environments.fhir import FHIRClient
+# 加入现有 tests/method/test_method.py，复用其 method/runtime/trajectory 夹具。
+from unittest.mock import AsyncMock
+from environments.capabilities import capability_instructions
 
 @pytest.mark.asyncio
-async def test_shared_client_never_sends_a_write(monkeypatch):
-    requests = []
-    async def request(self, method, path, **kwargs):
-        requests.append((method, path))
-        raise AssertionError("共享写入不应到达 HTTP 请求")
-    monkeypatch.setattr(FHIRClient, "_request", request)
-    client = FHIRClient("http://fixture/fhir/", ["p1"],
-                        allow_database_write=False)
-    with pytest.raises(ReadOnlyEnvironmentError):
-        await client.create({
-            "resourceType": "Communication",
-            "subject": {"reference": "Patient/p1"},
-        })
-    assert requests == []
+async def test_generation_receives_fixed_capability(method, runtime, monkeypatch):
+    patient = trajectory("p1").model_copy(update={"environment": "MedAgentBench"})
+    direction = GenerationDirection(task_type="诊断与解释", difficulty="查询", weight=1)
+    strategy = Strategy(generation_guidance="当前指导", allocation=[direction])
+    guidance = ExplorationGuidance(data_guidance="数据指导", environment_guidance="探索指导")
+    call = AsyncMock(return_value=completed(TaskBatch(questions=[])))
+    monkeypatch.setattr(method, "call_llm", call)
+    await method.generate_tasks(patient, guidance, strategy, [direction, direction], runtime)
+    assert capability_instructions("MedAgentBench") in call.call_args.kwargs["instructions"]
 ```
 
-复用 `tests/environment/test_patient_boundary.py` 的 `native_fhir` 夹具，经 `get_tools` 实际调用共享实例的创建工具，断言两个患者存储都不变；独立实例仍可写。扩展 `tests/environment/test_medagentbench.py`，将实例设为 `shared_query` 后执行原有合法 POST，断言提交仍记录且未发送 HTTP POST。现有跨患者访问拒绝测试保持。
+利用现有六方法的替代模型入口捕获指令：Workflow 三类节点、SelfGen 初稿/自检/修订、EnvExplore 与 SingleShot 单次生成、TaskCraft atomic/width/depth/内置核验均收到固定说明。新生成输出缺少执行要求时被公共校验拒绝；SelfGen 修订和通过题、Workflow 过滤、EnvExplore 引用过滤、TaskCraft 候选选择都保留该字段。预算和调用次数断言保持。
 
-- [ ] **2. 运行新增测试，确认缺少写入开关时失败。**
+- [ ] **2. 运行对应方法测试，确认未注入能力的调用失败。**
 
 ```bash
-python -m pytest tests/environment/test_read_only.py -q
+python -m pytest tests/method -q
 ```
 
-- [ ] **3. 实现工具层限制。**
+- [ ] **3. 逐方法接入统一来源。**
 
 ```python
-# FHIRClient.create 的第一项检查
+# 每患者计算一次，在各自模型调用包装处加入，不另做模型调用。
+fixed = capability_instructions(trajectory.environment)
+instructions = original_instructions + "\n" + fixed
+
+# methods/common.py：新生成批次的公共校验。
+for question in batch.questions:
+    if question.execution_requirement is None:
+        raise ValueError("Generated task must specify execution_requirement")
+```
+
+按六方法清单删除重复语义，只保留临床事实、题型和方法专属规则。SelfGen 的环境白名单由 get_capabilities 接管，但不据此宣称其他方法工具适配完成；其 prompts._fact_rules 仍提取事实规则，不从统一说明中截取副本。
+
+TaskCraft 由 Ledger 包装 llm 和 agent 指令，公开生成入口传入本环境的说明；不改变 _SearchRun 的规划、反思、动作与累计预算。InitialQuestion、CleanedQuestion、MergedQuestion、NewQuery、QueryMerge 相关已有模型输出携带执行要求，atomic/width/depth 的 GeneratedQuestion 构造传入该字段；重写题意时以新题要求为准，不能机械继承父题。通过已有调用输出字段取得要求，不增加分类请求，不按生成工具只读直接把任务标为 read_only。
+
+保持 methods/common.py 当前 directions、task_types、max_questions 和 candidate_pool 接口；GenerationBudget.finish 仍委托公共校验。SingleShot 两题可同类型，Workflow 候选池每类最多一题，两者不互换选择规则。
+
+- [ ] **4. 运行六方法与共享生成规则回归。**
+
+```bash
+python -m pytest tests/method tests/experiment/test_workflow.py -q
+```
+
+测试中的虚拟环境名改为对应已支持环境，真实输入仍用替代数据；生成题目夹具补齐执行要求，保留每患者独立预算和随机流断言。
+
+- [ ] **5. 提交。** `feat(methods): 统一六方法能力说明与执行要求`。
+
+## 任务 3：完整运行共享实例与统一额度
+
+**文件：** 修改 evaluation/session.py、environments/{__init__,fhir,errors}.py、contracts.py、methods/medevolve/__init__.py、methods/taskcraft/__init__.py、experiments/runner.py；扩展 tests/evaluation/test_evaluation_session.py、tests/environment/test_patient_boundary.py、tests/method/test_taskcraft.py 与探索测试。
+
+**接口：** 继续使用 EvaluationEnvironments，扩展 instance 的 phase 为 prepare/explore/generate/verify/solve，增加可选 requirement 参数；solve 未给 requirement 时保留 PhysicianBench 独立实例行为。EnvironmentInstance 增加 access_mode（shared_query/isolated，默认 isolated）。FHIRClient 增加 allow_database_write（默认 True），get_tools 根据 access_mode 绑定。
+
+explore_environment 与 TaskCraft generate_tasks 新增可选关键字 environments。TaskCraft bind_generator 同样接受 environments 并绑定至闭包；未传会话时函数创建自己的会话且在 finally 关闭，传入时只结束本次借用。公共包装器和 invoke 转发新增关键字。
+
+- [ ] **1. 添加跨阶段共享及额度为 1 的测试。**
+
+```python
+@pytest.mark.asyncio
+async def test_generation_and_verification_share_one_instance(monkeypatch):
+    from uuid import uuid4
+    from contracts import EnvironmentConfig, EnvironmentInstance
+    from evaluation.session import EvaluationEnvironments
+    created, released = [], []
+    async def create(config):
+        item = EnvironmentInstance(instance_id=str(uuid4()),
+            endpoint="http://fixture/fhir/", environment=config.name)
+        created.append(item.instance_id)
+        return item
+    async def release(config, instance):
+        released.append(instance.instance_id)
+    monkeypatch.setattr(EvaluationEnvironments, "_create", staticmethod(create))
+    monkeypatch.setattr(EvaluationEnvironments, "_release", staticmethod(release))
+    config = EnvironmentConfig(name="PhysicianBench", manager_url="http://fixture", seed_data="seed")
+    session = EvaluationEnvironments(instance_budget=1)
+    async with session.instance(config, phase="generate") as first:
+        async with session.instance(config, phase="verify") as second:
+            assert first.instance_id == second.instance_id
+    await session.close()
+    assert len(created) == len(released) == 1
+```
+
+用 asyncio.Event 控制当前借用结束：额度 1 时独立申请等待，查询借用结束后空闲共享实例回收，独立申请能在 wait_for 超时前完成；待释放容器仍计额度。另测不同 seed/manager 不共享，同键并发只创建一次，取消创建及取消等待不泄漏额度，close 在借用结束后清理，释放失败记录实例且不将额度标为空闲。
+
+- [ ] **2. 运行会话与工具测试，确认新 phase 或共享行为未实现时失败。**
+
+```bash
+python -m pytest tests/evaluation/test_evaluation_session.py tests/environment/test_patient_boundary.py -q
+```
+
+- [ ] **3. 扩展当前会话，接入准备、探索和生成。**
+
+共享键为环境名、manager_url、固定 seed_data；记录当前借用数，不能仅按环境名混用。prepare/generate/verify 为查询；explore 的 PhysicianBench 为独立，其他环境共享；solve 按能力和要求选择。共享对象不得按患者修改，get_tools 每次创建独立的患者工具绑定。
+
+会话额度覆盖创建中、存活和释放中实例。使用 Condition 协调等待、共享创建及空闲回收；锁内登记/预留，锁外执行 Docker 创建和删除。独立申请已等待时阻止新增查询借用插队，已有借用结束后删除空闲共享实例再创建独立实例；后续查询按需重建。不在持有共享借用时申请独立实例。FhirAgentBench 仍按一个逻辑实例计额度，其两容器清理由现有管理器完成。
+
+```python
+# FHIRClient.create，在真实 POST 前执行。
 if not self.allow_database_write:
-    raise ReadOnlyEnvironmentError("共享查询环境不允许数据库写入")
-
-# PhysicianBench 的 get_tools 客户端
-client = FHIRClient(
-    instance.endpoint, patient_ids,
-    allow_database_write=instance.access_mode == "isolated",
-)
+    raise ReadOnlyEnvironmentError("共享查询环境禁止真实写入")
 ```
 
-在真实 HTTP POST 前执行阻断，不依赖工具是否隐藏或模型是否遵守提示。共享工具调用把拒绝记录为明确的工具错误；不自动新建容器重放误写动作。MedAgentBench 原生分支不改为真实写入。
+get_tools 为 shared_query 传 allow_database_write=False；新增 ReadOnlyEnvironmentError，写工具仍记录明确拒绝。MedAgentBench 模拟 POST 不受数据库写入开关影响，保留范围检查；TaskCraft 的只读视图仍拒绝 POST，不扩大原方法工具能力。
 
-- [ ] **4. 运行工具和患者边界回归。**
+实验入口的轨迹准备、一次探索及 TaskCraft 生成使用同一会话。TaskCraft bind_generator 仍绑定 random_seed，每次调用拥有独立 Pipeline/Ledger。取消后等全部借用清理再 close；创建失败回收预留，删除失败保留被占资源及具体错误，不静默释放额度。
+
+- [ ] **4. 运行会话、生命周期、患者边界及 TaskCraft 回归。**
 
 ```bash
-python -m pytest tests/environment/test_read_only.py tests/environment/test_patient_boundary.py tests/environment/test_medagentbench.py -q
+python -m pytest tests/evaluation/test_evaluation_session.py tests/environment/test_lifecycle.py tests/environment/test_patient_boundary.py tests/environment/test_medagentbench.py tests/method/test_taskcraft.py tests/method/test_method.py -q
 ```
 
-- [ ] **5. 提交本任务。**
+- [ ] **5. 提交。** `feat(environment): 将生成与评测纳入共享实例额度`。
 
-提交说明：`feat(environment): 阻止共享查询实例真实写入`。
+## 任务 4：分离生成名额与 task 评测队列
 
-## 任务 3：管理服务复用实例与统一容器额度
+**文件：** 新增 experiments/scheduling.py、tests/experiment/test_generation_pipeline.py；修改 experiments/runner.py、configs/experiment.json、tests/experiment/test_closed_loop.py、test_workflow.py 与 tests/integration/test_pipeline.py。
 
-**文件：** 新增 `server/pool.py`、`tests/environment/test_pool.py`；修改 `contracts.py`、`server/app.py`、`server/docker.py`、`environments/__init__.py`、`tests/environment/test_lifecycle.py`。
+**接口：** run_generation_evaluation 接收患者 plans、两种上限、generate 和 evaluate 回调；generate 返回最终 task 列表，evaluate 处理一个 task。调度器不改变方法算法，不直接保存实验文件。
 
-**接口：**
-
-```python
-# contracts.py
-class EnvironmentAcquireRequest(BaseModel):
-    environment: EnvironmentConfig
-    session_id: str
-    access_mode: Literal["shared_query", "isolated"]
-
-class EnvironmentLease(BaseModel):
-    lease_id: str
-    session_id: str
-    instance: EnvironmentInstance
-
-# server/docker.py
-async def resolve_seed(self, config: EnvironmentConfig) -> str: ...
-async def create(self, config: EnvironmentConfig, *,
-                 image_id: str | None = None) -> EnvironmentInstance: ...
-
-# server/pool.py
-class EnvironmentPool:
-    def __init__(self, manager: DockerManager, *, max_instances: int): ...
-    async def acquire(self, request: EnvironmentAcquireRequest) -> EnvironmentLease: ...
-    async def release(self, lease_id: str) -> None: ...
-    async def close_session(self, session_id: str) -> None: ...
-    async def close(self) -> None: ...
-
-# environments/__init__.py
-async def acquire_environment(config: EnvironmentConfig, session_id: str, *,
-                              access_mode: str) -> EnvironmentLease: ...
-async def release_lease(config: EnvironmentConfig, lease: EnvironmentLease) -> None: ...
-async def close_environment_session(config: EnvironmentConfig, session_id: str) -> None: ...
-```
-
-新增 `POST /leases`、`DELETE /leases/{lease_id}`、`DELETE /sessions/{session_id}`。保留现有 `POST /instances` 的独立实例语义和 DELETE 接口，旧接口也经过同一额度控制；低层 `DockerManager` 仍负责单容器独立存储与启动清理。
-
-- [ ] **1. 添加真实生命周期模型测试。**
-
-在 `test_pool.py` 定义以下 `FakeManager`；用 `asyncio.Event` 控制创建和解题结束，不以长时间 sleep 判断并发。
+- [ ] **1. 添加评测等待时后续患者仍能生成的测试。**
 
 ```python
 import asyncio
-import copy
-import hashlib
-import uuid
-from collections import Counter
-
 import pytest
-from contracts import (
-    EnvironmentAcquireRequest, EnvironmentConfig, EnvironmentInstance,
-)
-from server.pool import EnvironmentPool
+from experiments.scheduling import run_generation_evaluation
 
-class FakeManager:
-    def __init__(self):
-        self.active = {}
-        self.released = Counter()
-        self.peak = 0
-        self.gate = None
-        self.fail_next = False
-
-    async def resolve_seed(self, config):
-        return "sha256:" + hashlib.sha256(config.seed_data.encode()).hexdigest()
-
-    async def create(self, config, *, image_id=None):
-        if self.gate is not None:
-            await self.gate.wait()
-        if self.fail_next:
-            self.fail_next = False
-            raise RuntimeError("创建失败")
-        identifier = str(uuid.uuid4())
-        instance = EnvironmentInstance(instance_id=identifier,
-            endpoint=f"http://{identifier}/fhir/", environment=config.name)
-        self.active[identifier] = {
-            "instance": instance,
-            "seed": image_id or await self.resolve_seed(config),
-            "resources": copy.deepcopy({"Patient/p1": {"id": "p1"}}),
-        }
-        self.peak = max(self.peak, len(self.active))
-        return instance
-
-    async def release(self, identifier):
-        if self.active.pop(identifier, None) is not None:
-            self.released[identifier] += 1
-
-@pytest.fixture
-def fake_manager():
-    return FakeManager()
-```
-
-```python
 @pytest.mark.asyncio
-async def test_two_sessions_reuse_the_same_query_container(fake_manager):
-    pool = EnvironmentPool(fake_manager, max_instances=2)
-    config = EnvironmentConfig(name="PhysicianBench",
-        manager_url="http://manager", seed_data="seed-a")
-    def request(session):
-        return EnvironmentAcquireRequest(environment=config,
-            session_id=session, access_mode="shared_query")
-    first, second = await asyncio.gather(
-        pool.acquire(request("run-a")), pool.acquire(request("run-b")))
-    assert first.lease_id != second.lease_id
-    assert first.instance.instance_id == second.instance.instance_id
-    await pool.release(first.lease_id)
-    assert second.instance.instance_id in fake_manager.active
-    await pool.release(second.lease_id)
-    await pool.close_session("run-a")
-    assert second.instance.instance_id in fake_manager.active
-    await pool.close_session("run-b")
-    assert not fake_manager.active
-```
-
-同一夹具补充以下验收：两个真实写入租约 ID 与存储不同；不同环境或镜像 ID 不共享；一次并发创建失败唤醒等待者且不泄漏额度；取消等待者和取消创建都释放资源；双重释放不删除其他租约；`max_instances=1` 下，释放查询租约后独立任务能继续；服务退出释放全部受管实例。
-
-- [ ] **2. 运行池测试，确认缺少模块时失败。**
-
-```bash
-python -m pytest tests/environment/test_pool.py -q
-```
-
-- [ ] **3. 实现池、接口和租约客户端。**
-
-共享键使用 `(environment.name, immutable_image_id)`。抽取现有 Docker 镜像检查为 `resolve_seed`，保留外部数据库拒绝和本地镜像限制；创建时使用检查后的不可变 ID。共享实例的 `access_mode` 为 `shared_query`，独立实例为 `isolated`。
-
-池使用 `asyncio.Condition` 协调创建中的预留额度、活动实例、借用计数、会话使用记录和等待请求。同键的并发查询只启动一个容器。不能持有锁等待 Docker 启动或删除；在锁内预留状态，锁外执行，完成后在锁内登记并唤醒。
-
-共享租约结束后，容器可在会话期间保留以复用；最后使用它的会话关闭后释放。额度满且独立任务等待时，可以释放借用数为零的共享容器，即使其会话尚未关闭，下一次查询按需重建。删除完成前仍占额度。已有借用者可正常完成，等待独立任务优先于新增借用，避免 `max_instances=1` 时死锁或持续查询饿死写入任务。调用者不能持有查询租约再等待独立租约。
-
-独立租约一旦释放就删除实例，不进入共享缓存。`close_session` 仅清理该会话租约和使用关系，不影响其他会话的借用。`close` 在 FastAPI lifespan 退出时等待创建任务结束并清理受管资源。
-
-服务通过 `MEDEVOLVE_MAX_INSTANCES` 设置总额度，默认 2，校验为正整数；现有 `MEDEVOLVE_CONTAINER_MEMORY` 保持独立。总额度覆盖共享容器、真实写入、试写探索、旧独立接口及启动中的实例。使用单个服务进程维护额度，不启用多 worker。
-
-租约请求可能因排队超过当前客户端的 240 秒超时；新客户端使用有限连接超时、无固定读取超时。请求断开或调用取消时，取消等待申请并回收已创建但未交付的租约；客户端收到租约后保证在 `finally` 释放。测试通过 ASGI 请求和事件覆盖断开/取消，不引入自动重放写入。
-
-- [ ] **4. 运行池、接口及原生命周期测试。**
-
-```bash
-python -m pytest tests/environment/test_pool.py tests/environment/test_lifecycle.py -q
-```
-
-预期：跨实验会话可复用同一查询容器，活动峰值不超过配置额度，旧实例接口保持独立性。
-
-- [ ] **5. 提交本任务。**
-
-提交说明：`feat(server): 复用查询实例并限制容器总数`。
-
-## 任务 4：按任务要求选择实例并核对提交与状态
-
-**文件：** 修改 `evaluation/evaluator.py`、`evaluation/prompts.py`、`methods/medevolve/__init__.py`；新增 `tests/evaluation/test_environment_routing.py`；修改 `tests/evaluation/test_evaluator.py`、`tests/integration/test_medagentbench_integration.py`、`tests/method/test_method.py`。
-
-**接口：**
-
-```python
-async def evaluate_task(task: Task, trajectory: PatientTrajectory,
-                        environment: EnvironmentConfig,
-                        config: EvaluationConfig, *,
-                        session_id: str | None = None) -> EvaluationResult: ...
-
-async def explore_environment(config: EnvironmentConfig, patient_ids: list[str],
-                              runtime: RuntimeConfig, *,
-                              session_id: str | None = None) -> RunResult: ...
-```
-
-直接调用没有会话 ID 时，函数创建 UUID 会话，并在结束时关闭；实验入口传会话 ID 时仅释放本次租约，最后由实验入口关闭会话。
-
-- [ ] **1. 添加路由与语义测试。**
-
-路由测试使用以下辅助函数替代租约客户端并记录 `access_mode`，替代运行器按 output schema 返回结果。整体 `Verification` 返回基于题面确定的要求；单条证据 Verification 不填写要求。
-
-```python
-import asyncio
-import json
-import uuid
-from unittest.mock import patch
-
-from contracts import (
-    Budget, CompletionReview, EnvironmentConfig, EnvironmentInstance,
-    EnvironmentLease, EvaluationConfig, ModelConfig, PatientTrajectory,
-    QualityReview, RunResult, RuntimeConfig, SolverAnswer, Task, Verification,
-)
-from evaluation.evaluator import evaluate_task
-
-def evaluate_with_requirement(name, requirement):
-    modes, releases = [], []
-    instruction = {
-        "read_only": "读取患者记录并解释结果",
-        "submit_request": "提交指定患者的处方请求",
-        "database_write": "在数据库创建指定患者的处方并查询确认",
-    }[requirement]
-    task = Task(id="t1", patient_id="p1", environment=name,
-        round_index=1, source_method="medevolve", instruction=instruction,
-        task_type="药物处方", reference_answer="参考答案",
-        evidence=[{"source_id": "Observation/o1", "statement": "事实"}],
-        execution_requirement=requirement)
-    trajectory = PatientTrajectory(patient_id="p1", environment=name,
-        text="记录", sources=task.evidence)
-    roles = ("verifier", "quality", "solver", "completion")
-    config = EvaluationConfig(runtime=RuntimeConfig(
-        models={r: ModelConfig(model=r, api_key_env="UNUSED") for r in roles},
-        budgets={r: Budget(max_model_turns=4, max_tool_calls=4) for r in roles}))
-    environment = EnvironmentConfig(name=name,
-        manager_url="http://fixture", seed_data="seed")
-    async def acquire(config, session_id, *, access_mode):
-        modes.append(access_mode)
-        return EnvironmentLease(lease_id=str(uuid.uuid4()), session_id=session_id,
-            instance=EnvironmentInstance(instance_id=str(uuid.uuid4()),
-                endpoint="http://fixture/fhir/", environment=name,
-                access_mode=access_mode))
-    async def release(config, lease):
-        releases.append(lease.lease_id)
-    async def evidence(*args):
-        return {"resourceType": "Observation", "id": "o1"}
-    async def tools(*args, **kwargs):
-        return []
-    async def state(*args):
-        return {"resources": []}
-    async def run(**kwargs):
-        schema = kwargs["output_type"]
-        if schema is Verification:
-            payload = json.loads(kwargs["input_text"])
-            if "task" not in payload:
-                output = {"valid": True, "reason": "事实受支持"}
-            else:
-                supported = not (name == "MedAgentBench"
-                                 and requirement == "database_write")
-                output = {"valid": supported, "reason": "能力核验",
-                    "execution_requirement": requirement,
-                    "capability_supported": supported}
-        elif schema is QualityReview:
-            output = {"dimensions": {key: {"judgment": "合格", "reason": "清晰"}
-                for key in ("clinical_value", "correctness",
-                            "longitudinal_integration", "clarity")}}
-        elif schema is SolverAnswer:
-            output = {"answer": "回答"}
-        elif schema is CompletionReview:
-            output = {"completed": False, "reason": "回答未覆盖操作要求"}
-        else:
-            raise AssertionError(schema)
-        return RunResult(output=output, trace=[], usage={}, status="completed")
-    async def execute():
-        return await evaluate_task(task, trajectory, environment, config,
-                                   session_id="routing-test")
-    with patch("environments.acquire_environment", acquire), \
-         patch("environments.release_lease", release), \
-         patch("environments.read_evidence", evidence), \
-         patch("environments.get_tools", tools), \
-         patch("environments.read_state", state), \
-         patch("runtime.call_llm", run), patch("runtime.run_agent", run):
-        result = asyncio.run(execute())
-    return result, modes, len(releases)
-```
-
-```python
-@pytest.mark.parametrize("environment,requirement,modes", [
-    ("PhysicianBench", "read_only", ["shared_query", "shared_query"]),
-    ("PhysicianBench", "submit_request", ["shared_query", "isolated"]),
-    ("PhysicianBench", "database_write", ["shared_query", "isolated"]),
-    ("MedAgentBench", "read_only", ["shared_query", "shared_query"]),
-    ("MedAgentBench", "submit_request", ["shared_query", "shared_query"]),
-    ("MedAgentBench", "database_write", ["shared_query"]),
-])
-def test_routing_uses_verified_requirement(environment, requirement, modes):
-    result, acquired_modes, released = evaluate_with_requirement(
-        environment, requirement)
-    assert acquired_modes == modes
-    assert released == len(modes)
-    if environment == "MedAgentBench" and requirement == "database_write":
-        assert result.status == "invalid"
-        assert result.failure_category == "unsupported_operation"
-        assert result.solver_run is None
-```
-
-另测：生成元数据标为只读，但整体核验识别数据库写入时不能进入共享解题；旧任务无字段由整体核验补齐；整体核验缺少要求时明确失败，不猜题型或关键词。探索测试断言 PhysicianBench 使用 isolated，MedAgentBench 使用 shared_query，角色指令包含固定说明。
-
-- [ ] **2. 运行路由测试，确认旧实例调用路径导致失败。**
-
-```bash
-python -m pytest tests/evaluation/test_environment_routing.py -q
-```
-
-- [ ] **3. 实现公共核验、路由与完成证据。**
-
-整体核验保持现有模型调用位置，不增加专门分类模型调用。固定能力说明追加到核验、质量、解题、完成及环境探索指令；`_review_material` 的 task 字段白名单加入 `execution_requirement`，将它视为待核验的生成元数据。整体核验以 `task.instruction` 为准，返回执行要求和能力是否支持；与生成字段冲突时将任务判 invalid、`ambiguous_task`，不使用不可靠元数据选择共享写入。旧任务允许用核验结果补齐。MedAgentBench 的数据库写入要求判 invalid、`unsupported_operation`，不启动 solver。先处理能力不支持的结果再处理普通 valid=false，避免错误归入证据不足。
-
-```python
-def solver_access_mode(environment_name, requirement):
-    capability = get_capabilities(environment_name)
-    if requirement != "read_only" and capability.supports_database_write:
-        return "isolated"
-    return "shared_query"
-```
-
-PhysicianBench 的 `submit_request` 仍会真实写入，因此也使用独立实例。证据核验租约在进入 solver 前释放，避免额度为 1 时嵌套等待。
-
-真实写入 solver 执行前后分别读取同一独立实例的患者资源快照，在 `observed_state` 保留 `before_resources`、`resources` 及新增资源标识，按 `(resourceType, id)` 对比；完成评价结合快照和实际工具返回，不将既有处方误当成新建。查询与 MedAgentBench 模拟提交不增加这次写前快照。
-
-固定完成提示使用设计中已确认的规则：提交检查 URL、payload、接受结果；持久化检查实际变化。解题输入仍只含题目、患者与决策点，不泄漏参考答案或审题证据；环境能力说明来自角色指令。
-
-所有租约在 `finally` 释放，释放后再执行不需要环境的质量或完成模型调用。探索的两个环境采用对应租约模式，生成环境指导时显式区分接受与持久化。
-
-- [ ] **4. 运行评测、探索和原生提交回归。**
-
-```bash
-python -m pytest tests/evaluation tests/method/test_method.py tests/integration/test_medagentbench_integration.py -q
-```
-
-替代模型测试只证明路由、材料和字段接线正确，不声称证明真实模型的语义判断准确。另为已有集成测试增加“错误剂量”与“没有 POST”材料，确认完整操作记录传给 completion，而不是只传成功提示。
-
-- [ ] **5. 提交本任务。**
-
-提交说明：`feat(evaluation): 按环境能力隔离写入并核对执行结果`。
-
-## 任务 5：患者并发、结果归属与整体验证
-
-**文件：** 修改 `contracts.py`、`experiments/runner.py`、`configs/experiment.json`、`docs/comparison-experiments/common/SPEC.md:46`；新增 `experiments/concurrency.py`、`tests/experiment/test_concurrency.py`、`tests/environment/test_shared_live.py`；修改闭环、workflow、selfgen 与 pipeline 测试的任务和环境夹具。
-
-**接口：**
-
-```python
-# ExperimentConfig 新增。旧配置保持一个患者串行执行。
-patient_concurrency: int = Field(default=1, ge=1)
-
-# experiments/concurrency.py，T/R 使用 TypeVar，以兼容 Python 3.10。
-async def bounded_map(items: list[T], limit: int,
-                      worker: Callable[[T], Awaitable[R]]) -> list[R]: ...
-```
-
-- [ ] **1. 添加并发测试和可控夹具。**
-
-```python
-@pytest.mark.asyncio
-async def test_bounded_map_overlaps_and_preserves_input_order():
-    active = peak = 0
-    two_started = asyncio.Event()
-    async def worker(index):
-        nonlocal active, peak
-        active += 1
-        peak = max(peak, active)
-        if active == 2:
-            two_started.set()
-        await asyncio.wait_for(two_started.wait(), timeout=1)
-        await asyncio.sleep(0)
-        active -= 1
-        return index
-    assert await bounded_map(list(range(5)), 2, worker) == list(range(5))
-    assert peak == 2
-```
-
-扩展 `test_closed_loop.py` 的替代依赖：测试环境名改用已接入环境，数据内容仍为假数据；生成结果补齐执行要求；探索和评测替代函数接收关键字会话 ID。加入事件记录当前策略和完成轮次。并发上限 1 与 5 各跑一次，比较每患者采样方向、任务 ID、最终列表次序、任务数量和用量统计，而不是比较并发下不可保证相同的真实模型输出。
-
-验证五个患者确实有重叠执行；反馈开始前本轮所有患者完成；下一轮始终使用更新后的策略；单患者失败不会取消其他患者；取消实验会等待已启动 worker 释放租约后关闭会话。保存中间 JSON 后重新读取，确认多个完成事件不覆盖其他患者结果。
-
-- [ ] **2. 运行并发测试，确认模块缺失时失败。**
-
-```bash
-python -m pytest tests/experiment/test_concurrency.py -q
-```
-
-- [ ] **3. 实现患者调度与单一结果写入。**
-
-```python
-async def bounded_map(items, limit, worker):
-    semaphore = asyncio.Semaphore(limit)
-    async def run(item):
-        async with semaphore:
-            return await worker(item)
-    tasks = [asyncio.create_task(run(item)) for item in items]
+async def test_generation_slot_is_free_while_evaluation_waits():
+    evaluation_started = asyncio.Event()
+    third_generated = asyncio.Event()
+    finish_evaluation = asyncio.Event()
+    async def generate(patient):
+        if patient == 2:
+            third_generated.set()
+        return [patient]
+    async def evaluate(task):
+        evaluation_started.set()
+        await finish_evaluation.wait()
+    run = asyncio.create_task(run_generation_evaluation(
+        [0, 1, 2], generation_limit=1, evaluation_limit=1,
+        generate=generate, evaluate=evaluate))
     try:
-        return await asyncio.gather(*tasks)
+        await asyncio.wait_for(evaluation_started.wait(), timeout=1)
+        await asyncio.wait_for(third_generated.wait(), timeout=1)
+        assert not run.done()
     finally:
-        pending = [task for task in tasks if not task.done()]
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        finish_evaluation.set()
+        await run
 ```
 
-`run_experiment` 创建一个 UUID 环境会话。轨迹读取借用共享实例，整个准备阶段结束释放租约但保留会话缓存；探索和各题评测传相同会话 ID。实验结束或取消时先等患者 worker 完成清理，再调用 `close_environment_session`，无论成功失败都执行。
+用事件与活动计数分别检查两上限，单患者返回两题时两题各占 task 评测名额，生成失败/空列表不占评测，某 task 失败不丢其他 task，取消后所有回调收尾。对六方法替代入口复用同一调度矩阵，并保留其方法专属预算、方向及 seed 绑定断言。
 
-`generate_and_evaluate` 在启动患者 worker 前按患者原始顺序采样 directions，保持当前 `rng` 消费顺序与独立评测的重置行为。每个 worker 从不可变的同轮策略副本开始，单患者内部仍按题序评测，不再增加题级并发。
+- [ ] **2. 运行新调度测试确认模块缺失时失败。**
 
-worker 将生成结果、任务和评测结果提交给单一结果聚合器，聚合器负责共享列表、manifest、runs 及 `_save`。以患者下标和题下标排序 tasks、evaluations、attempts，使用已有 stage 保存模型记录归属；每次患者生成或题目评测结束均保留 checkpoint。worker 不直接写相同文件或临时文件。
+```bash
+python -m pytest tests/experiment/test_generation_pipeline.py -q
+```
 
-`bounded_map` 返回后聚合器处理完本轮事件，才允许 feedback/update；初始策略评测和最终独立患者评测仍按现有阶段顺序执行。预期单任务异常继续使用原有失败结果；取消不转成临床失败，清理后向调用者传播取消。
+- [ ] **3. 实现调度器并拆分现有 process。**
 
-配置模板显式写 `patient_concurrency: 1`；使用者改为 5 可启用五患者并行，管理服务额度通过独立的 `MEDEVOLVE_MAX_INSTANCES` 设置，不在各方法配置里维护相互独立的容器上限。
+```python
+# experiments/scheduling.py
+import asyncio
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
-`docs/comparison-experiments/common/SPEC.md:46` 同步为：查询与模拟提交复用共享查询实例，真实写入任务和 PhysicianBench 试写探索使用独立种子实例，保留现有患者边界与决策点限制。
+PlanT = TypeVar("PlanT")
+TaskT = TypeVar("TaskT")
 
-- [ ] **4. 完成回归及不调用模型的真实环境检查。**
+async def run_generation_evaluation(
+    plans: list[PlanT], *, generation_limit: int, evaluation_limit: int,
+    generate: Callable[[PlanT], Awaitable[list[TaskT]]],
+    evaluate: Callable[[TaskT], Awaitable[None]],
+) -> None:
+    if generation_limit < 1 or evaluation_limit < 1:
+        raise ValueError("Concurrency limits must be positive")
+    queue = asyncio.Queue()
+    stop = object()
+    slots = asyncio.Semaphore(generation_limit)
+    async def produce(plan):
+        async with slots:
+            tasks = await generate(plan)
+        for task in tasks:
+            await queue.put(task)
+    async def consume():
+        while True:
+            task = await queue.get()
+            try:
+                if task is stop:
+                    return
+                await evaluate(task)
+            finally:
+                queue.task_done()
+    consumers = [asyncio.create_task(consume()) for _ in range(evaluation_limit)]
+    producers = [asyncio.create_task(produce(plan)) for plan in plans]
+    workers = [*producers, *consumers]
+    try:
+        await asyncio.gather(*producers)
+        for _ in consumers:
+            await queue.put(stop)
+        await asyncio.gather(*consumers)
+    finally:
+        for worker in workers:
+            if not worker.done():
+                worker.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+```
+
+使用有限患者批次的任务队列；生成回调结束时释放 slots，再提交评测工作，不持有生成名额等待评测。正常生成和 task 运行失败由实验回调转换为既有 RunResult/EvaluationResult，继续其他任务；取消和不可继续的异常传播至调度器并清理 worker。
+
+runner 在并发启动前保留顺序方向采样。generate 回调执行原方法与公共输出校验，保存 attempts、generation runs 和最终 tasks，返回这些 tasks；evaluate 回调使用完整原始 trajectory 调用公共 evaluate_task，保存该 task 结果与全部用量。两个回调共用现有 artifact_lock，以患者/题下标排序保存，生成完成的任务不能等整名患者评测后才落盘。
+
+方法的累计 GenerationBudget 仍每患者独立，策略副本同轮固定。调度器返回代表本轮全部生成与评测完成，随后才运行 MedEvolve feedback/update；初始/最终评测阶段保持顺序。准备阶段的 fit_trajectory 和生成输入裁剪保持，评测仍使用未裁剪轨迹。
+
+configs/experiment.json 显式给出 generation_concurrency=6、evaluation_concurrency=6；用户可分别修改，例如 5 和 2。旧配置按任务 1 回退，不批量改写全量实验配置。scripts/run_full_comparison.py 的现有环境变量设置仍兼容，无需为本方案重写运行脚本。
+
+- [ ] **4. 运行调度、闭环和集成回归。**
 
 ```bash
 python -m pytest tests/experiment tests/integration -q
-python -m pytest tests/method/test_method.py tests/method/test_workflow.py tests/method/test_selfgen.py -q
-python -m pytest tests --ignore=tests/environment/test_live_image.py --ignore=tests/environment/test_medagentbench_live.py --ignore=tests/environment/test_shared_live.py -q
 ```
 
-新增 `test_shared_live.py` 使用已有 live 测试的显式镜像选择方式，无配置时 skip。测试自建使用不可变本地镜像 ID 的池、设置额度 2，并在 `finally` 关闭全部会话及池：
+检查串行与并行的患者方向、task ID、排序、数量和成本归属一致；不比较真实模型文本相等。使用事件检查本轮最后一次评测完成之前 feedback 不运行，下一轮使用更新后的策略。保存配置含两个有效并发值。
 
-- PhysicianBench：查询原始 Patient 列表取得五个不同患者，五个并发租约指向同一实例；每个查询结果属于对应患者。独立实例写入带唯一标记的 Communication，查询实例不出现该标记；新的独立实例也不出现它。试写探索实例用相同写入动作模拟，释放后查询实例仍干净。
-- MedAgentBench：五个租约共用查询实例，执行原生 GET；用符合患者范围的 POST 提交一次请求，提交被接受但写前写后资源一致，其他任务记录不混入该提交。
+- [ ] **5. 提交。** `feat(experiment): 分离患者生成与任务评测并发`。
+
+## 任务 5：任务能力核验、实例路由与整体验收
+
+**文件：** 修改 evaluation/evaluator.py、evaluation/prompts.py；新增 tests/evaluation/test_environment_routing.py、tests/environment/test_shared_generation_live.py；扩展现有 evaluator 与 MedAgentBench 集成测试。
+
+**接口：** evaluate_task 保持当前 environments 可选参数；整体 Verification 使用任务 1 新字段，session.instance 的 solve 接收核验后的 requirement。不改变质量/难度契约或评测模型角色数量。
+
+- [ ] **1. 添加路由和旧任务兼容测试。**
+
+复用 tests/evaluation/test_evaluator.py 的 harness：整体 verifier 返回执行要求和 capability_supported，单条 verifier 只返回事实有效性；租约替代记录 phase/requirement，完成评价捕获实际 trace 与 observed_state。
+
+```python
+# 将已有 session 的 _shareable 扩展为此签名；测试不用模型。
+from evaluation.session import EvaluationEnvironments
+from contracts import EnvironmentConfig
+
+def test_solver_routing_uses_requirement():
+    session = EvaluationEnvironments(instance_budget=3)
+    config = EnvironmentConfig(name="PhysicianBench", manager_url="http://fixture", seed_data="seed")
+    assert session._shareable(config, "solve", requirement="read_only")
+    assert not session._shareable(config, "solve", requirement="submit_request")
+    assert not session._shareable(config, "solve", requirement="database_write")
+```
+
+另测 MedAgentBench 的 submit_request 共享、database_write 在 solver 前拒绝；FHIR-AgentBench 的操作要求拒绝；旧 task 无字段由整体核验补齐，新字段与题面核验冲突判 invalid，不错误进入共享写入。模型缺少整体能力字段时报明确模型失败，不能按关键词猜测。已有四维分数、三次中位数、复杂度计算和解题输入隔离测试保持。
+
+- [ ] **2. 运行路由及评测测试确认新能力检查缺失时失败。**
 
 ```bash
-MEDEVOLVE_TEST_IMAGE='<已加载的 PhysicianBench 不可变镜像 ID>' python -m pytest tests/environment/test_shared_live.py -k physicianbench -q
-MEDEVOLVE_MEDAGENTBENCH_TEST_IMAGE='<已加载的 MedAgentBench 不可变镜像 ID>' python -m pytest tests/environment/test_shared_live.py -k medagentbench -q
+python -m pytest tests/evaluation/test_environment_routing.py tests/evaluation/test_evaluator.py -q
 ```
 
-实际执行时将镜像参数替换为本机 `docker image inspect` 确认的不可变 ID；不使用示例占位值运行。记录最大活动实例数、共享实例 ID、独立实例 ID 和释放结果。缺少镜像时保留测试为跳过，交付说明区分已验证与未验证项；不为完成检查调用未授权模型。
+- [ ] **3. 通过已有整体核验确定要求并完成路由。**
 
-- [ ] **5. 提交本任务并交付验证结果。**
+_review_material 的 task 白名单加入 execution_requirement，但标为待核验元数据。整体 verifier 在既有调用中根据 task.instruction 返回 execution_requirement 和 capability_supported；单条事实 verifier 不承担此职责。先处理环境不支持，再处理普通 valid=false，避免 unsupported_operation 被记成证据不足；生成与核验要求冲突归 ambiguous_task。环境规则不支持要求时，不能仅依赖模型返回的 capability_supported=true 放行。
 
-提交说明：`feat(experiment): 并行调度患者并保持轮次结果一致`。测试随所属行为提交；不单独拆分无法验证实现的测试提交。
+```python
+# 独立状态判断，不因模型声称可用而改变固定能力。
+requirement = result.verification.execution_requirement
+if requirement is None:
+    raise ValueError("Overall verification must specify execution_requirement")
+if not requirement_supported(environment.name, requirement):
+    result.status = "invalid"
+    result.failure_category = "unsupported_operation"
+    return result
+```
 
-## 实施检查点
+质量、难度、solver 和 completion 指令追加同一能力说明。solver 输入仍只含题目、患者和决策点，参考答案不进入解题请求。submit_request 看实际 URL、payload 与接受结果；database_write 看写前、写后资源及工具返回。PhysicianBench 独立 solver 开始前读取患者资源快照，结束后再次读取；observed_state 保存 before_resources、resources 和按资源类型/ID 比较的新增标识，既有资源不能算本次新建。只读和模拟提交不增加写前快照。
 
-按五项任务顺序执行。每项完成后核对其接口、测试和提交，再进入下一项；不同时改动依赖尚未确定的模块。
+固定能力不支持的任务及元数据冲突不计作临床难度；feedback 保持真实失败分类。结构化路由测试证明接线与共享/隔离行为，不宣称替代模型测试证明真实语义评分准确。
 
-本次 main 完成标准是固定能力说明和执行要求覆盖 `medevolve`、`workflow`、`selfgen`，五患者查询或模拟提交可共享实例并行执行，真实写入及试写探索隔离，总容器数受管理服务额度限制，结果与清理保持正确，公共 SPEC 与实例复用规则一致。
+- [ ] **4. 完成全量离线回归和显式启用的环境检查。**
 
-### 合并后必做项验收
+```bash
+python -m pytest tests --ignore=tests/environment/test_live_image.py --ignore=tests/environment/test_medagentbench_live.py --ignore=tests/environment/test_shared_generation_live.py --ignore=tests/environment/test_fhir_agentbench_live.py --ignore=tests/method/test_taskcraft_live.py -q
+```
 
-| 方法 | rebase 后及合并前必须完成 | 验证文件 |
-| --- | --- | --- |
-| `taskcraft` | 适配清单中的 Ledger 能力注入、三类候选执行要求、共享查询租约全部接通；分支主方法第 44 行重复语义不带回 main；`methods/common.py` 保留新公共校验，保留方法预算和只读生成约束 | `tests/method/test_taskcraft.py`：捕获 atomic/width/depth 与内置核验指令、检查候选字段和筛选输出；补充共享租约创建/释放断言 |
-| `singleshot` | 删除 prompts 第 13–14 行语义副本；统一能力注入、执行要求、公共接口及实验入口校验；保留一次模型调用、自主选题、两题可同类型；与 Workflow 的 `max_questions/candidate_pool` 回归一起通过 | `tests/method/test_singleshot.py`、`tests/integration/test_singleshot_integration.py`，并回归 `tests/method/test_workflow.py` |
-| `envexplore` | 两分支均按适配清单核对，合并所选版本时接通统一能力、执行要求和对应租约路径；v2 `GENERATION_RULES` 中的语义副本不带回 main；保留所选版本的探索次数、策略绑定和方法预算 | 原分支 `tests/method/test_envexplore.py`；v2 另含 `tests/method/test_envexplore_environment.py`、`tests/method/test_generation_shared.py` |
+新 live 测试读取现有 MEDEVOLVE_TEST_IMAGE、MEDEVOLVE_MEDAGENTBENCH_TEST_IMAGE 的已加载镜像和MEDEVOLVE_FHIR_AGENTBENCH_SEED 指定的已准备种子，无资产时 skip。五患者并发读取同一实例，验证患者隔离；TaskCraft 的真实只读工具绑定拒绝 POST；MedAgentBench 提交前后资源不变；PhysicianBench 独立实例写入唯一标记，共享实例与下一独立种子均无该标记。使用 finally 清理实例，不调用模型、不拉取镜像。
 
-各分支验收均覆盖 PhysicianBench 与 MedAgentBench，检查所有相关生成阶段收到相同固定说明、每题执行要求经公共校验且内部筛选不丢字段；记录实际租约模式，不以生成阶段只读推定生成任务也是只读。六个方法均通过上述适配与验证后，才报告完整六方法覆盖；分支未合并时不将必做项标为已完成。
+同时记录逻辑实例峰值和实际 Docker 数；FHIR-AgentBench 每实例两容器，不能套用一实例一容器断言。真实样本生成需要另有已授权模型与运行请求，缺少实测时保留未验证状态。
+
+TaskCraft 在研改动合入后再次执行 tests/method/test_taskcraft.py、tests/experiment/test_generation_pipeline.py、tests/evaluation/test_evaluation_session.py 和公共回归；验证 request_attempts 等重试、累计预算、共享绑定、执行要求、取消清理均保留。
+
+- [ ] **5. 提交并记录实际验证范围。** `feat(evaluation): 按任务能力复用查询并隔离真实写入`。
+
+## 实施检查点与完成标准
+
+按五项任务依次完成，每项测试通过后提交；执行中以当前源码为准核对 TaskCraft 在研合入状态，不把旧行号或历史分支清单当作方法现状。
+
+完成标准：六方法最终任务带执行要求；生成名额在公共评测结束前释放；两个并发上限分别生效；全部环境申请在同一运行额度内；查询和模拟提交共享、真实写入隔离；方法内部机制与公共评测规则保持；MedEvolve 轮次屏障、结果归属及失败/取消清理通过验证。

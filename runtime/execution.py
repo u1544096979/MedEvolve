@@ -34,6 +34,74 @@ class _ToolBudgetExceeded(AgentsException):
     pass
 
 
+# 收尾调用可携带的工具结果上限（字符）：预算用尽后只靠已有结果作答。
+FINAL_ANSWER_CHARS = 120_000
+TOOL_RESULT_SNIPPET_CHARS = 4000
+
+
+async def _final_answer(*, client: AsyncOpenAI, model: ModelConfig, instructions: str,
+                        input_text: str, trace: list[dict],
+                        output_type: type[BaseModel]) -> RunResult:
+    """轮次或工具预算用尽后的收尾调用：不再提供工具，只要求结构化答案。"""
+    digest = _tool_digest(trace)
+    payload = (
+        f"{input_text}\n\n"
+        "轮次或工具调用预算已用尽，不能再调用任何工具。\n"
+        "只依据任务材料与下列已获得的工具结果，直接输出最终结构化答案；\n"
+        "信息不足时按已有结果作答并说明限制，不要声称未验证的能力或未执行的操作。\n\n"
+        f"已获得的工具结果（可能被截断）：\n{digest or '（没有完成的工具结果）'}"
+    )
+    note = ("\nReturn only a JSON object matching this schema:\n"
+            + json.dumps(output_type.model_json_schema(), ensure_ascii=False))
+    messages = [{"role": model.instructions_role, "content": instructions + note},
+                {"role": "user", "content": payload}]
+    usage = {"model_turns": 1, "tool_calls": 0}
+    trace_items = [{"type": "model_request", "stage": "final_answer", "messages": messages}]
+    response = await client.chat.completions.create(
+        model=model.model, messages=messages,
+        response_format={"type": "json_object"},
+        **({"max_tokens": model.max_output_tokens}
+           if model.max_output_tokens is not None else {}),
+    )
+    trace_items.append({"type": "model_response", "stage": "final_answer",
+                        "response": response.model_dump(mode="json")})
+    if response.usage is not None:
+        usage.update(response.usage.model_dump(mode="json"))
+    output = output_type.model_validate_json(
+        response.choices[0].message.content or ""
+    ).model_dump(mode="json")
+    return RunResult(output=output, trace=trace_items, usage=usage, status="completed")
+
+
+def _tool_digest(trace: list[dict]) -> str:
+    """按时间倒序取工具结果，超出上限即停，最后按时间顺序拼接。"""
+    outputs = {item.get("call_id"): item.get("output") for item in trace
+               if item.get("type") == "tool_output"}
+    calls = [(item.get("name"), item.get("arguments"), item.get("call_id"))
+             for item in trace if item.get("type") == "tool_start"]
+    chunks, used = [], 0
+    for name, arguments, call_id in reversed(calls):
+        text = str(outputs.get(call_id, ""))
+        if len(text) > TOOL_RESULT_SNIPPET_CHARS:
+            text = text[:TOOL_RESULT_SNIPPET_CHARS] + "… [截断]"
+        chunk = f"{name}({arguments}) -> {text}"
+        if used + len(chunk) > FINAL_ANSWER_CHARS:
+            break
+        chunks.append(chunk)
+        used += len(chunk)
+    return "\n".join(reversed(chunks))
+
+
+def _merge_usage(loop: dict, final: dict) -> dict:
+    merged = dict(loop)
+    for field in ("model_turns", "tool_calls", "requests", "input_tokens", "output_tokens",
+                  "total_tokens", "prompt_tokens", "completion_tokens"):
+        values = [value for value in (loop.get(field), final.get(field)) if value is not None]
+        if values:
+            merged[field] = sum(values)
+    return merged
+
+
 def _client(model: ModelConfig) -> AsyncOpenAI:
     key = os.environ.get(model.api_key_env)
     if not key:
@@ -182,11 +250,27 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                     if urlparse(model.base_url or "").hostname == "opencode.ai" else None,
                 ),
             )
-            result = await Runner.run(
-                agent, agent_input, hooks=records, max_turns=budget.max_model_turns,
-                run_config=RunConfig(tracing_disabled=True),
-            )
-            output = output_type.model_validate(result.final_output).model_dump(mode="json")
+            # 留一轮做收尾：预算用尽时不再调工具，直接产出结构化答案。
+            reserved = budget.max_model_turns >= 2
+            loop_turns = budget.max_model_turns - 1 if reserved else budget.max_model_turns
+            try:
+                result = await Runner.run(
+                    agent, agent_input, hooks=records, max_turns=loop_turns,
+                    run_config=RunConfig(tracing_disabled=True),
+                )
+                output = output_type.model_validate(result.final_output).model_dump(mode="json")
+            except (MaxTurnsExceeded, _ToolBudgetExceeded) as exc:
+                if not reserved:
+                    raise
+                final = await _final_answer(
+                    client=client, model=model, instructions=instructions,
+                    input_text=input_text, trace=records.trace, output_type=output_type,
+                )
+                return _result(
+                    model=model, output=final.output,
+                    trace=[*records.trace, *final.trace],
+                    usage=_merge_usage(records.usage(), final.usage), status="completed",
+                )
         return _result(model=model, output=output, trace=records.trace,
                        usage=records.usage(), status="completed")
     except Exception as exc:

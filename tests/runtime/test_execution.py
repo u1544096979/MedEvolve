@@ -64,7 +64,7 @@ async def test_sdk_tool_loop(monkeypatch, output_type, output, instructions_role
     result = await run_agent(instructions="Read and answer", input_text="patient",
         tools=[lookup], output_type=output_type,
         model=MODEL.model_copy(update={"instructions_role": instructions_role}),
-        budget=Budget(max_model_turns=2, max_tool_calls=1))
+        budget=Budget(max_model_turns=3, max_tool_calls=1))
     assert result.status == "completed", result.error
     assert result.output == output
     assert calls == [1]
@@ -95,7 +95,7 @@ async def test_user_instructions_single_call(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("turns,tool_limit,expected_requests,expected_calls", [
-    (0, 1, 0, 0), (1, 1, 1, 1), (2, 0, 1, 0), (3, 1, 2, 1),
+    (0, 1, 0, 0), (1, 1, 1, 1),
 ])
 async def test_budgets_stop_execution(monkeypatch, turns, tool_limit, expected_requests, expected_calls):
     requests = install_transport(monkeypatch, [TOOL_MESSAGE, TOOL_MESSAGE, FINAL_MESSAGE])
@@ -117,6 +117,42 @@ async def test_budgets_stop_execution(monkeypatch, turns, tool_limit, expected_r
     assert result.usage["total_tokens"] == expected_requests * 15
     if expected_calls:
         assert any(item["type"] == "tool_output" for item in result.trace)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("turns,tool_limit,responses,expected_requests,expected_calls", [
+    (2, 0, [TOOL_MESSAGE, FINAL_MESSAGE], 2, 0),
+    (3, 1, [TOOL_MESSAGE, TOOL_MESSAGE, FINAL_MESSAGE], 3, 1),
+])
+async def test_exhausted_budget_answers_with_collected_tools(
+    monkeypatch, turns, tool_limit, responses, expected_requests, expected_calls
+):
+    """轮次或工具预算用尽后收尾一次：不再调用工具，用已有结果作答。"""
+    requests = install_transport(monkeypatch, responses)
+    calls = []
+
+    @function_tool
+    async def lookup() -> str:
+        """Read patient facts."""
+        calls.append(1)
+        return "patient found"
+
+    result = await run_agent(instructions="Read", input_text="patient", tools=[lookup],
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=turns, max_tool_calls=tool_limit))
+    assert result.status == "completed", result.error
+    assert result.output == {"answer": "patient found"}
+    assert len(requests) == expected_requests
+    assert len(calls) == expected_calls
+    assert result.usage["model_turns"] == turns
+    assert result.trace[-1]["type"] == "model_response"
+    assert result.trace[-1]["stage"] == "final_answer"
+    assert requests[-1]["messages"][0]["role"] == "system"
+    digest = requests[-1]["messages"][1]["content"]
+    if expected_calls:
+        assert "patient found" in digest
+    else:
+        assert "没有完成的工具结果" in digest
 
 
 @pytest.mark.asyncio
@@ -192,7 +228,7 @@ async def test_opencode_sdk_tool_loop_uses_json_object(monkeypatch):
     result = await run_agent(instructions="Read and answer", input_text="patient",
         tools=[lookup], output_type=SolverAnswer,
         model=MODEL.model_copy(update={"base_url": "https://opencode.ai/zen/go/v1"}),
-        budget=Budget(max_model_turns=2, max_tool_calls=1))
+        budget=Budget(max_model_turns=3, max_tool_calls=1))
     assert result.status == "completed", result.error
     assert result.output == {"answer": "patient found"}
     for request in requests:
@@ -214,7 +250,7 @@ async def test_opencode_preserves_literal_newlines_in_answer(monkeypatch):
     result = await run_agent(instructions="Read and answer", input_text="patient",
         tools=[lookup], output_type=SolverAnswer,
         model=MODEL.model_copy(update={"base_url": "https://opencode.ai/zen/go/v1"}),
-        budget=Budget(max_model_turns=2, max_tool_calls=1))
+        budget=Budget(max_model_turns=3, max_tool_calls=1))
     assert result.status == "completed", result.error
     assert result.output == {"answer": "patient found\nfollow-up required"}
     assert len(requests) == 2
