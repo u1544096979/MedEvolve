@@ -240,6 +240,57 @@ async def test_opencode_sdk_tool_loop_uses_json_object(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_without_structured_output_keeps_tool_loop_and_validates_json(monkeypatch):
+    requests = install_transport(monkeypatch, [TOOL_MESSAGE, FINAL_MESSAGE])
+    calls = []
+
+    @function_tool
+    async def lookup() -> str:
+        """Read patient facts."""
+        calls.append(1)
+        return "patient found"
+
+    model = MODEL.model_copy(update={
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "structured_agent_output": False,
+    })
+    result = await run_agent(instructions="Read and answer", input_text="patient",
+        tools=[lookup], output_type=SolverAnswer, model=model,
+        budget=Budget(max_model_turns=3, max_tool_calls=1))
+
+    assert result.status == "completed", result.error
+    assert result.output == {"answer": "patient found"}
+    assert calls == [1]
+    assert len(requests) == 2
+    assert all("response_format" not in request for request in requests)
+    assert '"answer"' in requests[0]["messages"][0]["content"]
+    assert result.usage["total_tokens"] == 30
+    assert result.usage["model_turns"] == 2
+    assert result.usage["tool_calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_without_structured_output_rejects_invalid_final_json(monkeypatch):
+    requests = install_transport(monkeypatch, [TOOL_MESSAGE,
+        {"role": "assistant", "content": '{"wrong":"field"}'}])
+
+    @function_tool
+    async def lookup() -> str:
+        """Read patient facts."""
+        return "patient found"
+
+    result = await run_agent(instructions="Read and answer", input_text="patient",
+        tools=[lookup], output_type=SolverAnswer,
+        model=MODEL.model_copy(update={"structured_agent_output": False}),
+        budget=Budget(max_model_turns=3, max_tool_calls=1))
+
+    assert result.status == "failed"
+    assert len(requests) == 2
+    assert result.usage["total_tokens"] == 30
+    assert "ValidationError" in result.error
+
+
+@pytest.mark.asyncio
 async def test_opencode_preserves_literal_newlines_in_answer(monkeypatch):
     requests = install_transport(monkeypatch, [TOOL_MESSAGE,
         {"role": "assistant", "content": '{"answer":"patient found\nfollow-up required"}'}])

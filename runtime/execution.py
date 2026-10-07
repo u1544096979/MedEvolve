@@ -299,15 +299,20 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                 name="MedEvolve", instructions=agent_instructions, tools=tools,
                 # Shared contracts include open dictionaries, which strict schemas reject.
                 output_type=(
-                    _OpenCodeOutputSchema if urlparse(model.base_url or "").hostname == "opencode.ai"
-                    else AgentOutputSchema
-                )(output_type, strict_json_schema=False),
+                    (
+                        _OpenCodeOutputSchema
+                        if urlparse(model.base_url or "").hostname == "opencode.ai"
+                        else AgentOutputSchema
+                    )(output_type, strict_json_schema=False)
+                    if model.structured_agent_output else None
+                ),
                 model=OpenAIChatCompletionsModel(model=model.model, openai_client=client),
                 model_settings=ModelSettings(
                     max_tokens=output_limit(model),
                     parallel_tool_calls=model.parallel_tool_calls,
                     extra_body={"response_format": {"type": "json_object"}}
-                    if urlparse(model.base_url or "").hostname == "opencode.ai" else None,
+                    if model.structured_agent_output
+                    and urlparse(model.base_url or "").hostname == "opencode.ai" else None,
                 ),
             )
             # 留一轮做收尾：预算用尽时不再调工具，直接产出结构化答案。
@@ -318,7 +323,11 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                     agent, agent_input, hooks=records, max_turns=loop_turns,
                     run_config=RunConfig(tracing_disabled=True, call_model_input_filter=filter_input),
                 )
-                output = output_type.model_validate(result.final_output).model_dump(mode="json")
+                output = (
+                    output_type.model_validate_json(result.final_output)
+                    if isinstance(result.final_output, str)
+                    else output_type.model_validate(result.final_output)
+                ).model_dump(mode="json")
             except (MaxTurnsExceeded, _ToolBudgetExceeded, _RepeatedToolCall) as exc:
                 if not reserved:
                     raise
