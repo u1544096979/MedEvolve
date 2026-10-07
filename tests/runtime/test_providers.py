@@ -50,13 +50,18 @@ async def test_call_llm_success_does_not_use_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_quota_exhaustion_falls_back_once_and_caches_provider(monkeypatch):
+@pytest.mark.parametrize("quota_error", [
+    "Error code 402: insufficient_quota",
+    "RateLimitError: Error code: 429 - {'error': {'type': 'GoUsageLimitError', "
+    "'message': 'Go usage limit exceeded'}, 'metadata': {'limitName': '5 hour'}}",
+])
+async def test_quota_exhaustion_falls_back_once_and_caches_provider(monkeypatch, quota_error):
     calls = []
 
     async def fake_call(**kwargs):
         calls.append(kwargs["model"])
         if kwargs["model"].api_key_env == "TEST_OPENCODE_KEY":
-            return result("failed", error="Error code 402: insufficient_quota")
+            return result("failed", error=quota_error)
         return result(output={"answer": "fallback"}, usage={
             "prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5,
         })
@@ -75,7 +80,7 @@ async def test_quota_exhaustion_falls_back_once_and_caches_provider(monkeypatch)
     assert first.trace[0]["type"] == "provider_attempt"
     assert first.trace[0]["provider_identity"]["api_key_env"] == "TEST_OPENCODE_KEY"
     assert any(item["type"] == "provider_switch" for item in first.trace)
-    assert first.trace[0]["result"]["error"].find("insufficient_quota") >= 0
+    assert first.trace[0]["result"]["error"] == quota_error
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from . import execution
 _EXHAUSTED_PROVIDERS: set[tuple[str | None, str]] = set()
 _COMPLETION_EVENT_TYPES = {"tool_start", "tool_output", "run_error", "tool_budget"}
 _QUOTA_PATTERNS = (
+    r"(?:gousagelimiterror|go\s+usage\s+limit\s+exceeded)",
     r"insufficient[_ ]quota",
     r"quota\s+(?:is\s+)?(?:exhausted|exceeded|depleted)",
     r"(?:exhausted|exceeded|depleted)\s+(?:the\s+)?quota",
