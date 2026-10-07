@@ -34,6 +34,10 @@ HARNESS_LABEL = "medevolve.harness"
 CONTAINER_PREFIX = "medevolve-harness"
 STATE_MOUNT = "/state"
 SCRATCH_MOUNT = "/scratch"
+# Explicit command appended to `docker run`: an image whose default CMD exits
+# immediately would make every later `docker exec` fail, so the shared plumbing
+# never relies on the image's own command.
+KEEPALIVE_COMMAND = ("sleep", "infinity")
 DOCKER_SOCKETS = (Path("/var/run/docker.sock"), Path("/run/docker.sock"))
 PERSONAL_DIRECTORIES = (
     ".openclaw", ".hermes", ".claude", ".codex", ".agents", ".config", ".ssh",
@@ -134,6 +138,7 @@ class HarnessIsolation:
         copier: Callable[[Path, Path], None] | None = None,
         extra_env: Mapping[str, str] | None = None,
         forbidden_paths: Sequence[Path] = (),
+        keepalive: Sequence[str] = KEEPALIVE_COMMAND,
     ):
         if not RUN_ID_PATTERN.fullmatch(run_id or ""):
             raise IsolationError(f"非法 run_id：{run_id!r}")
@@ -153,6 +158,7 @@ class HarnessIsolation:
         self._copier = copier or _copy_tree
         self.extra_env = dict(extra_env or {})
         self.forbidden_paths = tuple(Path(path) for path in forbidden_paths)
+        self.keepalive = tuple(keepalive)
         self._workspaces: dict[str, GroupWorkspace] = {}
 
     # -- paths and names ---------------------------------------------------
@@ -268,6 +274,7 @@ class HarnessIsolation:
             "MEDEVOLVE_TOOL_BRIDGE": self.bridge_url,
             "MEDEVOLVE_MODEL_GATEWAY": self.gateway_url,
             "MEDEVOLVE_WRITABLE_DIR": SCRATCH_MOUNT,
+            "MEDEVOLVE_STATE_DIR": STATE_MOUNT,
             "MEDEVOLVE_FROZEN": "1" if frozen else "0",
         }
         environment.update(state_env(group.harness))
@@ -309,6 +316,7 @@ class HarnessIsolation:
         for key, value in workspace.env.items():
             args.extend(("--env", f"{key}={value}"))
         args.append(self.image)
+        args.extend(self.keepalive)
         await self._runner(*args)
 
     async def _stop_attempt(self, workspace: GroupWorkspace) -> None:
