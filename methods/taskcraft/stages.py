@@ -159,6 +159,13 @@ class Pipeline:
 
     def agent_instructions(self) -> str:
         """病历工具只开放当前患者；正文里的资源引用中可能出现其他标识。"""
+        names = {getattr(tool, "name", "") for tool in self.tools} if not self.native else set()
+        if "get_resources_by_patient_fhir_id" in names:
+            return (
+                f"{prompts.FHIR_AGENTBENCH_RECORD_AGENT}\n"
+                f"本次开放的患者标识是 {self.trajectory.patient_id}；"
+                "patient_fhir_id 必须使用该标识，resource_id 使用工具结果或病历中的真实资源标识。"
+            )
         text = (
             f"{prompts.MEDICAL_RECORD_AGENT}\n"
             f"本次开放的患者标识是 {self.trajectory.patient_id}；"

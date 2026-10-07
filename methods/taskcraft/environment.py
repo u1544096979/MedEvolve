@@ -28,6 +28,8 @@ READ_ONLY_TOOLS = (
     "fhir_document_reference_search_clinical_notes",
     "fhir_service_request_search",
     "fhir_observation_search_social_history",
+    "get_resources_by_resource_id",
+    "get_resources_by_patient_fhir_id",
 )
 
 # 原生协议的生成阶段约束：只检索、不写入，患者范围由环境限定。

@@ -913,7 +913,20 @@ def test_only_read_only_medical_tools_are_bound(patched, environment):
     fake = FakeRuntime()
     patched(fake)
     assert "fhir_medication_request_create" not in READ_ONLY_TOOLS
-    assert len(READ_ONLY_TOOLS) == 9
+    assert len(READ_ONLY_TOOLS) == 11
+
+
+def test_fhir_agentbench_instructions_match_actual_parameters():
+    tools = [FakeTool("get_resources_by_resource_id"),
+             FakeTool("get_resources_by_patient_fhir_id")]
+    pipe = Pipeline(trajectory(), tools, directions(), TaskCraftParameters(),
+                    Ledger(GenerationBudget(runtime_config())))
+    instructions = pipe.agent_instructions()
+    assert "patient_fhir_id" in instructions and PATIENT in instructions
+    assert "resource_type" in instructions and "resource_id" in instructions
+    assert "page_limit" not in instructions
+    assert "count 不超过" not in instructions
+    assert "patient 或 subject 参数都必须" not in instructions
 
 
 def test_read_tools_do_not_require_nine_names():

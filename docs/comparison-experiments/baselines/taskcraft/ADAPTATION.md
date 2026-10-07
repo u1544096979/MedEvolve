@@ -52,13 +52,13 @@
 
 MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskcraft/environment.py` 的 `bind_generation_tools`：
 
-| 项 | PhysicianBench | MedAgentBench |
-|---|---|---|
-| 工具绑定 | 方法声明的只读工具白名单与当前环境所提供工具名的交集，允许非空子集；白名单外的工具不绑定，交集为空视为环境不可用 | `ReadOnlyNativeTools` 只读视图：不修改原 `NativeTools` 对象及其患者客户端，只复制其中的 GET 工具声明 |
-| 检索动作 | 函数调用，参数 `count`、`page_limit` | `GET <FHIR 接口路径>`，返回量用 `_count`，患者范围由公共环境的实例、分页与地址鉴权承担 |
-| 写入动作 | 不绑定 `fhir_*_create` 类工具 | 放行清单只有 GET 与 FINISH，POST 等写动作在执行路径返回错误，不进入传输层 |
-| 核验 Agent 输出 | `AnswerList` | `FINISH([...])` 答案列表，经 `SolverAnswer` 承载后解析 |
-| 反向检索输出 | `BackwardContext` 对象 | 同样要求 `FINISH` 返回单个对象 |
+| 项 | PhysicianBench | MedAgentBench | FHIR-AgentBench |
+|---|---|---|---|
+| 工具绑定 | 方法声明的只读工具白名单与当前环境所提供工具名的交集，允许非空子集；白名单外的工具不绑定，交集为空视为环境不可用 | `ReadOnlyNativeTools` 只读视图：不修改原 `NativeTools` 对象及其患者客户端，只复制其中的 GET 工具声明 | 原样绑定环境声明的 `get_resources_by_resource_id` 与 `get_resources_by_patient_fhir_id` 工具 |
+| 检索动作 | 函数调用，参数 `count`、`page_limit` | `GET <FHIR 接口路径>`，返回量用 `_count`，患者范围由公共环境的实例、分页与地址鉴权承担 | 函数调用：按资源 ID 检索使用 `resource_type`、`resource_id`；按患者检索使用 `resource_type`、`patient_fhir_id` |
+| 写入动作 | 不绑定 `fhir_*_create` 类工具 | 放行清单只有 GET 与 FINISH，POST 等写动作在执行路径返回错误，不进入传输层 | 只绑定上述两个检索工具 |
+| 核验 Agent 输出 | `AnswerList` | `FINISH([...])` 答案列表，经 `SolverAnswer` 承载后解析 | 使用环境声明的函数工具 schema |
+| 反向检索输出 | `BackwardContext` 对象 | 同样要求 `FINISH` 返回单个对象 | 使用环境声明的函数工具 schema |
 
 只读绑定取本方法声明的只读工具白名单与当前环境所提供工具名的交集；白名单外的工具不绑定，工具数量不限；新环境需以这些只读工具名（或显式方法适配）提供检索接口，交集为空时返回 `EnvironmentUnavailable`；不凭 `_search` 之类的名称推断。检索能力与证据来源的映射不依赖固定工具数量，具备同等检索接口与来源映射的环境可直接接入。
 

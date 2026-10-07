@@ -264,6 +264,31 @@ async def invoke_raw(tools, name, **params):
     return await tool.on_invoke_tool(context, arguments)
 
 
+@pytest.mark.asyncio
+async def test_taskcraft_binds_fhir_tools_with_patient_scope(fake):
+    from methods.taskcraft.environment import bind_generation_tools
+
+    original = get_native_tools(instance(), ["a"])
+    tools = bind_generation_tools(original)
+    assert [tool.name for tool in tools] == [tool.name for tool in original]
+    assert all(first is second for first, second in zip(tools, original))
+    by_patient = await invoke(
+        tools, "get_resources_by_patient_fhir_id",
+        resource_type="Observation", patient_fhir_id="a",
+    )
+    assert [resource["id"] for resource in by_patient["Observation"]] == ["o1", "o2"]
+    by_id = await invoke(
+        tools, "get_resources_by_resource_id",
+        resource_type="Observation", resource_id="o1",
+    )
+    assert by_id["Observation"][0]["id"] == "o1"
+    denied = await invoke(
+        tools, "get_resources_by_patient_fhir_id",
+        resource_type="Observation", patient_fhir_id="b",
+    )
+    assert "outside the allowed patient scope" in denied["error"]
+
+
 def paths(fake):
     return [request.url.path for request in fake.requests]
 
