@@ -10,6 +10,8 @@ PhysicianBench、MedAgentBench、FHIR-AgentBench 分别运行 MedEvolve、TaskCr
 
 模型、API 地址、环境变量名及上下文限制通过配置提供，凭证不进入配置、Git 或输出。API 必须验证指定模型实际可用，不得静默换模型。MedEvolve 在各模型、各环境下独立执行两轮进化，保存最终策略及指导；正式生成只使用该组冻结产物。各组配置、日志和产物独立，不覆盖旧实验。
 
+对于工具调用与 response_format 无法同时使用的 API，ModelConfig 通过 structured_agent_output=false 选择提示词约束 Agent 最终 JSON 输出；最终答案仍由原有 Pydantic schema 校验。此选项只影响工具 Agent，单次结构化调用与默认模型配置保持现有行为。
+
 ## 运行顺序与并发
 
 优先完成 DeepSeek V4.1 Flash 和 GPT-5 Nano 的三个环境、六种方法及公共评测，再推进其余两个生成模型。两条模型工作线并行；每条工作线串行运行环境和批次，批内生成与评测并发初始均为 12。每个运行最多两个逻辑容器实例，实例在只读阶段共享，NUC 约 30 GiB 内存保留宿主余量。按实测资源与接口响应调整并发，调整必须记录在运行配置。
