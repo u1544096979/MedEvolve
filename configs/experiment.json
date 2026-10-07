@@ -177,5 +177,7 @@
     ]
   },
   "random_seed": 42,
-  "output_dir": "outputs/<RUN_ID>"
+  "output_dir": "outputs/<RUN_ID>",
+  "generation_concurrency": 6,
+  "evaluation_concurrency": 6
 }

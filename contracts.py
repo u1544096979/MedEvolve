@@ -64,6 +64,7 @@ class GeneratedQuestion(BaseModel):
     reference_answer: str
     evidence: list[Evidence]
     decision_point: str | None = None
+    execution_requirement: Literal["read_only"] | None = None
 
 
 class TaskBatch(BaseModel):
@@ -104,6 +105,7 @@ class RunResult(BaseModel):
 class Verification(BaseModel):
     valid: bool
     reason: str
+    read_only_task: bool | None = None
 
 
 class DimensionJudgment(BaseModel):
@@ -218,3 +220,5 @@ class ExperimentConfig(BaseModel):
     output_dir: str
     compare_initial_strategy: bool = False
     guidance_path: str | None = None
+    generation_concurrency: int | None = Field(default=None, gt=0, strict=True)
+    evaluation_concurrency: int | None = Field(default=None, gt=0, strict=True)

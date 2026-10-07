@@ -27,17 +27,26 @@ METHOD_MODULES = {
     "envexplore": "methods.envexplore",
 }
 
-# 生成与公共评测几乎全部时间花在模型调用和实例等待上，患者之间并行不改变单患者口径。
-# 容器数量由 EvaluationEnvironments 的预算限制，这里只控制同时在飞的患者数。
+# 生成与公共评测并发默认值；两类并发可通过配置分别调整。
 DEFAULT_RUN_CONCURRENCY = 6
 
 
-def run_concurrency() -> int:
+def resolve_concurrency(configured: int | None, env_value: str | None = None) -> int:
+    """Resolve explicit config, a valid environment override, then the default."""
+    if configured is not None:
+        return configured
+    if env_value is None:
+        env_value = os.environ.get("MEDEVOLVE_RUN_CONCURRENCY", "")
     try:
-        value = int(os.environ.get("MEDEVOLVE_RUN_CONCURRENCY", ""))
+        value = int(env_value)
     except ValueError:
         return DEFAULT_RUN_CONCURRENCY
     return value if value > 0 else DEFAULT_RUN_CONCURRENCY
+
+
+def run_concurrency() -> int:
+    """Backward-compatible environment-driven concurrency helper."""
+    return resolve_concurrency(None)
 
 
 def resolve_generator(method):
@@ -136,7 +145,11 @@ async def run_experiment(config: ExperimentConfig) -> None:
         raise ValueError(f"guidance_path does not exist: {config.guidance_path}")
     if (root / "config.json").exists():
         raise ValueError("Run directory already contains a run; choose a new output_dir")
-    _save(root / "config.json", config.model_dump(mode="json"))
+    saved_config = config.model_copy(update={
+        "generation_concurrency": resolve_concurrency(config.generation_concurrency),
+        "evaluation_concurrency": resolve_concurrency(config.evaluation_concurrency),
+    })
+    _save(root / "config.json", saved_config.model_dump(mode="json"))
     manifest = {"status": "running", "errors": []}
     runs = []
     artifact_lock = asyncio.Lock()
