@@ -1,0 +1,173 @@
+{
+  "run_id": "full-fhir-agentbench-medevolve-evolution",
+  "method": "medevolve",
+  "environment": {
+    "name": "FHIR-AgentBench",
+    "manager_url": "http://127.0.0.1:18084",
+    "seed_data": "/Users/guagua/data/mimic-iv-fhir-demo/2.1.0/seed"
+  },
+  "runtime": {
+    "models": {
+      "data_explorer": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      },
+      "environment_explorer": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      },
+      "generator": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      },
+      "feedback": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      },
+      "updater": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      }
+    },
+    "budgets": {
+      "data_explorer": {
+        "max_model_turns": 60,
+        "max_tool_calls": 400
+      },
+      "environment_explorer": {
+        "max_model_turns": 60,
+        "max_tool_calls": 400
+      },
+      "generator": {
+        "max_model_turns": 800,
+        "max_tool_calls": 800
+      }
+    }
+  },
+  "evaluation": {
+    "runtime": {
+      "models": {
+        "verifier": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "quality": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "difficulty": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "solver": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "completion": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        }
+      },
+      "budgets": {
+        "verifier": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "quality": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "difficulty": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "solver": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "completion": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        }
+      }
+    }
+  },
+  "evolution_patients": [
+    "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0",
+    "e232ee4d-3042-51c6-b730-a79eb8579d42"
+  ],
+  "evaluation_patients": [],
+  "round_patients": [
+    [
+      "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0",
+      "e232ee4d-3042-51c6-b730-a79eb8579d42"
+    ],
+    [
+      "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0",
+      "e232ee4d-3042-51c6-b730-a79eb8579d42"
+    ]
+  ],
+  "initial_strategy": {
+    "generation_guidance": "依据患者纵向轨迹生成具有明确临床价值、依赖多条记录整合的医疗任务。每题明确作答要求，使用轨迹里实际存在的来源 ID 提供证据，给出有依据的参考答案。两题关注不同临床问题。难度来自跨就诊、跨时间的信息整合及合理临床判断，不来自歧义、缺失信息或环境故障。解题只使用两个原生检索工具，环境只读，不要求开立或修改资源；决策点为 null。",
+    "allocation": [
+      {
+        "task_type": "诊断与解释",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "检查与风险分层",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗规划",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "药物处方",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗重规划",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      }
+    ]
+  },
+  "random_seed": 42,
+  "output_dir": "outputs/full-comparison/fhir-agentbench/medevolve/evolution",
+  "compare_initial_strategy": false
+}

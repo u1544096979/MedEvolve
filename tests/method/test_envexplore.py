@@ -26,7 +26,7 @@ def ctx():
 
 def candidate(source="Condition/c1", evidence=True):
     return dict(instruction="解释现有诊断", task_type="诊断与解释",
-        reference_answer="依据记录解释", decision_point=None,
+        reference_answer="依据记录解释", decision_point=None, execution_requirement="read_only",
         evidence=[dict(source_id=source, statement="诊断记录")] if evidence else [])
 
 def completed(questions):

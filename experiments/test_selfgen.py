@@ -18,7 +18,8 @@ def test_selfgen_sampling_isolation_cost_and_release(tmp_path, monkeypatch, env)
         calls.append((trajectory, environment, directions))
         return RunResult(output={"questions": [dict(instruction="解释记录中的临床事实",
             task_type=directions[0].task_type, reference_answer="仅供公共核验的候选答案",
-            evidence=[dict(source_id="Observation/1", statement="患者记录事实")], decision_point=None)]},
+            evidence=[dict(source_id="Observation/1", statement="患者记录事实")], decision_point=None,
+            execution_requirement="read_only")]},
             trace=[], usage={"model_turns": 1, "tool_calls": 0, "input_tokens": 7,
             "output_tokens": 3, "total_tokens": 10}, status="completed")
     monkeypatch.setattr(runner, "resolve_generator", lambda method: generate)

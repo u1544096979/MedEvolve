@@ -19,7 +19,7 @@ def _fact_rules(main_generation: str) -> str:
 FACT_RULES = _fact_rules(MAIN_GENERATION)
 INPUT_RULES = """仅依据当前患者原始轨迹和两个指定方向；不自行采样题型。
 五类题型由 directions 选择，难度来自信息整合与临床判断。
-材料不足允许少出题，不能补造事实；遵守输入的 operation_semantics。
+材料不足允许少出题，不能补造事实；只生成可通过查询既有记录完成的任务。
 """
 DRAFT = INPUT_RULES + FACT_RULES + """
 返回 DirectedBatch：batch 是 TaskBatch，direction_indices 与 batch.questions 一一对应。

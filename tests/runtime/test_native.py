@@ -71,7 +71,8 @@ async def test_native_text_loop_and_finish_mapping(monkeypatch):
     assert result.usage["tool_calls"] == 2
     assert result.usage["input_tokens"] == 30
     assert result.usage["total_tokens"] == 45
-    assert result.trace[1]["response"]["usage"]["prompt_tokens_details"]["cached_tokens"] == 3
+    response = next(item["response"] for item in result.trace if item["type"] == "model_response")
+    assert response["usage"]["prompt_tokens_details"]["cached_tokens"] == 3
     assert [item["type"] for item in result.trace].count("tool_output") == 2
     model_requests = [item for item in result.trace if item["type"] == "model_request"]
     assert len(model_requests[0]["messages"]) == 2
@@ -270,3 +271,185 @@ async def test_invalid_finish_does_not_replace_prior_environment_failure(monkeyp
     assert result.trace[-1]["failure_category"] == "environment_error"
     assert result.usage["model_turns"] == 2
     assert result.usage["tool_calls"] == 1
+
+
+def parameter_error(action):
+    return {"kind": "GET", "request": {"action": action},
+            "reply": "HTTP 400: Unknown search parameter status. "
+                     "Correct the query parameters and retry.",
+            "failure_category": "tool_error", "status_code": 400}
+
+
+def service_unavailable(action):
+    return {"kind": "GET", "request": {"action": action},
+            "reply": "Error in sending the GET request: 503 Service Unavailable",
+            "failure_category": "environment_error"}
+
+
+def successful_get(action):
+    return {"kind": "GET", "request": {"action": action},
+            "reply": "query succeeded", "data": {"entry": []}}
+
+
+def finish(action):
+    return {"kind": "FINISH", "request": {"action": action},
+            "reply": "FINISH", "answers": ["result"]}
+
+
+@pytest.mark.asyncio
+async def test_parameter_error_recovered_before_finish(monkeypatch):
+    requests = install_transport(monkeypatch, [
+        {"role": "assistant", "content": "GET Condition?patient=p1&status=active"},
+        {"role": "assistant", "content": "GET Condition?patient=p1"},
+        {"role": "assistant", "content": 'FINISH(["result"])'},
+    ])
+    tools = native_tools()
+
+    async def execute(action):
+        if "status=active" in action:
+            return parameter_error(action)
+        if action.startswith("FINISH("):
+            return finish(action)
+        return successful_get(action)
+
+    monkeypatch.setattr(tools, "execute", execute)
+    result = await run_agent(instructions="Solve", input_text="patient", tools=tools,
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=3, max_tool_calls=2))
+    assert result.status == "completed"
+    outputs = [item["output"] for item in result.trace if item["type"] == "tool_output"]
+    assert outputs[0]["failure_category"] == "tool_error"
+    assert outputs[1]["data"] == {"entry": []}
+    assert result.usage["tool_calls"] == 2
+    assert not any(item["type"] == "run_error" for item in result.trace)
+    assert requests[1]["messages"][-1]["content"].startswith("HTTP 400: ")
+
+
+@pytest.mark.asyncio
+async def test_unrecovered_parameter_error_fails_run_with_tool_error(monkeypatch):
+    requests = install_transport(monkeypatch, [
+        {"role": "assistant", "content": "GET Condition?patient=p1&status=active"},
+        {"role": "assistant", "content": 'FINISH(["result"])'},
+    ])
+    tools = native_tools()
+
+    async def execute(action):
+        if action.startswith("FINISH("):
+            return finish(action)
+        return parameter_error(action)
+
+    monkeypatch.setattr(tools, "execute", execute)
+    result = await run_agent(instructions="Solve", input_text="patient", tools=tools,
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=2, max_tool_calls=1))
+    assert result.status == "failed"
+    assert result.output == {"answer": '["result"]'}
+    assert len(requests) == 2
+    assert requests[1]["messages"][-1]["content"].startswith("HTTP 400: ")
+    assert result.trace[-1]["type"] == "run_error"
+    assert result.trace[-1]["failure_category"] == "tool_error"
+    outputs = [item["output"] for item in result.trace if item["type"] == "tool_output"]
+    assert outputs[0]["failure_category"] == "tool_error"
+
+
+@pytest.mark.asyncio
+async def test_exploration_probes_parameter_limit_and_finishes_with_guidance(monkeypatch):
+    install_transport(monkeypatch, [
+        {"role": "assistant", "content": "GET Condition?patient=p1&status=active"},
+        {"role": "assistant", "content": 'FINISH(["status 参数不被服务接受，改用 category"])'},
+    ])
+    tools = native_tools()
+
+    async def execute(action):
+        if action.startswith("FINISH("):
+            return {"kind": "FINISH", "request": {"action": action},
+                    "reply": "FINISH", "answers": ["status 参数不被服务接受，改用 category"]}
+        return parameter_error(action)
+
+    monkeypatch.setattr(tools, "execute", execute)
+    result = await run_agent(instructions="Explore", input_text="patient", tools=tools,
+        output_type=EnvironmentExploration, model=MODEL,
+        budget=Budget(max_model_turns=2, max_tool_calls=1))
+    assert result.status == "completed", result.error
+    assert result.output == {"guidance": "status 参数不被服务接受，改用 category"}
+    outputs = [item["output"] for item in result.trace if item["type"] == "tool_output"]
+    assert outputs[0]["failure_category"] == "tool_error"
+    assert outputs[0]["status_code"] == 400
+    assert not any(item["type"] == "run_error" for item in result.trace)
+
+
+@pytest.mark.asyncio
+async def test_parameter_error_then_budget_exhaustion_stays_budget_exhausted(monkeypatch):
+    install_transport(monkeypatch, [
+        {"role": "assistant", "content": "GET Condition?patient=p1&status=active"},
+        {"role": "assistant", "content": "GET Condition?patient=p1"},
+    ])
+    tools = native_tools()
+
+    async def execute(action):
+        return parameter_error(action)
+
+    monkeypatch.setattr(tools, "execute", execute)
+    result = await run_agent(instructions="Solve", input_text="patient", tools=tools,
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=2, max_tool_calls=1))
+    assert result.status == "budget_exhausted"
+    assert result.usage["tool_calls"] == 1
+    assert result.trace[-1]["type"] == "tool_budget"
+
+
+@pytest.mark.asyncio
+async def test_post_does_not_clear_pending_parameter_error(monkeypatch):
+    install_transport(monkeypatch, [
+        {"role": "assistant", "content": "GET Condition?patient=p1&status=active"},
+        {"role": "assistant", "content": "POST MedicationRequest\n{}"},
+        {"role": "assistant", "content": 'FINISH(["result"])'},
+    ])
+    tools = native_tools()
+
+    async def execute(action):
+        if action.startswith("FINISH("):
+            return finish(action)
+        if action.startswith("POST"):
+            return {"kind": "POST", "request": {"action": action},
+                    "reply": "POST request accepted and executed successfully."}
+        return parameter_error(action)
+
+    monkeypatch.setattr(tools, "execute", execute)
+    result = await run_agent(instructions="Solve", input_text="patient", tools=tools,
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=3, max_tool_calls=2))
+    assert result.status == "failed"
+    assert result.trace[-1]["type"] == "run_error"
+    assert result.trace[-1]["failure_category"] == "tool_error"
+    assert result.usage["tool_calls"] == 2
+
+
+@pytest.mark.asyncio
+async def test_environment_failure_survives_later_successful_get(monkeypatch):
+    install_transport(monkeypatch, [
+        {"role": "assistant", "content": "GET Observation?patient=p1"},
+        {"role": "assistant", "content": "GET Observation?patient=p1"},
+        {"role": "assistant", "content": 'FINISH(["result"])'},
+    ])
+    tools = native_tools()
+    calls = []
+
+    async def execute(action):
+        calls.append(action)
+        if action.startswith("FINISH("):
+            return finish(action)
+        if len(calls) == 1:
+            return service_unavailable(action)
+        return successful_get(action)
+
+    monkeypatch.setattr(tools, "execute", execute)
+    result = await run_agent(instructions="Solve", input_text="patient", tools=tools,
+        output_type=SolverAnswer, model=MODEL,
+        budget=Budget(max_model_turns=3, max_tool_calls=2))
+    assert result.status == "failed"
+    assert result.output == {"answer": '["result"]'}
+    assert result.trace[-1]["type"] == "run_error"
+    assert result.trace[-1]["failure_category"] == "environment_error"
+    outputs = [item["output"] for item in result.trace if item["type"] == "tool_output"]
+    assert outputs[1]["data"] == {"entry": []}

@@ -2,7 +2,7 @@ import asyncio
 import json
 import random
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 import pytest
 from contracts import (
     EnvironmentInstance, EvaluationResult, Evidence, ExperimentConfig,
@@ -13,6 +13,7 @@ from experiments import runner
 @pytest.fixture
 def config(tmp_path):
     values = json.loads((Path(__file__).parents[1] / "configs/experiment.json").read_text())
+    values["environment"]["name"] = "PhysicianBench"
     values.update(method="envexplore", run_id="envexplore-test", evolution_patients=["train"],
         evaluation_patients=["p1", "p2"], round_patients=[], output_dir=str(tmp_path))
     values["runtime"]["models"] = {r: values["runtime"]["models"][r]
@@ -49,7 +50,7 @@ def wired(config, monkeypatch):
         return RunResult(output={"questions": [{"instruction": "解释原始诊断",
             "task_type": body["directions"][0]["task_type"], "reference_answer": "诊断解释",
             "evidence": [{"source_id": "Condition/c1", "statement": "记录事实"}],
-            "decision_point": None}]}, trace=[],
+            "decision_point": None, "execution_requirement": "read_only"}]}, trace=[],
             usage={"model_turns": 1, "tool_calls": 0, "input_tokens": 7, "output_tokens": 3},
             status="completed")
     call = AsyncMock(side_effect=generate)
@@ -63,7 +64,8 @@ def test_once_exploration_fixed_strategy_and_public_sampling(config, wired):
     prepared, release, exploration, forbidden, call, evaluate = wired
     before = config.initial_strategy.model_dump(mode="json")
     asyncio.run(runner.run_experiment(config))
-    exploration.assert_awaited_once_with(config.environment, ["train"], config.runtime)
+    exploration.assert_awaited_once_with(config.environment, ["train"], config.runtime,
+                                         environments=ANY)
     assert prepared == ["p1", "p2"] and call.await_count == evaluate.await_count == 2
     release.assert_awaited_once()
     for mock in forbidden: mock.assert_not_awaited()

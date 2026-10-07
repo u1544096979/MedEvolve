@@ -24,7 +24,7 @@ def test_workflow_pool_and_public_evaluation(tmp_path, monkeypatch, status, prod
                  Evidence(source_id='MedicationRequest/m1', statement='{}')])
     question = dict(instruction='解释血压', task_type='诊断与解释', reference_answer='需评估',
                     evidence=[dict(source_id='Observation/o1', statement='记录存在')],
-                    decision_point=None)
+                    decision_point=None, execution_requirement="read_only")
     async def generate(trajectory, environment, pool, runtime):
         assert len(pool) == 5 and len({d.task_type for d in pool}) == 5
         return RunResult(status=status,
@@ -33,7 +33,7 @@ def test_workflow_pool_and_public_evaluation(tmp_path, monkeypatch, status, prod
             trace=[{'type': 'selection', 'selected_directions': [0, 2]}],
             usage={'model_turns': 4, 'tool_calls': 0, 'input_tokens': 40,
                    'output_tokens': 20, 'total_tokens': 60})
-    async def evaluate(task, trajectory, environment, evaluation_config):
+    async def evaluate(task, trajectory, environment, evaluation_config, environments=None):
         assert task.patient_id == trajectory.patient_id == 'p'
         assert task.environment == trajectory.environment == environment.name
         assert task.source_method == 'workflow'

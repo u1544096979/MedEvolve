@@ -58,7 +58,10 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_rol
                 call = ('fhir_patient_search_demographics', {})
             output = {'guidance': '可查询患者信息'}
         elif role == 'verifier':
+            payload = json.loads(user)
             output = {'valid': True, 'reason': '原始数据支持'}
+            if 'task' in payload:
+                output['read_only_task'] = True
         elif role == 'solver':
             payload = json.loads(user)
             assert set(payload) == {'instruction', 'patient_id', 'decision_point'}
@@ -71,11 +74,15 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_rol
             generated_strategies.append((pid, payload['strategy']['generation_guidance']))
             output = {'questions': [dict(instruction='查询患者性别', task_type=d['task_type'],
                                         reference_answer='female', decision_point=None,
+                                        execution_requirement='read_only',
                                         evidence=[dict(source_id=f'Patient/{pid}', statement='gender=female')])
                                     for d in payload['directions']]}
         elif role == 'quality':
-            output = {'dimensions': {d: {'judgment': 'supported', 'reason': '原始数据支持'}
-                                     for d in ['clinical_value', 'correctness', 'longitudinal_integration', 'clarity']}}
+            output = {d: {'score': 4, 'reason': '原始数据支持'}
+                      for d in ['factual_accuracy', 'clinical_soundness',
+                                'evidence_sufficiency', 'task_clarity']}
+        elif role == 'difficulty':
+            output = {'reasoning_depth': 2, 'reason': '跨记录整合'}
         elif role == 'completion':
             payload = json.loads(user)
             completions.append(payload)
@@ -151,5 +158,6 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_rol
     assert model_calls['generator'] == 5
     assert model_calls['feedback'] == model_calls['updater'] == 2
     assert queries['trajectory:e1'] == queries['trajectory:e2'] == queries['trajectory:h1'] == 1
-    assert len(created) == 22 and not active
+    # 轨迹准备、环境探索、核验和解题共享同一个固定种子实例。
+    assert len(created) == 1 and not active
     assert len(completions) == 10

@@ -11,6 +11,7 @@ from agents.tool_context import ToolContext
 from contracts import EnvironmentInstance, Task
 from environments import get_tools, prepare_trajectory, read_evidence, read_state
 from environments.errors import PatientAccessError, UnsupportedDecisionPoint
+from environments.fhir import FHIRClient
 
 
 def bundle(resources, next_url=None):
@@ -68,9 +69,11 @@ def native_fhir(monkeypatch):
         requests.append(request)
         if override["response"]:
             response = override["response"]
-            return httpx.Response(
-                200, json=response(request) if callable(response) else response
-            )
+            if callable(response):
+                response = response(request)
+            if isinstance(response, httpx.Response):
+                return response
+            return httpx.Response(200, json=response)
         store = stores[request.url.host]
         path = request.url.path.removeprefix("/fhir/")
         if request.method == "POST":
@@ -172,12 +175,12 @@ async def test_malformed_native_arguments_return_error_then_allow_retry(native_f
 @pytest.mark.asyncio
 async def test_tool_result_limit_truncates_fhir_results(native_fhir):
     _, _, override = native_fhir
-    override["response"] = bundle(
-        [{"resourceType": "Observation", "id": f"obs-{n}",
-          "subject": {"reference": "Patient/a"}, "valueString": "x" * 200}
-         for n in range(80)]
-    )
-    suffix = "… [result truncated]"
+    records = [
+        {"resourceType": "Observation", "id": f"obs-{n}",
+         "subject": {"reference": "Patient/a"}, "valueString": "x" * 200}
+        for n in range(80)
+    ]
+    override["response"] = bundle(records)
 
     async def raw(limit=None):
         tools = (await get_tools(instance(), ["a"]) if limit is None else
@@ -189,12 +192,64 @@ async def test_tool_result_limit_truncates_fhir_results(native_fhir):
         )
         return await tool.on_invoke_tool(context, arguments)
 
-    default = await raw()
-    capped = await raw(500)
-    whole = await raw(200000)
-    assert default.endswith(suffix) and len(default) == 10000 + len(suffix)
-    assert capped.endswith(suffix) and len(capped) == 500 + len(suffix)
-    assert not whole.endswith(suffix) and json.loads(whole)["entries"][0]["id"] == "obs-0"
+    for limit, delivered in ((10000, await raw()), (500, await raw(500))):
+        result = json.loads(delivered)
+        returned = result["entries"]
+        assert len(delivered) <= limit
+        assert result["truncation"]["truncated"] is True
+        assert result["truncation"]["total_records"] == 80
+        assert result["truncation"]["returned_records"] == len(returned)
+        assert result["truncation"]["message"]
+        # 返回记录必须与原始记录逐字段一致，且不完整交付。
+        assert returned == records[:len(returned)]
+        assert len(returned) < 80
+    whole_raw = await raw(200000)
+    whole = json.loads(whole_raw)
+    assert len(whole_raw) > 10000
+    assert "truncation" not in whole
+    assert whole["entries"] == records
+
+
+@pytest.mark.asyncio
+async def test_tool_result_limit_below_minimum_is_rejected_before_http(native_fhir):
+    with pytest.raises(ValueError):
+        await get_tools(instance(), ["a"], tool_result_limit=1)
+    assert not native_fhir[1]
+
+
+@pytest.mark.asyncio
+async def test_oversized_tool_error_returns_valid_limited_json(native_fhir):
+    native_fhir[2]["response"] = lambda request: httpx.Response(
+        400, json={"resourceType": "OperationOutcome"}
+    )
+    tools = await get_tools(instance(), ["a"], tool_result_limit=256)
+    tool = next(t for t in tools if t.name == "fhir_observation_search_labs")
+    arguments = json.dumps({"patient": "a", "code": "x" * 600})
+    context = ToolContext(
+        context=None, tool_name=tool.name, tool_call_id="error-limit",
+        tool_arguments=arguments,
+    )
+    raw = await tool.on_invoke_tool(context, arguments)
+    result = json.loads(raw)
+    assert len(raw) <= 256
+    assert "error" in result
+    assert result["truncation"]["truncated"] is True
+    assert "succeeded" not in raw
+    assert "exceeds the limit" in raw
+    assert "developer.mozilla.org" not in raw
+
+
+@pytest.mark.asyncio
+async def test_oversized_rejected_write_reports_error_not_success(native_fhir):
+    tools = await get_tools(instance(), ["a"], tool_result_limit=256)
+    result = await invoke(
+        tools, "fhir_appointment_create",
+        patient_reference="Patient/a", practitioner_reference="Practitioner/x",
+        description="Cardiology consult",
+    )
+    assert "succeeded" not in json.dumps(result)
+    assert result["error"] == "Tool call failed; error message exceeds the limit."
+    assert all(r.method != "POST" for r in native_fhir[1])
 
 
 @pytest.mark.asyncio
@@ -237,6 +292,19 @@ async def test_native_reads_writes_state_and_instance_isolation(native_fhir):
         "resourceType": "Patient",
         "id": "b",
     }
+
+
+@pytest.mark.asyncio
+async def test_public_read_only_functions_exclude_writes_and_client_blocks_post(native_fhir):
+    tools = await get_tools(instance(), ["a"], read_only=True)
+    assert {tool.name for tool in tools}.isdisjoint({
+        "fhir_communication_create_message", "fhir_service_request_create",
+        "fhir_medication_request_create", "fhir_appointment_create",
+    })
+    client = FHIRClient("http://instance-one/fhir/", ["a"], allow_database_write=False)
+    with pytest.raises(PatientAccessError, match="read-only"):
+        await client._request("POST", "MedicationRequest", json={})
+    assert not native_fhir[1]
 
 
 @pytest.mark.asyncio

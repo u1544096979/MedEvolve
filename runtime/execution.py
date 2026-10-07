@@ -10,11 +10,15 @@ from agents import (
     RunConfig, RunHooks, Runner, Tool,
 )
 from agents.exceptions import AgentsException, MaxTurnsExceeded
+from agents.models.chatcmpl_converter import Converter
+from agents.run_config import ModelInputData
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from pydantic_core import to_jsonable_python
 
 from contracts import Budget, ModelConfig, RunResult
+from .context import (budget_entry, count_tokens, dumps, fit_history, input_limit,
+                      output_limit, prepare_input)
 
 
 _OPENCODE_SESSION = str(uuid4())
@@ -32,6 +36,91 @@ class _OpenCodeOutputSchema(AgentOutputSchema):
 
 class _ToolBudgetExceeded(AgentsException):
     pass
+
+
+class _RepeatedToolCall(AgentsException):
+    """同一工具与参数重复调用多次，说明 Agent 不再推进，需要收尾作答。"""
+
+
+# 收尾调用可携带的工具结果上限（字符）：预算用尽后只靠已有结果作答。
+FINAL_ANSWER_CHARS = 120_000
+TOOL_RESULT_SNIPPET_CHARS = 4000
+# 同一工具与参数的重复次数上限；超过即停止循环并进入收尾作答。
+REPEATED_TOOL_CALL_LIMIT = 3
+
+
+def _is_context_overflow(exc: BaseException) -> bool:
+    text = str(exc)
+    return "context_length_exceeded" in text or "maximum context length" in text
+
+
+async def _final_answer(*, client: AsyncOpenAI, model: ModelConfig, instructions: str,
+                        input_text: str, trace: list[dict],
+                        output_type: type[BaseModel]) -> RunResult:
+    """轮次或工具预算用尽后的收尾调用：不再提供工具，只要求结构化答案。"""
+    ending = (
+        "轮次或工具调用预算已用尽，不能再调用任何工具。\n"
+        "只依据任务材料与下列已获得的工具结果，直接输出最终结构化答案；\n"
+        "信息不足时按已有结果作答并说明限制，不要声称未验证的能力或未执行的操作。\n\n"
+        "已获得的工具结果（可能被截断）：\n"
+    )
+    note = ("\nReturn only a JSON object matching this schema:\n"
+            + json.dumps(output_type.model_json_schema(), ensure_ascii=False))
+    input_text, entry = prepare_input(input_text, model,
+        instructions=instructions + note + ending, schema={})
+    base = count_tokens(instructions + note + input_text + ending, model)
+    digest = _tool_digest(trace, model=model, token_budget=input_limit(model) - base - 64)
+    payload = f"{input_text}\n\n{ending}{digest or '（没有完成的工具结果）'}"
+    entry["input_tokens_estimate"] = count_tokens(instructions + note + payload, model)
+    messages = [{"role": model.instructions_role, "content": instructions + note},
+                {"role": "user", "content": payload}]
+    usage = {"model_turns": 1, "tool_calls": 0}
+    trace_items = [entry, {"type": "model_request", "stage": "final_answer", "messages": messages}]
+    response = await client.chat.completions.create(
+        model=model.model, messages=messages,
+        response_format={"type": "json_object"},
+        max_tokens=output_limit(model),
+    )
+    trace_items.append({"type": "model_response", "stage": "final_answer",
+                        "response": response.model_dump(mode="json")})
+    if response.usage is not None:
+        usage.update(response.usage.model_dump(mode="json"))
+    output = output_type.model_validate_json(
+        response.choices[0].message.content or ""
+    ).model_dump(mode="json")
+    return RunResult(output=output, trace=trace_items, usage=usage, status="completed")
+
+
+def _tool_digest(trace: list[dict], *, model: ModelConfig | None = None,
+                 token_budget: int | None = None) -> str:
+    """按时间倒序取工具结果，超出上限即停，最后按时间顺序拼接。"""
+    outputs = {item.get("call_id"): item.get("output") for item in trace
+               if item.get("type") == "tool_output"}
+    calls = [(item.get("name"), item.get("arguments"), item.get("call_id"))
+             for item in trace if item.get("type") == "tool_start"]
+    chunks, used = [], 0
+    for name, arguments, call_id in reversed(calls):
+        text = str(outputs.get(call_id, ""))
+        if len(text) > TOOL_RESULT_SNIPPET_CHARS:
+            text = text[:TOOL_RESULT_SNIPPET_CHARS] + "… [截断]"
+        chunk = f"{name}({arguments}) -> {text}"
+        if used + len(chunk) > FINAL_ANSWER_CHARS:
+            break
+        if model is not None and count_tokens("\n".join([*chunks, chunk]), model) > token_budget:
+            break
+        chunks.append(chunk)
+        used += len(chunk)
+    return "\n".join(reversed(chunks))
+
+
+def _merge_usage(loop: dict, final: dict) -> dict:
+    merged = dict(loop)
+    for field in ("model_turns", "tool_calls", "requests", "input_tokens", "output_tokens",
+                  "total_tokens", "prompt_tokens", "completion_tokens"):
+        values = [value for value in (loop.get(field), final.get(field)) if value is not None]
+        if values:
+            merged[field] = sum(values)
+    return merged
 
 
 def _client(model: ModelConfig) -> AsyncOpenAI:
@@ -66,6 +155,9 @@ async def call_llm(*, instructions: str, input_text: str,
     trace = []
     usage = {"model_turns": 0, "tool_calls": 0}
     try:
+        input_text, entry = prepare_input(input_text, model, instructions=instructions,
+                                          schema=output_type.model_json_schema())
+        trace.append(entry)
         async with _client(model) as client:
             messages = [
                 {"role": model.instructions_role, "content": instructions +
@@ -78,7 +170,7 @@ async def call_llm(*, instructions: str, input_text: str,
             response = await client.chat.completions.create(
                 model=model.model, messages=messages,
                 response_format={"type": "json_object"},
-                **({"max_tokens": model.max_output_tokens} if model.max_output_tokens is not None else {}),
+                max_tokens=output_limit(model),
             )
             trace.append({"type": "model_response", "response": response.model_dump(mode="json")})
             if response.usage is not None:
@@ -99,6 +191,7 @@ class _Records(RunHooks):
         self.trace = []
         self.model_turns = 0
         self.tool_calls = 0
+        self.repeats: dict[tuple, int] = {}
         self.tokens = {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
     async def on_llm_start(self, context, agent, system_prompt, input_items):
@@ -119,6 +212,15 @@ class _Records(RunHooks):
             self.trace.append({"type": "tool_budget", "name": tool.name,
                                "call_id": context.tool_call_id})
             raise _ToolBudgetExceeded("Function tool call budget exhausted")
+        key = (tool.name, str(context.tool_arguments))
+        self.repeats[key] = self.repeats.get(key, 0) + 1
+        if self.repeats[key] > REPEATED_TOOL_CALL_LIMIT:
+            self.trace.append({"type": "tool_repeat", "name": tool.name,
+                               "call_id": context.tool_call_id,
+                               "repeats": self.repeats[key]})
+            raise _RepeatedToolCall(
+                f"Tool {tool.name} called {self.repeats[key]} times with identical arguments"
+            )
         self.tool_calls += 1
         self.trace.append({"type": "tool_start", "name": tool.name,
                            "call_id": context.tool_call_id, "arguments": context.tool_arguments})
@@ -155,6 +257,31 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
             raise ValueError("Chat Completions runtime supports only SDK FunctionTool tools")
         if budget.max_model_turns == 0:
             raise MaxTurnsExceeded("Model turn budget exhausted")
+        tool_schemas = [Converter.tool_to_openai(tool) for tool in tools]
+        input_text, entry = prepare_input(input_text, model, instructions=instructions,
+            schema=output_type.model_json_schema(), tools=tool_schemas)
+        records.trace.append(entry)
+
+        def filter_input(data):
+            model_data = data.model_data
+            fixed = count_tokens((model_data.instructions or "") + dumps(tool_schemas)
+                                 + dumps(output_type.model_json_schema()), model)
+            seen_output = False
+
+            def group_start(item):
+                nonlocal seen_output
+                output = item.get("type") == "function_call_output"
+                start = seen_output and not output
+                seen_output = output
+                return start
+
+            items, dropped = fit_history(model_data.input, model, fixed_tokens=fixed,
+                prefix_count=2 if model.instructions_role == "user" else 1,
+                group_start=group_start)
+            records.trace.append(budget_entry(model, fixed + count_tokens(dumps(items), model),
+                                               history_items_dropped=dropped))
+            return ModelInputData(input=items, instructions=model_data.instructions)
+
         async with _client(model) as client:
             agent_instructions = instructions + (
                 "\n完成工具查询后，最终输出只返回符合以下 schema 的 JSON 对象，不加 Markdown 或正文。"
@@ -172,21 +299,60 @@ async def run_agent(*, instructions: str, input_text: str, tools: list[Tool],
                 name="MedEvolve", instructions=agent_instructions, tools=tools,
                 # Shared contracts include open dictionaries, which strict schemas reject.
                 output_type=(
-                    _OpenCodeOutputSchema if urlparse(model.base_url or "").hostname == "opencode.ai"
-                    else AgentOutputSchema
-                )(output_type, strict_json_schema=False),
+                    (
+                        _OpenCodeOutputSchema
+                        if urlparse(model.base_url or "").hostname == "opencode.ai"
+                        else AgentOutputSchema
+                    )(output_type, strict_json_schema=False)
+                    if model.structured_agent_output else None
+                ),
                 model=OpenAIChatCompletionsModel(model=model.model, openai_client=client),
                 model_settings=ModelSettings(
+                    max_tokens=output_limit(model),
                     parallel_tool_calls=model.parallel_tool_calls,
                     extra_body={"response_format": {"type": "json_object"}}
-                    if urlparse(model.base_url or "").hostname == "opencode.ai" else None,
+                    if model.structured_agent_output
+                    and urlparse(model.base_url or "").hostname == "opencode.ai" else None,
                 ),
             )
-            result = await Runner.run(
-                agent, agent_input, hooks=records, max_turns=budget.max_model_turns,
-                run_config=RunConfig(tracing_disabled=True),
-            )
-            output = output_type.model_validate(result.final_output).model_dump(mode="json")
+            # 留一轮做收尾：预算用尽时不再调工具，直接产出结构化答案。
+            reserved = budget.max_model_turns >= 2
+            loop_turns = budget.max_model_turns - 1 if reserved else budget.max_model_turns
+            try:
+                result = await Runner.run(
+                    agent, agent_input, hooks=records, max_turns=loop_turns,
+                    run_config=RunConfig(tracing_disabled=True, call_model_input_filter=filter_input),
+                )
+                output = (
+                    output_type.model_validate_json(result.final_output)
+                    if isinstance(result.final_output, str)
+                    else output_type.model_validate(result.final_output)
+                ).model_dump(mode="json")
+            except (MaxTurnsExceeded, _ToolBudgetExceeded, _RepeatedToolCall) as exc:
+                if not reserved:
+                    raise
+                final = await _final_answer(
+                    client=client, model=model, instructions=instructions,
+                    input_text=input_text, trace=records.trace, output_type=output_type,
+                )
+                return _result(
+                    model=model, output=final.output,
+                    trace=[*records.trace, *final.trace],
+                    usage=_merge_usage(records.usage(), final.usage), status="completed",
+                )
+            except Exception as exc:
+                # 上下文被工具结果填满时循环已无法继续，用收尾调用产出答案。
+                if not _is_context_overflow(exc):
+                    raise
+                final = await _final_answer(
+                    client=client, model=model, instructions=instructions,
+                    input_text=input_text, trace=records.trace, output_type=output_type,
+                )
+                return _result(
+                    model=model, output=final.output,
+                    trace=[*records.trace, *final.trace],
+                    usage=_merge_usage(records.usage(), final.usage), status="completed",
+                )
         return _result(model=model, output=output, trace=records.trace,
                        usage=records.usage(), status="completed")
     except Exception as exc:

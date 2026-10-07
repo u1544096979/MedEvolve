@@ -1,18 +1,23 @@
 """Patient boundaries, experiment rounds, and durable artifacts."""
 
+import asyncio
 import importlib
 import json
 import math
+import os
 import random
 from pathlib import Path
+from typing import get_args
 
 from contracts import (
     DataExploration, EnvironmentExploration, EvaluationResult, ExperimentConfig,
     ExplorationGuidance, Feedback, RunResult, Strategy, Task,
-    TaskBatch,
+    TaskBatch, TaskType,
 )
 
+from runtime.context import fit_patient, input_limit
 from methods.common import normalize_usage, output_constraints, validate_task_batch
+from .scheduling import run_generation_evaluation
 
 METHOD_MODULES = {
     "medevolve": "methods.medevolve",
@@ -22,6 +27,27 @@ METHOD_MODULES = {
     "selfgen": "methods.selfgen",
     "envexplore": "methods.envexplore",
 }
+
+# 生成与公共评测并发默认值；两类并发可通过配置分别调整。
+DEFAULT_RUN_CONCURRENCY = 6
+
+
+def resolve_concurrency(configured: int | None, env_value: str | None = None) -> int:
+    """Resolve explicit config, a valid environment override, then the default."""
+    if configured is not None:
+        return configured
+    if env_value is None:
+        env_value = os.environ.get("MEDEVOLVE_RUN_CONCURRENCY", "")
+    try:
+        value = int(env_value)
+    except ValueError:
+        return DEFAULT_RUN_CONCURRENCY
+    return value if value > 0 else DEFAULT_RUN_CONCURRENCY
+
+
+def run_concurrency() -> int:
+    """Backward-compatible environment-driven concurrency helper."""
+    return resolve_concurrency(None)
 
 
 def resolve_generator(method):
@@ -66,8 +92,8 @@ async def explore_data(*args):
     return await importlib.import_module("methods.medevolve").explore_data(*args)
 
 
-async def explore_environment(*args):
-    return await importlib.import_module("methods.medevolve").explore_environment(*args)
+async def explore_environment(*args, **kwargs):
+    return await importlib.import_module("methods.medevolve").explore_environment(*args, **kwargs)
 
 
 async def generate_tasks(*args):
@@ -87,9 +113,14 @@ async def evaluate_task(*args):
 
 
 async def run_experiment(config: ExperimentConfig) -> None:
+    from evaluation.session import EvaluationEnvironments
+
     generator = resolve_generator(config.method)
     if config.compare_initial_strategy and config.method != "medevolve":
         raise ValueError("Initial strategy comparison requires medevolve")
+    if config.method == "taskcraft":
+        # 实验种子只在方法内部以可选关键字传递，不进入 RuntimeConfig。
+        taskcraft = importlib.import_module("methods.taskcraft")
     if "generator" not in config.runtime.models or "generator" not in config.runtime.budgets:
         raise ValueError("runtime requires generator model and cumulative generator budget")
     if config.method == "workflow":
@@ -111,37 +142,52 @@ async def run_experiment(config: ExperimentConfig) -> None:
 
     root = Path(config.output_dir)
     root.mkdir(parents=True, exist_ok=True)
+    if config.guidance_path and not Path(config.guidance_path).exists():
+        raise ValueError(f"guidance_path does not exist: {config.guidance_path}")
     if (root / "config.json").exists():
         raise ValueError("Run directory already contains a run; choose a new output_dir")
-    _save(root / "config.json", config.model_dump(mode="json"))
+    saved_config = config.model_copy(update={
+        "generation_concurrency": resolve_concurrency(config.generation_concurrency),
+        "evaluation_concurrency": resolve_concurrency(config.evaluation_concurrency),
+    })
+    _save(root / "config.json", saved_config.model_dump(mode="json"))
     manifest = {"status": "running", "errors": []}
     runs = []
+    artifact_lock = asyncio.Lock()
+    generation_concurrency = saved_config.generation_concurrency
+    evaluation_concurrency = saved_config.evaluation_concurrency
+    environments = EvaluationEnvironments(create=create_environment, release=release_environment)
+    if config.method == "taskcraft":
+        generator = taskcraft.bind_generator(config.random_seed, environments=environments)
 
     def checkpoint():
         _save(root / "manifest.json", manifest)
         _save(root / "runs.json", runs)
 
-    def error(stage, exc):
-        manifest["errors"].append({"stage": stage, "error": str(exc)})
-        checkpoint()
+    async def error(stage, exc):
+        async with artifact_lock:
+            manifest["errors"].append({"stage": stage, "error": str(exc)})
+            checkpoint()
 
-    async def invoke(stage, function, *args):
+    async def invoke(stage, function, *args, **kwargs):
         try:
-            result = await function(*args)
+            result = await function(*args, **kwargs)
         except Exception as exc:
             result = RunResult(trace=[], usage={}, status="failed", error=str(exc))
         result = result.model_copy(update={"usage": normalize_usage(result.usage)})
-        runs.append({"stage": stage, "result": result.model_dump(mode="json")})
-        checkpoint()
+        async with artifact_lock:
+            runs.append({"stage": stage, "result": result.model_dump(mode="json")})
+            checkpoint()
         return result
 
-    def parse(stage, result, schema):
+    async def parse(stage, result, schema, *, allow_budget_exhausted=False):
         try:
-            if result.status != "completed" or result.output is None:
+            allowed = {"completed", "budget_exhausted"} if allow_budget_exhausted else {"completed"}
+            if result.status not in allowed or result.output is None:
                 raise ValueError(result.error or result.status)
             return schema.model_validate(result.output)
         except Exception as exc:
-            error(stage, exc)
+            await error(stage, exc)
             return None
 
     trajectories = {}
@@ -149,8 +195,7 @@ async def run_experiment(config: ExperimentConfig) -> None:
     rng = random.Random(config.random_seed)
     checkpoint()
     try:
-        instance = await create_environment(config.environment)
-        try:
+        async with environments.instance(config.environment, phase="prepare") as instance:
             for group, patients in (("evolution", config.evolution_patients if config.method == "medevolve" else []),
                                     ("evaluation", config.evaluation_patients)):
                 for index, patient in enumerate(patients):
@@ -160,21 +205,48 @@ async def run_experiment(config: ExperimentConfig) -> None:
                     trajectories[patient] = trajectory
                     _save(root / "trajectories" / group / f"{index:04d}.json",
                           trajectory.model_dump(mode="json"))
-        finally:
-            await release_environment(config.environment, instance)
+
+        # 生成输入受模型上下文限制，超预算患者按记录优先级裁剪；评测仍用原始轨迹。
+        # 数据探索会把轨迹作为工具结果读入，同一患者可能被读多次，因此用更小的预算。
+        generator_model = config.runtime.models["generator"]
+        generation, exploration, generation_errors = {}, {}, {}
+        for patient, trajectory in trajectories.items():
+            try:
+                fitted = fit_patient(trajectory, generator_model)
+            except ValueError as exc:
+                generation_errors[patient] = str(exc)
+                fitted = trajectory
+            if fitted is not trajectory:
+                _save(root / "fitted_trajectories" / f"{patient}.json",
+                      fitted.model_dump(mode="json"))
+            generation[patient] = fitted
+            if config.method == "medevolve":
+                explorer_model = config.runtime.models.get("data_explorer", generator_model)
+                try:
+                    exploration[patient] = fit_patient(trajectory, explorer_model,
+                                                       input_limit(explorer_model) // 2)
+                except ValueError:
+                    # 摘要工具仍可读取原始缓存；原始病历不被破坏。
+                    exploration[patient] = trajectory
 
         guidance = None
-        if config.method == "medevolve":
+        if config.guidance_path:
+            guidance = ExplorationGuidance.model_validate_json(
+                Path(config.guidance_path).read_text(encoding="utf-8")
+            )
+            _save(root / "guidance.json", guidance.model_dump(mode="json"))
+        if config.method == "medevolve" and guidance is None:
             exploration_patients = random.Random(config.random_seed).sample(
                 config.evolution_patients, math.ceil(len(config.evolution_patients) * 0.5)
             )
             _save(root / "data_exploration_patients.json", exploration_patients)
             data_run = await invoke("explore_data", explore_data,
-                                    [trajectories[p] for p in exploration_patients], config.runtime)
-            data = parse("explore_data", data_run, DataExploration)
+                                    [exploration[p] for p in exploration_patients], config.runtime)
+            data = await parse("explore_data", data_run, DataExploration)
             environment_run = await invoke("explore_environment", explore_environment,
-                                           config.environment, config.evolution_patients, config.runtime)
-            environment = parse("explore_environment", environment_run, EnvironmentExploration)
+                                           config.environment, config.evolution_patients, config.runtime,
+                                           environments=environments)
+            environment = await parse("explore_environment", environment_run, EnvironmentExploration)
             if data is None or environment is None:
                 raise RuntimeError("Initial exploration did not produce both guidance outputs")
             guidance = ExplorationGuidance(data_guidance=data.guidance,
@@ -185,8 +257,9 @@ async def run_experiment(config: ExperimentConfig) -> None:
             environment_run = await invoke(
                 "explore_environment", explore_environment,
                 config.environment, config.evolution_patients, config.runtime,
+                environments=environments,
             )
-            environment_guidance = parse("explore_environment", environment_run, EnvironmentExploration)
+            environment_guidance = await parse("explore_environment", environment_run, EnvironmentExploration)
             if environment_guidance is None or not environment_guidance.guidance.strip():
                 raise RuntimeError("EnvExplore environment exploration did not produce valid guidance")
             _save(root / "environment_guidance.json", environment_guidance.model_dump(mode="json"))
@@ -203,29 +276,51 @@ async def run_experiment(config: ExperimentConfig) -> None:
             generator = bound_generator
 
         async def generate_and_evaluate(folder, patients, round_index, current):
-            tasks, evaluations, attempts = [], [], []
             if config.method == "medevolve":
                 _save(folder / "strategy.json", current.model_dump(mode="json"))
             is_test = folder.name in {"evaluation", "initial_evaluation"}
             sampling = random.Random(config.random_seed) if is_test else rng
             allocation = config.initial_strategy.allocation if is_test else current.allocation
+            free_selection = config.method == "singleshot"
+            # 方向抽样保持串行，患者并行不改变 random_seed 下的方向分配。
+            plans = []
             for patient_index, patient in enumerate(patients):
+                if free_selection:
+                    plans.append((patient_index, patient, None,
+                                  {"task_types": list(get_args(TaskType))}))
+                    continue
                 directions = (list(allocation) if config.method == "workflow" else
                               sampling.choices(allocation,
                                                weights=[d.weight for d in allocation], k=2))
+                plans.append((patient_index, patient, directions,
+                              {"directions": [d.model_dump(mode="json") for d in directions]}))
+
+            results = {}
+
+            async def generate_patient(plan):
+                patient_index, patient, directions, selection_record = plan
+                task_types = list(get_args(TaskType))
                 stage = f"{folder.name}/generate/{patient_index}"
+
                 async def generate_batch():
+                    if patient in generation_errors:
+                        return RunResult(trace=[], usage={"model_turns": 0, "tool_calls": 0},
+                                         status="failed", error=generation_errors[patient])
                     if config.runtime.budgets["generator"].max_model_turns == 0:
                         return RunResult(trace=[], usage={}, status="budget_exhausted",
                                          error="Generator model budget exhausted")
                     if config.method == "medevolve":
-                        result = await generator(trajectories[patient], guidance,
+                        result = await generator(generation[patient], guidance,
                                                  current, directions, config.runtime)
+                    elif free_selection:
+                        result = await generator(generation[patient], config.environment,
+                                                 task_types, config.runtime)
                     else:
-                        result = await generator(trajectories[patient], config.environment,
+                        result = await generator(generation[patient], config.environment,
                                                  directions, config.runtime)
-                    result = validate_task_batch(result, directions,
-                                                 candidate_pool=config.method == "workflow")
+                    result = (validate_task_batch(result, task_types=task_types) if free_selection
+                              else validate_task_batch(result, directions,
+                                                       candidate_pool=config.method == "workflow"))
                     budget = config.runtime.budgets["generator"]
                     if (result.usage["model_turns"] > budget.max_model_turns or
                             result.usage["tool_calls"] > budget.max_tool_calls):
@@ -235,38 +330,62 @@ async def run_experiment(config: ExperimentConfig) -> None:
                     return result
 
                 run = await invoke(stage, generate_batch)
-                batch = parse(stage, run, TaskBatch)
-                attempts.append({"patient_id": patient, "requested": 2,
-                                 "directions": [d.model_dump(mode="json") for d in directions],
-                                 "produced": len(batch.questions) if batch else 0,
-                                 "status": run.status, "error": run.error, "usage": run.usage})
-                _save(folder / "attempts.json", attempts)
-                for question_index, question in enumerate(batch.questions if batch else []):
-                    task = Task(**question.model_dump(),
-                                id=f"{config.run_id}:{folder.name}:{patient_index}:{question_index}",
-                                patient_id=patient, environment=config.environment.name,
-                                round_index=round_index, source_method=config.method)
-                    tasks.append(task)
-                    _save(folder / "tasks.json", [t.model_dump(mode="json") for t in tasks])
-                    try:
-                        evaluation = await evaluate_task(task, trajectories[patient],
-                                                         config.environment, config.evaluation)
-                        if evaluation.task_id != task.id:
-                            raise ValueError("Evaluation task ID mismatch")
-                    except Exception as exc:
-                        error(f"{folder.name}/evaluate/{task.id}", exc)
-                        evaluation = EvaluationResult(task_id=task.id, observed_state={},
-                                                      status="failed",
-                                                      runs=[])
-                    evaluations.append(evaluation)
-                    evaluation_runs = list(evaluation.runs)
-                    if evaluation.solver_run is not None and evaluation.solver_run not in evaluation_runs:
-                        evaluation_runs.append(evaluation.solver_run)
-                    runs.extend({"stage": f"{folder.name}/evaluate/{task.id}",
-                                 "result": r.model_copy(update={"usage": normalize_usage(r.usage)}).model_dump(mode="json")} for r in evaluation_runs)
-                    _save(folder / "evaluations.json", [e.model_dump(mode="json") for e in evaluations])
+                batch = await parse(stage, run, TaskBatch, allow_budget_exhausted=True)
+                attempt = {"patient_id": patient, "requested": 2,
+                           **selection_record,
+                           "produced": len(batch.questions) if batch else 0,
+                           "status": run.status, "error": run.error, "usage": run.usage}
+                batch_tasks = [
+                    Task(**question.model_dump(),
+                         id=f"{config.run_id}:{folder.name}:{patient_index}:{question_index}",
+                         patient_id=patient, environment=config.environment.name,
+                         round_index=round_index, source_method=config.method)
+                    for question_index, question in enumerate(batch.questions if batch else [])
+                ]
+                async with artifact_lock:
+                    results[patient_index] = {"attempt": attempt, "tasks": batch_tasks,
+                                              "evaluations": {}}
+                    _save(folder / "attempts.json", [results[i]["attempt"] for i in sorted(results)])
+                    _save(folder / "tasks.json", [t.model_dump(mode="json")
+                                                   for i in sorted(results) for t in results[i]["tasks"]])
                     checkpoint()
-                _save(folder / "attempts.json", attempts)
+                return batch_tasks
+
+            async def evaluate_one(plan, question_index, task):
+                patient_index, patient, _, _ = plan
+                try:
+                    evaluation = await evaluate_task(task, trajectories[patient],
+                                                     config.environment, config.evaluation,
+                                                     environments)
+                    if evaluation.task_id != task.id:
+                        raise ValueError("Evaluation task ID mismatch")
+                except Exception as exc:
+                    await error(f"{folder.name}/evaluate/{task.id}", exc)
+                    evaluation = EvaluationResult(task_id=task.id, observed_state={},
+                                                  status="failed", runs=[])
+                evaluation_runs = list(evaluation.runs)
+                if evaluation.solver_run is not None and evaluation.solver_run not in evaluation_runs:
+                    evaluation_runs.append(evaluation.solver_run)
+                async with artifact_lock:
+                    results[patient_index]["evaluations"][question_index] = evaluation
+                    runs.extend({"stage": f"{folder.name}/evaluate/{task.id}",
+                                 "result": r.model_copy(update={"usage": normalize_usage(r.usage)}).model_dump(mode="json")}
+                                for r in evaluation_runs)
+                    _save(folder / "evaluations.json", [
+                        results[i]["evaluations"][j].model_dump(mode="json")
+                        for i in sorted(results) for j in sorted(results[i]["evaluations"])
+                    ])
+                    checkpoint()
+                return evaluation
+
+            outcomes = await run_generation_evaluation(
+                plans, generation_concurrency, evaluation_concurrency,
+                generate_patient, evaluate_one,
+            )
+            tasks = [task for outcome in outcomes for task in outcome.tasks]
+            evaluations = [outcome.evaluations[index] for outcome in outcomes
+                           for index in sorted(outcome.evaluations)]
+            attempts = [results[index]["attempt"] for index in sorted(results)]
             _save(folder / "tasks.json", [t.model_dump(mode="json") for t in tasks])
             _save(folder / "evaluations.json", [e.model_dump(mode="json") for e in evaluations])
             _save(folder / "attempts.json", attempts)
@@ -283,13 +402,13 @@ async def run_experiment(config: ExperimentConfig) -> None:
                 feedback_run = await invoke(f"{folder.name}/feedback", analyze_feedback, tasks,
                                             [trajectories[p] for p in patients], evaluations, config.runtime)
                 _save(folder / "feedback_run.json", feedback_run.model_dump(mode="json"))
-                feedback = parse(f"{folder.name}/feedback", feedback_run, Feedback)
+                feedback = await parse(f"{folder.name}/feedback", feedback_run, Feedback)
                 if feedback is not None:
                     _save(folder / "feedback.json", feedback.model_dump(mode="json"))
                     update_run = await invoke(f"{folder.name}/update", update_strategy,
                                               strategy, feedback, config.runtime)
                     _save(folder / "update_run.json", update_run.model_dump(mode="json"))
-                    updated = parse(f"{folder.name}/update", update_run, Strategy)
+                    updated = await parse(f"{folder.name}/update", update_run, Strategy)
                     if updated is not None:
                         strategy = updated
                 _save(folder / "next_strategy.json", strategy.model_dump(mode="json"))
@@ -301,9 +420,12 @@ async def run_experiment(config: ExperimentConfig) -> None:
         manifest["status"] = "completed"
     except Exception as exc:
         manifest["status"] = "failed"
-        error("experiment", exc)
+        await error("experiment", exc)
         raise
     finally:
-        checkpoint()
-        from .summary import summarize_run
-        _save(root / "summary.json", summarize_run(str(root)))
+        try:
+            await environments.close()
+        finally:
+            checkpoint()
+            from .summary import summarize_run
+            _save(root / "summary.json", summarize_run(str(root)))

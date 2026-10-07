@@ -39,13 +39,17 @@ async def test_shared_exploration_paths_release_and_cost(monkeypatch, name, fail
     monkeypatch.setattr(medevolve, "release_environment", release)
     monkeypatch.setattr(medevolve, "run_agent", agent)
     result = await medevolve.explore_environment(config, ["train"], runtime)
-    get.assert_awaited_once_with(instance, ["train"], tool_result_limit=config.tool_result_limit)
+    get.assert_awaited_once_with(instance, ["train"], tool_result_limit=config.tool_result_limit,
+                                 read_only=True)
     release.assert_awaited_once_with(config, instance)
     if failure == "tools":
         agent.assert_not_awaited()
         assert result.status == "failed" and result.output is None
         return
     assert agent.await_args.kwargs["tools"] is tools
+    instructions = agent.await_args.kwargs["instructions"]
+    assert instructions.startswith(medevolve.ENVIRONMENT_EXPLORATION)
+    assert "本轮实验只允许基于既有患者记录生成查询任务" in instructions
     assert agent.await_args.kwargs["model"] is runtime.models["environment_explorer"]
     assert result.usage == original.usage
     assert result.trace[0] == original.trace[0]

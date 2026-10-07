@@ -35,13 +35,13 @@ def directions_pool():
 
 
 def environment():
-    return EnvironmentConfig(name="test", manager_url="http://unused", seed_data="seed")
+    return EnvironmentConfig(name="PhysicianBench", manager_url="http://unused", seed_data="seed")
 
 
 def patient():
     return PatientTrajectory(
         patient_id="MRN0001",
-        environment="test",
+        environment="PhysicianBench",
         text='[2024-01-01] Observation/o1\n{"resourceType":"Observation","id":"o1","valueString":"158/96"}'
              '\n\n[2024-03-01] MedicationRequest/m1\n{"resourceType":"MedicationRequest","id":"m1"}',
         sources=[
@@ -77,7 +77,8 @@ def located():
 
 def candidate(task_type, instruction, source_id, statement):
     return {"instruction": instruction, "task_type": task_type, "reference_answer": "依据轨迹给出结论",
-            "evidence": [{"source_id": source_id, "statement": statement}]}
+            "evidence": [{"source_id": source_id, "statement": statement}],
+            "execution_requirement": "read_only"}
 
 
 def first_candidate():
@@ -171,6 +172,11 @@ def test_locate_prompt_selects_by_fit_without_weight_sampling():
     assert "权重" in workflow.LOCATE
 
 
+def test_internal_check_prompt_uses_trajectory_body_records():
+    assert "轨迹正文" in workflow.INTERNAL_CHECK
+    assert "原始记录" not in workflow.INTERNAL_CHECK
+
+
 def test_generate_prompts_cover_every_task_type():
     assert set(workflow.GENERATE_BY_TYPE) == set(get_args(TaskType))
 
@@ -209,15 +215,20 @@ async def test_nodes_generate_one_type_each_then_unified_check(monkeypatch):
     assert payloads[3]["candidates"][0]["candidate"] == {**first_candidate(), "decision_point": None}
     assert payloads[3]["candidates"][1]["candidate"] == {**second_candidate(), "decision_point": None}
     assert payloads[3]["candidates"][0]["evidence_records"] == [
-        {"source_id": "Observation/o1", "record": "2024-01-01 血压 158/96 mmHg"},
+        {"source_id": "Observation/o1",
+         "record": '[2024-01-01] Observation/o1\n'
+                   '{"resourceType":"Observation","id":"o1","valueString":"158/96"}'},
     ]
     assert payloads[3]["candidates"][1]["evidence_records"] == [
-        {"source_id": "MedicationRequest/m1", "record": "2024-03-01 开始氨氯地平"},
+        {"source_id": "MedicationRequest/m1",
+         "record": '[2024-03-01] MedicationRequest/m1\n{"resourceType":"MedicationRequest","id":"m1"}'},
     ]
 
     node_instructions = [entry.kwargs["instructions"] for entry in call.await_args_list[1:3]]
     assert node_instructions[0] != node_instructions[1]
     assert all("最多1题" in text and "候选题型池" not in text for text in node_instructions)
+    assert all("本轮实验只允许基于既有患者记录生成查询任务" in text
+               for text in [entry.kwargs["instructions"] for entry in call.await_args_list])
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from contracts import Budget, EnvironmentExploration, ModelConfig, RunResult, SolverAnswer
 from environments.medagentbench import NativeTools
+from .context import budget_entry, count_tokens, dumps, fit_history, output_limit, prepare_input
 
 
 def _usage(response) -> dict:
@@ -99,13 +100,27 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
         {"role": "user", "content": native_prompt},
     ]
     env_failed = False
+    # 参数错误恢复判定只适用于解题路径：探索运行以探测参数边界并产出指导为目的，
+    # 服务拒绝某个参数是探索的预期结果而非故障。
+    solving = output_type is SolverAnswer
+    pending_parameter_error = False
     try:
         if budget.max_model_turns == 0:
             return result_factory(model=model, trace=trace, usage=usage,
                                   status="budget_exhausted", error="Model turn budget exhausted")
+        prompt_prefix = native_prompt[:-len(input_text)] if input_text else native_prompt
+        input_text, entry = prepare_input(input_text, model,
+            instructions=instructions + prompt_prefix, schema={})
+        messages[1]["content"] = prompt_prefix + input_text
+        trace.append(entry)
         async with client_factory(model) as client:
             for _ in range(budget.max_model_turns):
-                request = {"model": model.model, "messages": messages}
+                messages, dropped = fit_history(messages, model, fixed_tokens=0, prefix_count=2,
+                    group_start=lambda item: item.get("role") == "assistant")
+                trace.append(budget_entry(model, count_tokens(dumps(messages), model),
+                                          history_items_dropped=dropped))
+                request = {"model": model.model, "messages": messages,
+                           "max_tokens": output_limit(model)}
                 trace.append({"type": "model_request", **copy.deepcopy(request)})
                 usage["model_turns"] += 1
                 response = await client.chat.completions.create(**request)
@@ -155,6 +170,12 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                         return result_factory(model=model, output=output, trace=trace,
                                               usage=usage, status="failed",
                                               error="FHIR access failed during this run")
+                    if solving and pending_parameter_error:
+                        trace.append({"type": "run_error", "failure_category": "tool_error",
+                                      "error": "Query parameter error was not corrected"})
+                        return result_factory(model=model, output=output, trace=trace,
+                                              usage=usage, status="failed",
+                                              error="Query parameter error was not corrected")
                     return result_factory(model=model, output=output, trace=trace,
                                           usage=usage, status="completed")
 
@@ -174,6 +195,11 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                         env_failed = True
                         trace.append({"type": "run_error", "failure_category": "environment_error",
                                       "error": _redact_secret(str(reply), model)})
+                    if solving:
+                        if result.get("failure_category") == "tool_error":
+                            pending_parameter_error = True
+                        elif result.get("kind") == "GET" and not result.get("failure_category"):
+                            pending_parameter_error = False
                 except Exception as exc:
                     tool_exception = True
                     env_failed = True

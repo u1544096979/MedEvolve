@@ -1,11 +1,11 @@
 """MedAgentBench native protocol and patient-scoped raw data access."""
 
-import hashlib
 import json
 from pathlib import Path
 
 import httpx
 import pytest
+from unittest.mock import AsyncMock
 
 from contracts import EnvironmentInstance, Task
 from environments import get_tools, prepare_trajectory, read_evidence, read_state
@@ -54,13 +54,114 @@ def task():
     return Task(id="task", patient_id="p1", environment="MedAgentBench", round_index=0, source_method="medevolve", instruction="Review", task_type="诊断与解释", reference_answer="", evidence=[])
 
 
+def test_function_declarations_keep_upstream_structure_and_provenance():
+    functions = load_functions()
+    assert len(functions) == 9
+    assert [function["name"] for function in functions] == [
+        "GET {api_base}/Condition",
+        "GET {api_base}/Observation",
+        "GET {api_base}/Observation",
+        "POST {api_base}/Observation",
+        "GET {api_base}/MedicationRequest",
+        "POST {api_base}/MedicationRequest",
+        "GET {api_base}/Procedure",
+        "POST {api_base}/ServiceRequest",
+        "GET {api_base}/Patient",
+    ]
+    assert set(functions[0]["parameters"]["properties"]) == {"category", "patient"}
+    assert functions[0]["parameters"]["required"] == ["patient"]
+    assert set(functions[4]["parameters"]["properties"]) == {"category", "date", "patient"}
+    assert functions[4]["parameters"]["required"] == ["patient"]
+    assert {
+        index: (set(functions[index]["parameters"]["properties"]),
+                functions[index]["parameters"]["required"])
+        for index in (3, 5, 7)
+    } == {
+        3: ({"resourceType", "category", "code", "effectiveDateTime", "status",
+             "valueString", "subject"},
+            ["resourceType", "category", "code", "effectiveDateTime", "status",
+             "valueString", "subject"]),
+        5: ({"resourceType", "medicationCodeableConcept", "authoredOn",
+             "dosageInstruction", "status", "intent", "subject"},
+            ["resourceType", "medicationCodeableConcept", "authoredOn",
+             "dosageInstruction", "status", "intent", "subject"]),
+        7: ({"resourceType", "code", "authoredOn", "status", "intent", "priority",
+             "subject", "note", "occurrenceDateTime"},
+            ["resourceType", "code", "authoredOn", "status", "intent", "priority",
+             "subject"]),
+    }
+    assert "category" in functions[0]["description"]
+    assert "status" not in functions[0]["description"]
+    assert "status" not in functions[4]["description"]
+    provenance = (
+        Path(__file__).parents[2] / "environments/medagentbench.py"
+    ).read_text(encoding="utf-8")
+    assert "Stanford Machine Learning Group" in provenance
+    assert "99260117137b09f04837a8c18d18a1107efa55ae" in provenance
+    assert "MIT" in provenance
+    assert "locally adapted" in provenance
+
+
+PARAMETER_ERROR_BODY = {
+    "resourceType": "OperationOutcome",
+    "issue": [{"severity": "error", "code": "invalid",
+               "diagnostics": "Unknown search parameter status"}],
+}
+
+
+def mock_fhir(monkeypatch, handler):
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(
+        transport=httpx.MockTransport(handler), **kwargs))
+    return NativeTools("http://fixture/fhir/", ["p1"], load_functions())
+
+
 @pytest.mark.asyncio
-async def test_functions_are_unmodified_official_declaration():
-    declaration = (Path(__file__).parents[2] / "environments/medagentbench-functions.json").read_bytes()
-    assert hashlib.sha256(declaration).hexdigest() == (
-        "c977266db5eca75182c0d12cac1962b33ae6b5a54b9029ceb104e1a93b4c38c1"
-    )
-    assert len(load_functions()) == 9
+@pytest.mark.parametrize(("status", "body", "expected_category"), [
+    (400, PARAMETER_ERROR_BODY, "tool_error"),
+    (400, {"resourceType": "OperationOutcome", "issue": [{
+        "severity": "error", "code": "invalid",
+        "details": {"text": "Invalid value in search parameter status"}}]}, "tool_error"),
+    (400, "Bad Request", "tool_error"),
+    (401, "unauthorized", "environment_error"),
+    (403, "forbidden", "environment_error"),
+    (404, "not found", "environment_error"),
+    (503, "service unavailable", "environment_error"),
+])
+async def test_get_failure_classification(monkeypatch, status, body, expected_category):
+    def handler(request):
+        if isinstance(body, dict):
+            return httpx.Response(status, json=body)
+        return httpx.Response(status, text=body)
+
+    tools = mock_fhir(monkeypatch, handler)
+    result = await tools.execute("GET " + tools.endpoint + "Condition?patient=Patient%2Fp1")
+    assert result["kind"] == "GET"
+    assert result["failure_category"] == expected_category
+    if expected_category == "tool_error":
+        assert result["status_code"] == 400
+        assert result["reply"].startswith("HTTP 400: ")
+        assert "Correct the query parameters and retry." in result["reply"]
+    else:
+        assert result["reply"].startswith("Error in sending the GET request: ")
+        assert "status_code" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [
+    httpx.ConnectError("connect failed"),
+    httpx.ReadTimeout("read timed out"),
+])
+async def test_get_transport_failure_is_environment_error(monkeypatch, error):
+    def handler(request):
+        raise error
+
+    tools = mock_fhir(monkeypatch, handler)
+    result = await tools.execute("GET " + tools.endpoint + "Condition?patient=Patient%2Fp1")
+    assert result["kind"] == "GET"
+    assert result["failure_category"] == "environment_error"
+    assert result["reply"].startswith("Error in sending the GET request: ")
+    assert "status_code" not in result
 
 
 @pytest.mark.asyncio
@@ -111,6 +212,18 @@ async def test_native_get_post_finish_and_instance_boundary(fhir):
             "extension": [{"valueReference": {"reference": "Patient/p2"}}],
         }))
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_public_read_only_view_blocks_post_before_source_execution():
+    tools = await get_tools(instance(), ["p1"], read_only=True)
+    assert [item["name"].split(" ", 1)[0] for item in tools.functions] == ["GET"] * 6
+    tools._source.execute = AsyncMock()
+    denied = await tools.execute(
+        "POST " + tools.endpoint + "MedicationRequest\n{}"
+    )
+    assert denied["kind"] == "error"
+    tools._source.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio

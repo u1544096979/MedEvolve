@@ -34,6 +34,7 @@ class PatientTrajectory(BaseModel):
     environment: str
     text: str
     sources: list[Evidence]
+    input_truncated: bool = False
 
 
 class ExplorationGuidance(BaseModel):
@@ -64,6 +65,7 @@ class GeneratedQuestion(BaseModel):
     reference_answer: str
     evidence: list[Evidence]
     decision_point: str | None = None
+    execution_requirement: Literal["read_only"] | None = None
 
 
 class TaskBatch(BaseModel):
@@ -84,8 +86,19 @@ class ModelConfig(BaseModel):
     api_key_env: str
     instructions_role: Literal["system", "user"] = "system"
     parallel_tool_calls: bool = True
+    structured_agent_output: bool = True
     context_window: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    fallback: "ModelConfig | None" = None
+
+    @model_validator(mode="after")
+    def validate_fallback(self):
+        if self.fallback is not None:
+            if self.fallback.model != self.model:
+                raise ValueError("fallback model must match the primary model")
+            if self.fallback.fallback is not None:
+                raise ValueError("fallback cannot define another fallback")
+        return self
 
 
 class Budget(BaseModel):
@@ -104,10 +117,50 @@ class RunResult(BaseModel):
 class Verification(BaseModel):
     valid: bool
     reason: str
+    read_only_task: bool | None = None
+
+
+class DimensionJudgment(BaseModel):
+    score: int
+    reason: str
+
+
+class QualityJudgment(BaseModel):
+    factual_accuracy: DimensionJudgment
+    clinical_soundness: DimensionJudgment
+    evidence_sufficiency: DimensionJudgment
+    task_clarity: DimensionJudgment
+
+
+class QualityDimension(BaseModel):
+    score: int
+    scores: list[int]
+    reason: str
 
 
 class QualityReview(BaseModel):
-    dimensions: JsonObject
+    factual_accuracy: QualityDimension
+    clinical_soundness: QualityDimension
+    evidence_sufficiency: QualityDimension
+    task_clarity: QualityDimension
+
+
+class ComplexityMetrics(BaseModel):
+    evidence_count: int
+    resource_type_count: int
+    time_span_days: float | None
+
+
+class DifficultyJudgment(BaseModel):
+    reasoning_depth: int
+    reason: str
+
+
+class DifficultyScore(BaseModel):
+    reasoning_depth: int
+    reasoning_depths: list[int]
+    reason: str
+    complexity_metrics: ComplexityMetrics
 
 
 class CompletionReview(BaseModel):
@@ -119,12 +172,13 @@ class EvaluationResult(BaseModel):
     task_id: str
     verification: Verification | None = None
     quality: QualityReview | None = None
+    difficulty: DifficultyScore | None = None
     completion: CompletionReview | None = None
     solver_run: RunResult | None = None
     observed_state: JsonObject
     status: Literal["completed", "invalid", "failed"]
     failure_category: Literal[
-        "clinical", "insufficient_evidence", "ambiguous_task", "tool_error",
+        "clinical", "insufficient_evidence", "unsupported_operation", "ambiguous_task", "tool_error",
         "environment_error", "model_error"
     ] | None = None
     runs: list[RunResult]
@@ -162,6 +216,15 @@ class RuntimeConfig(BaseModel):
 
 class EvaluationConfig(BaseModel):
     runtime: RuntimeConfig
+    judges: list[ModelConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_judges(self) -> "EvaluationConfig":
+        if self.judges and len(self.judges) != 3:
+            raise ValueError("judges must contain either zero or three models")
+        if self.judges and len({judge.model for judge in self.judges}) != 3:
+            raise ValueError("judge model names must be distinct")
+        return self
 
 
 class ExperimentConfig(BaseModel):
@@ -177,3 +240,6 @@ class ExperimentConfig(BaseModel):
     random_seed: int
     output_dir: str
     compare_initial_strategy: bool = False
+    guidance_path: str | None = None
+    generation_concurrency: int | None = Field(default=None, gt=0, strict=True)
+    evaluation_concurrency: int | None = Field(default=None, gt=0, strict=True)

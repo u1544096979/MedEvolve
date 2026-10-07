@@ -27,7 +27,22 @@ async def generate_tasks(
 
 除 Workflow 外，directions 对应两个目标任务。Workflow 接收五类候选方向，由定位节点根据患者轨迹选择两类，再分别生成；公共入口不为其提前抽样两个题型，输出校验遵循其候选池与选型约束，详见 [Workflow 规范](../baselines/workflow/SPEC.md)。成功输出 TaskBatch，最多两题；允许证据不足时少出题。算法内部候选、扩展与失败尝试记入运行记录和用量，不能通过只统计最终成功题隐去成本。Task 的患者、环境、轮次、方法和编号由实验入口附加。
 
-五个方法内部生成及筛选统一使用 runtime.models["generator"]。预算取 runtime.budgets["generator"]，model_turns 对多阶段方法指本批累计模型调用数；工具调用单独累计。公共实验 section 提供公共输出约束和轻量运行结果汇总函数，各方法调用而不另写一份。usage 统一保存 model_turns、tool_calls、input_tokens、output_tokens、total_tokens；单次接口的 prompt_tokens、completion_tokens 映射为输入、输出 token。trace 按阶段附加原始运行记录，保留失败信息。
+生成结果达到预算上限时可保留状态 `budget_exhausted` 并携带有效 TaskBatch；公共字段、题型配额和题数仍完整校验，通过校验的题目进入评测，尝试记录保留耗尽状态与实际用量。空输出保持耗尽状态且不进入评测。失败状态不携带可评测输出，实际用量超过配置上限时输出被拒绝。该状态放行只用于生成批次解析；探索、反馈等非生成结果仍要求 `completed`。
+
+SingleShot 使用自主选题入口，第三参数为 contracts.TaskType 定义的全部五种题型：
+
+```python
+async def generate_tasks(
+    trajectory: PatientTrajectory,
+    environment: EnvironmentConfig,
+    task_types: list[TaskType],
+    runtime: RuntimeConfig,
+) -> RunResult: ...
+```
+
+task_types 是允许生成的题型集合，不是题目位置：集合须完整包含五种题型且不重复，一次最多两题，两题可同类型，不要求覆盖全部题型，也不按权重分配题数。公共输出约束与结果校验据此提供按题型集合校验的路径，检查最多两题、题型属于该集合、字段非空与 decision_point 为 null；其他方法保留 directions 的两个方向配额校验。生成输入包含完整轨迹与原始 sources，不含主方法的数据探索指导、环境探索产物、生成指导或评测答案。
+
+六种方法内部生成及筛选统一使用 runtime.models["generator"]，每患者生成预算上限统一为 max_model_turns=800、max_tool_calls=800。预算取 runtime.budgets["generator"]，model_turns 对多阶段方法指本批累计模型调用数；工具调用单独累计。800/800 是上限，各方法保留自身生成流程与停止规则，不为消耗额度追加调用。公共实验 section 提供公共输出约束和轻量运行结果汇总函数，各方法调用而不另写一份。usage 统一保存 model_turns、tool_calls、input_tokens、output_tokens、total_tokens；单次接口的 prompt_tokens、completion_tokens 映射为输入、输出 token。trace 按阶段附加原始运行记录，保留失败信息。
 
 环境复用 create_environment、prepare_trajectory、get_tools、read_evidence、read_state、release_environment。模型复用 call_llm 与 run_agent。评测复用 evaluate_task，禁止对方法名称设置不同判定规则。
 
@@ -37,13 +52,13 @@ EnvExplore 保留与主方法相同的一次环境探索，使用 environment_ex
 
 同环境内固定患者组、目标任务数及外部预算上限，记录实际生成题数、证据核验通过率、四维质量判断、解题完成情况、失败类别、模型调用和 token 用量。各方法调用次数可以不同，差异必须进入成本结果。
 
-进化患者用于 MedEvolve 探索和策略更新，评测患者不参与策略学习。所有方法在相同评测患者上生成任务；冻结 MedEvolve 的最终策略后评测。方向对比的题型采样安排由公共入口管理，源码方法有自己的采样机制时须注明适配差异。
+进化患者用于 MedEvolve 探索和策略更新，评测患者不参与策略学习。所有方法在相同评测患者上生成任务；冻结 MedEvolve 的最终策略后评测。方向对比的题型采样安排由公共入口管理，源码方法有自己的采样机制时须注明适配差异；SingleShot 不采样方向，由模型在允许题型集合内自主选题。
 
 核验包括逐条引用与事实一致性、题目和参考答案支持性；之后才进入质量评价、解题和完成评价。原始记录是事实依据，生成模型和核验模型的结论都不是金标准。临床合理等价答案不能仅因措辞或真实后续治疗不同而被否定。
 
 ## 环境和可见范围
 
-查询与模拟提交复用共享查询 Docker 实例，真实写入任务及 PhysicianBench 试写探索使用独立种子实例，具体遵循 [环境能力与患者并行设计](../../environment-capabilities/design.md)。首轮 decision_point 为 null；仅在环境实现完整时间过滤后开放决策点任务。凭环境真实开放能力进行读写。
+准备、探索、生成、核验与解题阶段仅执行查询，同一环境及固定种子在一次运行中复用一个只读共享逻辑实例；各患者的会话与输出保持独立。仅依据既有记录形成诊断、解释、分析、评估或建议，不提交或持久化变更，也不执行模拟 POST。整体核验依据题面和参考答案判断任务能否在该范围内完成，具体遵循 [环境能力与患者并行设计](../../environment-capabilities/design.md)。
 
 ## 方法来源状态
 

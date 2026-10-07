@@ -2,11 +2,19 @@
 
 The bundled interface declarations come from Stanford Machine Learning Group's
 MedAgentBench repository, commit 99260117137b09f04837a8c18d18a1107efa55ae.
-The upstream repository is licensed under MIT; see its LICENSE file. The action
-feedback and parsing rules below follow src/server/tasks/medagentbench/__init__.py.
+The upstream repository is licensed under MIT; see its LICENSE file. The nine
+function declarations keep the upstream names, parameters and payload
+structure. Their descriptions are locally adapted so that each description
+matches the parameters declared in its own parameter table and states that
+only those parameters are supported; the bundled declarations are therefore not
+byte-identical to the upstream file. The action feedback and parsing rules below
+follow src/server/tasks/medagentbench/__init__.py, with a locally added
+classification: a GET rejected with HTTP 400 is reported as a recoverable tool
+error, while every other transport or HTTP failure stays an environment error.
 """
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -94,6 +102,25 @@ class NativeTools(list[Tool]):
                         if response.headers.get("Content-Type") == "application/json"
                         else response.text
                     )
+            except httpx.HTTPStatusError as exc:
+                response = exc.response
+                if response.status_code == 400:
+                    return {
+                        "kind": "GET",
+                        "request": request,
+                        "reply": (
+                            f"HTTP {response.status_code}: {response.text}. "
+                            "Correct the query parameters and retry."
+                        ),
+                        "status_code": response.status_code,
+                        "failure_category": "tool_error",
+                    }
+                return {
+                    "kind": "GET",
+                    "request": request,
+                    "reply": f"Error in sending the GET request: {exc}",
+                    "failure_category": "environment_error",
+                }
             except Exception as exc:
                 return {
                     "kind": "GET",
@@ -187,6 +214,24 @@ class NativeTools(list[Tool]):
                 return {"kind": "error", "request": {"action": original}, "reply": "Invalid FINISH request"}
             return {"kind": "FINISH", "request": {"action": original}, "reply": "FINISH", "answers": answers}
         return {"kind": "error", "request": {"action": original}, "reply": "Invalid action"}
+
+
+class ReadOnlyNativeTools(NativeTools):
+    """Immutable query-only view that rejects POST before the source executes."""
+
+    def __init__(self, source: NativeTools):
+        super().__init__(source.endpoint, source.patient_ids, [])
+        self._source = source
+        self.functions = [deepcopy(item) for item in source.functions
+                          if item.get("name", "").startswith("GET ")]
+
+    async def execute(self, action: str) -> JsonObject:
+        normalized = action.replace("```tool_code", "").replace("```", "").strip()
+        if not (normalized.startswith("GET ") or
+                (normalized.startswith("FINISH(") and normalized.endswith(")"))):
+            return {"kind": "error", "request": {"action": action},
+                    "reply": "This environment view permits GET and FINISH only"}
+        return await self._source.execute(action)
 
 
 def load_functions() -> list[JsonObject]:

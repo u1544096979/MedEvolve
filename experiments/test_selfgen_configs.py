@@ -8,7 +8,7 @@ from experiments.runner import resolve_generator
 from methods.selfgen import generate_tasks
 
 KINDS = ["诊断与解释", "检查与风险分层"]
-BUDGET = {"max_model_turns": 6, "max_tool_calls": 0}
+BUDGET = {"max_model_turns": 800, "max_tool_calls": 800}
 
 @pytest.mark.parametrize("source,target", [
     ("physicianbench-flash.json", "physicianbench-selfgen.json"),
@@ -22,9 +22,11 @@ def test_config_keeps_sampling_environment_and_model(source, target):
     assert config.method == "selfgen" and config.round_patients == []
     assert values["compare_initial_strategy"] is False
     assert config.evaluation_patients
-    for key in ("environment", "evolution_patients", "evaluation_patients",
+    for key in ("environment", "evolution_patients",
                 "initial_strategy", "random_seed", "evaluation"):
         assert values[key] == base[key]
+    assert values["evaluation_patients"] == (["MRN4460967357", "MRN2299051392"]
+                                            if "physicianbench" in target else base["evaluation_patients"])
     assert set(config.runtime.models) == {"generator"}
     assert set(config.runtime.budgets) == {"generator"}
     assert values["runtime"]["models"]["generator"] == base["runtime"]["models"]["generator"]
@@ -34,7 +36,7 @@ def test_config_keeps_sampling_environment_and_model(source, target):
 def draft(version="初稿", kinds=KINDS):
     return {"batch": {"questions": [dict(
         instruction=f"{kind}-{version}", task_type=kind, reference_answer=f"答案-{version}",
-        decision_point=None,
+        decision_point=None, execution_requirement="read_only",
         evidence=[dict(source_id="Observation/1", statement="原始记录事实")],
     ) for kind in kinds]}, "direction_indices": list(range(len(kinds)))}
 
@@ -82,7 +84,8 @@ async def test_declared_generator_budget_completes_worst_case_loop(monkeypatch, 
               draft("修订二"), review(len(KINDS))]
     result, calls = await run_declared_loop(monkeypatch, target, script)
     assert result.status == "completed" and len(result.output["questions"]) == len(KINDS)
-    assert len(calls) == BUDGET["max_model_turns"] == 6
+    assert len(calls) == 6
+    assert len(calls) <= BUDGET["max_model_turns"]
     assert [item["stage"] for item in result.trace] == [
         "candidate_generation", "self_review/1", "refine/1",
         "self_review/2", "refine/2", "self_review/3", "final_filter"]

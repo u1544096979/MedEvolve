@@ -18,9 +18,11 @@ from contracts import (
     Task,
 )
 from environments.errors import EnvironmentUnavailable, UnsupportedDecisionPoint
+from environments.capabilities import get_capabilities
 from environments.fhir import FHIRClient, decode_document_notes
-from environments.medagentbench import NativeTools, load_functions
+from environments.medagentbench import NativeTools, ReadOnlyNativeTools, load_functions
 from environments.physicianbench import FHIR_TOOL_SCHEMAS, NATIVE_FUNCTIONS
+from environments.tool_results import serialize_tool_result, validate_tool_result_limit
 
 _WRITABLE_RESOURCE_TYPES = {
     "Communication",
@@ -30,6 +32,12 @@ _WRITABLE_RESOURCE_TYPES = {
 }
 
 TOOL_RESULT_LIMIT = 10000
+
+# 管理器一次创建的真实最坏路径由 server/fhir_agentbench.py 的 WORST_CASE_CREATE_SECONDS
+# 推导（各相位等待上限之和 + 镜像校验、卷与网络创建、容器启动等固定开销上限），客户端
+# 等待上限必须严格大于它并留出余量：客户端先放弃时管理器仍可能创建成功，返回的实例 id
+# 没有任何一方收到，容器、卷与网络会成为只能人工按 id 回收的孤儿。
+FHIR_AGENTBENCH_CREATE_TIMEOUT = 3000
 
 
 def _short_system(system: str) -> str:
@@ -123,7 +131,7 @@ def _trajectory_resource(resource: dict) -> dict:
 
 
 def _check_environment(name: str) -> None:
-    if name not in {"PhysicianBench", "MedAgentBench"}:
+    if name not in {"PhysicianBench", "MedAgentBench", "FHIR-AgentBench"}:
         raise EnvironmentUnavailable(
             f"{name} is unavailable: original implementation is not integrated"
         )
@@ -137,9 +145,13 @@ def _check_decision_point(decision_point: str | None) -> None:
 
 
 async def create_environment(config: EnvironmentConfig) -> EnvironmentInstance:
-    if config.name not in {"PhysicianBench", "MedAgentBench"}:
+    if config.name not in {"PhysicianBench", "MedAgentBench", "FHIR-AgentBench"}:
         raise EnvironmentUnavailable(f"{config.name} is unavailable")
-    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
+    # 本地 FHIR 实例需要恢复完整数据库种子，等待时间远长于镜像启动。
+    timeout = (
+        FHIR_AGENTBENCH_CREATE_TIMEOUT if config.name == "FHIR-AgentBench" else 240
+    )
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         response = await client.post(
             config.manager_url.rstrip("/") + "/instances", json=config.model_dump()
         )
@@ -156,26 +168,42 @@ async def get_tools(
     decision_point: str | None = None,
     *,
     tool_result_limit: int = TOOL_RESULT_LIMIT,
+    read_only: bool = False,
 ) -> list[Tool]:
     _check_environment(instance.environment)
     _check_decision_point(decision_point)
+    if instance.environment == "FHIR-AgentBench":
+        from .fhir_agentbench import get_native_tools
+
+        return get_native_tools(instance, patient_ids)
     if instance.environment == "MedAgentBench":
-        return NativeTools(instance.endpoint, patient_ids, load_functions())
-    client = FHIRClient(instance.endpoint, patient_ids)
+        tools = NativeTools(instance.endpoint, patient_ids, load_functions())
+        if read_only:
+            return ReadOnlyNativeTools(tools)
+        return tools
+    validate_tool_result_limit(tool_result_limit)
+    client = FHIRClient(instance.endpoint, patient_ids, allow_database_write=not read_only)
     schemas = {schema["name"]: schema for schema in FHIR_TOOL_SCHEMAS}
 
     def tool_error(context, error):
         if isinstance(error, (EnvironmentUnavailable, UnsupportedDecisionPoint)):
             raise error
-        return json.dumps({"error": f"{type(error).__name__}: {error}. Please retry with valid arguments."})
+        return serialize_tool_result(
+            {"error": f"{type(error).__name__}: {error}. Please retry with valid arguments."},
+            tool_result_limit,
+            error=True,
+        )
 
     def bind(native):
         @wraps(native)
         async def invoke(*args, **kwargs):
-            result = json.dumps(await native(client, *args, **kwargs), default=str)
-            if len(result) > tool_result_limit:
-                result = result[:tool_result_limit] + "… [result truncated]"
-            return result
+            value = await native(client, *args, **kwargs)
+            return serialize_tool_result(
+                value, tool_result_limit, write=native.__name__ in {
+                    "fhir_communication_create_message", "fhir_service_request_create",
+                    "fhir_medication_request_create", "fhir_appointment_create",
+                },
+            )
 
         signature = inspect.signature(native)
         invoke.__signature__ = signature.replace(
@@ -192,7 +220,9 @@ async def get_tools(
         tool.params_json_schema = schema["parameters"]
         return tool
 
-    return [bind(native) for native in NATIVE_FUNCTIONS]
+    query_tools = set(get_capabilities(instance.environment)["query_tools"])
+    return [bind(native) for native in NATIVE_FUNCTIONS
+            if not read_only or native.__name__ in query_tools]
 
 
 async def read_state(instance: EnvironmentInstance, task: Task) -> JsonObject:
@@ -200,6 +230,14 @@ async def read_state(instance: EnvironmentInstance, task: Task) -> JsonObject:
     if task.environment != instance.environment:
         raise ValueError("Task environment does not match the instance")
     _check_decision_point(task.decision_point)
+    if instance.environment == "FHIR-AgentBench":
+        # 只读环境没有写后状态：完成判断依据 solver 检索 trace、答案与原始证据。
+        # 因此既不读全量病历，也不套用 PhysicianBench 的可写资源筛选。
+        return {
+            "patient_id": task.patient_id,
+            "environment": instance.environment,
+            "operation_semantics": {"read_only": True},
+        }
     client = FHIRClient(instance.endpoint, [task.patient_id])
     if instance.environment == "MedAgentBench":
         resources = await _snapshot(client, task.patient_id)
@@ -230,6 +268,10 @@ async def read_evidence(
     instance: EnvironmentInstance, patient_id: str, source_id: str
 ) -> JsonObject:
     _check_environment(instance.environment)
+    if instance.environment == "FHIR-AgentBench":
+        from .fhir_agentbench import read_source
+
+        return await read_source(instance, patient_id, source_id)
     client = FHIRClient(instance.endpoint, [patient_id])
     if instance.environment == "MedAgentBench":
         parts = source_id.split("/")
@@ -248,7 +290,13 @@ async def release_environment(
 ) -> None:
     if config.name != instance.environment:
         raise ValueError("Configuration environment does not match the instance")
-    async with httpx.AsyncClient(timeout=90, trust_env=False) as client:
+    if config.name == "FHIR-AgentBench":
+        from .fhir_agentbench import forget_instance
+
+        forget_instance(instance.instance_id)
+    # 双容器实例要依次回收两个容器、数据库卷与私有网络。
+    timeout = 180 if config.name == "FHIR-AgentBench" else 90
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         response = await client.delete(
             config.manager_url.rstrip("/") + "/instances/" + instance.instance_id
         )
@@ -297,6 +345,10 @@ async def prepare_trajectory(
     instance: EnvironmentInstance, patient_id: str
 ) -> PatientTrajectory:
     _check_environment(instance.environment)
+    if instance.environment == "FHIR-AgentBench":
+        from .fhir_agentbench_trajectory import prepare
+
+        return await prepare(instance, patient_id)
     client = FHIRClient(instance.endpoint, [patient_id])
     if instance.environment == "MedAgentBench":
         resources = await _snapshot(client, patient_id)

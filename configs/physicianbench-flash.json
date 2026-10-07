@@ -61,8 +61,8 @@
         "max_tool_calls": 200
       },
       "generator": {
-        "max_model_turns": 1,
-        "max_tool_calls": 0
+        "max_model_turns": 800,
+        "max_tool_calls": 800
       }
     }
   },
@@ -77,6 +77,13 @@
           "parallel_tool_calls": true
         },
         "quality": {
+          "model": "deepseek-v4.1-flash",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "api_key_env": "OPENCODE_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "difficulty": {
           "model": "deepseek-v4.1-flash",
           "base_url": "https://opencode.ai/zen/go/v1",
           "api_key_env": "OPENCODE_API_KEY",
@@ -104,6 +111,10 @@
           "max_tool_calls": 200
         },
         "quality": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "difficulty": {
           "max_model_turns": 30,
           "max_tool_calls": 200
         },

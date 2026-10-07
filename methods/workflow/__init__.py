@@ -49,7 +49,14 @@ def _trajectory_input(trajectory: PatientTrajectory) -> dict:
         "environment": trajectory.environment,
         "text": trajectory.text,
         "sources": [{"source_id": source.source_id} for source in trajectory.sources],
+        "input_truncated": trajectory.input_truncated,
     }
+
+
+def _record_blocks(trajectory: PatientTrajectory) -> dict[str, str]:
+    """Map each source_id to its record block in the trajectory body."""
+    return dict(zip((source.source_id for source in trajectory.sources),
+                    trajectory.text.split("\n\n")))
 
 
 def _selected_focuses(selection: FocusSelection, directions: list[GenerationDirection],
@@ -116,7 +123,7 @@ async def generate_tasks(
 ) -> RunResult:
     """Run the fixed locate, per-type generate and internal check stages for one patient."""
     output_constraints(directions, candidate_pool=True)
-    budget = GenerationBudget(runtime)
+    budget = GenerationBudget(runtime, environment.name)
 
     located = await budget.call_llm(
         "locate",
@@ -171,7 +178,7 @@ async def generate_tasks(
     if not candidates:
         return _finish(budget, selected, focuses, output=TaskBatch(questions=[]))
 
-    records = {source.source_id: source.statement for source in trajectory.sources}
+    records = _record_blocks(trajectory)
     checked = await budget.call_llm(
         "check",
         instructions=INTERNAL_CHECK,

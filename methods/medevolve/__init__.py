@@ -20,9 +20,11 @@ from contracts import (
     TaskBatch,
 )
 from environments import create_environment, get_tools, release_environment
+from environments.capabilities import capability_instructions, read_only_scope_instructions
 from runtime import call_llm, run_agent
 from methods.common import USAGE_FIELDS, normalize_usage, output_constraints, validate_task_batch
 from methods.generation import trajectory_payload
+from runtime.context import PARTIAL_NOTE
 from .compression import COMPRESSION, CompressedTrajectory, compression_input
 
 from .prompts import (
@@ -83,11 +85,13 @@ async def explore_data(
         model = runtime.models.get("trajectory_compressor")
         if model is None:
             return json.dumps({"error": "runtime.models.trajectory_compressor is not configured"})
+        environment = cache[patient_id].environment
+        instructions = COMPRESSION + "\n\n" + capability_instructions(environment)
         try:
-            input_text = compression_input(cache[patient_id], model)
+            input_text = compression_input(cache[patient_id], model, instructions=instructions)
         except ValueError as exc:
             return json.dumps({"error": str(exc)})
-        run = await call_llm(instructions=COMPRESSION, input_text=input_text,
+        run = await call_llm(instructions=instructions, input_text=input_text,
                              output_type=CompressedTrajectory, model=model)
         compression_runs.append({"patient_id": patient_id, "result": run.model_dump(mode="json")})
         if run.status != "completed" or run.output is None:
@@ -98,7 +102,8 @@ async def explore_data(
                           ensure_ascii=False)
 
     result = await run_agent(
-        instructions=DATA_EXPLORATION,
+        instructions=DATA_EXPLORATION + ("\n\n" + capability_instructions(trajectories[0].environment)
+                                         if trajectories else ""),
         input_text="请先列出开放患者，再读取缓存轨迹，归纳抽象数据指导。",
         tools=[list_patients, read_trajectory, compress_trajectory],
         output_type=DataExploration,
@@ -121,39 +126,43 @@ async def explore_data(
 
 async def explore_environment(
     config: EnvironmentConfig, patient_ids: list[str], runtime: RuntimeConfig,
+    environments=None,
 ) -> RunResult:
-    instance = None
+    from evaluation.session import EvaluationEnvironments
+
+    session = environments or EvaluationEnvironments(
+        create=create_environment, release=release_environment)
+    owns_session = environments is None
     result = None
-    release_error = None
     try:
-        instance = await create_environment(config)
-        tools = await get_tools(instance, patient_ids,
-                                tool_result_limit=config.tool_result_limit)
-        result = await run_agent(
-            instructions=ENVIRONMENT_EXPLORATION,
-            input_text=json.dumps({"environment": instance.environment, "patient_ids": patient_ids},
-                                  ensure_ascii=False),
-            tools=tools, output_type=EnvironmentExploration,
-            model=runtime.models["environment_explorer"],
-            budget=runtime.budgets["environment_explorer"],
-        )
+        async with session.instance(config, phase="explore") as instance:
+            tools = await get_tools(instance, patient_ids,
+                                    tool_result_limit=config.tool_result_limit,
+                                    read_only=True)
+            result = await run_agent(
+                instructions=ENVIRONMENT_EXPLORATION + "\n\n" + capability_instructions(config.name),
+                input_text=json.dumps({"environment": instance.environment, "patient_ids": patient_ids},
+                                      ensure_ascii=False),
+                tools=tools, output_type=EnvironmentExploration,
+                model=runtime.models["environment_explorer"],
+                budget=runtime.budgets["environment_explorer"],
+            )
     except Exception as exc:
         result = RunResult(trace=[{"type": "run_error", "failure_category": "environment_error",
                                   "error": str(exc)}], usage={"model_turns": 0, "tool_calls": 0},
                            status="failed", error=f"{type(exc).__name__}: {exc}")
     finally:
-        if instance is not None:
+        if owns_session:
             try:
-                await release_environment(config, instance)
+                await session.close()
             except Exception as exc:
-                release_error = f"{type(exc).__name__}: {exc}"
-    if release_error is not None:
-        result = result.model_copy(update={
-            "output": None, "status": "failed", "error": "release_environment failed: " + release_error,
-            "trace": [*result.trace, {"type": "environment_release", "released": False,
-                "instance_id": instance.instance_id, "error": release_error,
-                "rejected_output": result.output}],
-        })
+                result = result.model_copy(update={
+                    "output": None, "status": "failed",
+                    "error": f"release_environment failed: {type(exc).__name__}: {exc}",
+                    "trace": [*result.trace, {"type": "environment_release", "released": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "rejected_output": result.output}],
+                })
     return result
 
 
@@ -167,7 +176,8 @@ async def generate_tasks(
     if len(directions) != 2:
         raise ValueError("directions must contain exactly two generation positions")
     result = await call_llm(
-        instructions=GENERATION + "\n" + output_constraints(directions),
+        instructions=GENERATION + "\n" + output_constraints(directions) + "\n\n"
+                     + capability_instructions(trajectory.environment) + "\n" + PARTIAL_NOTE,
         input_text=json.dumps(
             {
                 "trajectory": _trajectory_input(trajectory),
@@ -190,7 +200,9 @@ async def analyze_feedback(
     runtime: RuntimeConfig,
 ) -> RunResult:
     return await call_llm(
-        instructions=FEEDBACK,
+        instructions=FEEDBACK + ("\n\n" + capability_instructions(
+            tasks[0].environment if tasks else trajectories[0].environment)
+                                 if tasks or trajectories else ""),
         input_text=json.dumps(
             {
                 "tasks": [task.model_dump(mode="json") for task in tasks],
@@ -208,7 +220,7 @@ async def update_strategy(
     strategy: Strategy, feedback: Feedback, runtime: RuntimeConfig
 ) -> RunResult:
     return await call_llm(
-        instructions=STRATEGY_UPDATE,
+        instructions=STRATEGY_UPDATE + "\n\n" + read_only_scope_instructions(),
         input_text=json.dumps(
             {
                 "strategy": strategy.model_dump(mode="json"),

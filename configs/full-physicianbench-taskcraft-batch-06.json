@@ -1,0 +1,142 @@
+{
+  "run_id": "full-physicianbench-taskcraft-batch-06",
+  "method": "taskcraft",
+  "environment": {
+    "name": "PhysicianBench",
+    "manager_url": "http://127.0.0.1:18084",
+    "seed_data": "fhir-full:v1"
+  },
+  "runtime": {
+    "models": {
+      "generator": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      }
+    },
+    "budgets": {
+      "generator": {
+        "max_model_turns": 800,
+        "max_tool_calls": 800
+      }
+    }
+  },
+  "evaluation": {
+    "runtime": {
+      "models": {
+        "verifier": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "quality": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "difficulty": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "solver": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "completion": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        }
+      },
+      "budgets": {
+        "verifier": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "quality": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "difficulty": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "solver": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "completion": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        }
+      }
+    }
+  },
+  "evolution_patients": [],
+  "evaluation_patients": [
+    "MRN2812140441",
+    "MRN6241752544",
+    "MRN2137651678",
+    "MRN9509487523",
+    "MRN8243295640",
+    "MRN2946625742",
+    "MRN1542059002",
+    "MRN7805745017",
+    "MRN1610637279",
+    "MRN9703905715",
+    "MRN2566942273",
+    "MRN3746317213",
+    "MRN3857828509",
+    "MRN8523280142",
+    "MRN1351111723",
+    "MRN5951406973"
+  ],
+  "round_patients": [],
+  "initial_strategy": {
+    "generation_guidance": "依据患者纵向轨迹生成具有明确临床价值、依赖多条记录整合的医疗任务。每题明确作答或操作要求，使用轨迹里实际存在的来源 ID 提供证据，给出有依据的参考答案。两题关注不同临床问题。难度来自跨时间信息整合及合理临床判断，不来自歧义、缺失信息或环境故障。遵守原生工具能力，决策点为 null。",
+    "allocation": [
+      {
+        "task_type": "诊断与解释",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "检查与风险分层",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗规划",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "药物处方",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗重规划",
+        "difficulty": "关联两个及以上病程节点，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      }
+    ]
+  },
+  "random_seed": 42,
+  "output_dir": "outputs/full-comparison/physicianbench/taskcraft/batch-06",
+  "compare_initial_strategy": false
+}

@@ -87,12 +87,10 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
     constraints = output_constraints(directions)
     if environment.name not in {"PhysicianBench", "MedAgentBench"}:
         raise ValueError("Unsupported environment")
-    budget = GenerationBudget(runtime)
+    budget = GenerationBudget(runtime, environment.name)
     context = {
         "trajectory": trajectory.model_dump(mode="json"),
         "directions": [d.model_dump(mode="json") for d in directions],
-        "operation_semantics": ("提交请求不证明数据库写入" if environment.name == "MedAgentBench"
-                                else "持久化操作需核对实际返回及环境状态"),
     }
 
     async def call(stage, instructions, payload, schema):
