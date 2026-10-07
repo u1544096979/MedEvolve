@@ -18,6 +18,19 @@ HARNESSES = ("openclaw", "hermes", "ace", "reflexion")
 
 
 @pytest.mark.asyncio
+async def test_container_runs_an_explicit_keepalive_command(
+    isolation, base_snapshot, group_factory, fake_docker
+):
+    workspace = await isolation.start_group(group_factory("openclaw"), base_snapshot)
+    run_command = next(c for c in fake_docker.commands if c[0] == "run")
+    assert run_command[-2:] == ("sleep", "infinity")
+    assert run_command[run_command.index(isolation.image) + 1:] == ("sleep", "infinity")
+    environment = fake_docker.containers[workspace.container_name]["env"]
+    assert environment["MEDEVOLVE_STATE_DIR"] == STATE_MOUNT
+    await isolation.close()
+
+
+@pytest.mark.asyncio
 async def test_database_is_reset_but_group_memory_survives(rig):
     rig.group_state.write_text("查询前确认患者ID", encoding="utf-8")
     first = await rig.open_session(patient="p1")

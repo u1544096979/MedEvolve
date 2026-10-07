@@ -13,11 +13,16 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from agents import function_tool
-from contracts import EnvironmentConfig, EnvironmentInstance, SolverInput
+from contracts import Budget, EnvironmentConfig, EnvironmentInstance, ModelConfig, SolverInput
 from environments.errors import PatientAccessError
-from harnesses.contracts import GroupKey, HarnessName, Snapshot
+from harnesses.contracts import (
+    GroupKey, HarnessLimits, HarnessName, Snapshot,
+)
 from harnesses.isolation import DockerCommandError, HarnessIsolation
 from harnesses.medical_bridge import ToolSessions
+from harnesses.snapshots import directory_digest
+from harnesses.workers.base import CommandResult, WorkerPaths
+from harnesses.workers.entry import dispatch as dispatch_worker
 
 REAL_ASYNC_CLIENT = httpx.AsyncClient
 REAL_CLIENT = httpx.Client
@@ -406,6 +411,52 @@ def make_snapshot(root: Path, text: str = "基座初始经验") -> Snapshot:
     return Snapshot(path=directory, digest="sha256:base")
 
 
+HARNESS_STATE_LAYOUTS = {
+    "openclaw": ("workspace/skills",),
+    "hermes": ("skills",),
+    "ace": ("playbook",),
+    "reflexion": ("experiences",),
+}
+
+
+def make_clean_snapshot(root: Path) -> Snapshot:
+    """The same no-experience initial state for every harness.
+
+    One directory holds each harness's empty durable state under its own name, so
+    the isolation layer can mount it at `/state` and every adapter reads
+    `/state/<harness>` without a harness-specific fixture.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    for name, entries in HARNESS_STATE_LAYOUTS.items():
+        for entry in entries:
+            (root / name / entry).mkdir(parents=True, exist_ok=True)
+    return Snapshot(path=root, digest=directory_digest(root))
+
+
+def make_experience_snapshot(root: Path, *, skill: str, body: str,
+                             decoys: dict[str, str] | None = None) -> Snapshot:
+    """A snapshot that already holds a learned skill plus decoy state.
+
+    Decoys stand for what must never travel between runs: session databases,
+    transcripts and answer caches.
+    """
+    snapshot = make_clean_snapshot(root)
+    directory = snapshot.path / "openclaw" / "workspace" / "skills" / skill
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "SKILL.md").write_text(body, encoding="utf-8")
+    (snapshot.path / "openclaw" / "workspace" / "memory").mkdir(
+        parents=True, exist_ok=True
+    )
+    (snapshot.path / "openclaw" / "workspace" / "memory" / "2026-01-01.md").write_text(
+        "确认患者标识后再调用工具", encoding="utf-8"
+    )
+    for relative, text in (decoys or {}).items():
+        target = snapshot.path / "openclaw" / "workspace" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    return Snapshot(path=snapshot.path, digest=directory_digest(snapshot.path))
+
+
 @pytest.fixture
 def temp_dir(tmp_path) -> Path:
     return tmp_path
@@ -610,3 +661,234 @@ class BridgeRig:
 @pytest.fixture
 def bridge(tmp_path, fake_environments) -> BridgeRig:
     return BridgeRig(tmp_path, fake_environments)
+
+
+class FakeHarnessCli:
+    """OpenClaw CLI stand-in that reads the worker's own rendered config.
+
+    The substitute consumes `openclaw.json` the worker wrote: it reports the
+    phase header, the workspace and the provider base URL back, so a test can
+    check that the rendered config really is what drives the run.
+    """
+
+    def __init__(self, *, name: str = "openclaw"):
+        self.name = name
+        self.commands: list[tuple] = []
+        self.envs: list[dict] = []
+        self.prompts: list[str] = []
+        self.phases: list[str] = []
+        self.sessions: list[str] = []
+        self.turns: list[int] = []
+        self.workshop_records: list[dict] = []
+        self.skill_on_learning_turn: tuple[str, str] | None = None
+        self.assistant_turns = 1
+        self.fail_agent = False
+        self.fail_plugin_install = False
+        self.gateway_spawned: list[tuple] = []
+        self.terminated: list[int] = []
+        self.gateway_stopped = False
+
+    # -- CliRunner surface -------------------------------------------------
+    def available(self) -> bool:
+        return True
+
+    async def run(self, args, *, stdin=None, env=None, timeout=None):
+        args = tuple(args)
+        self.commands.append(args)
+        self.envs.append(dict(env or {}))
+        if args[:2] == ("plugins", "install"):
+            return _result(args, 1 if self.fail_plugin_install else 0)
+        if args[:2] == ("gateway", "stop"):
+            self.gateway_stopped = True
+            return _result(args, 0)
+        if args[:1] == ("health",):
+            return _result(args, 0, json.dumps({"ok": True, "status": "ok"}))
+        if args[:2] == ("skills", "workshop"):
+            return _result(args, 0, json.dumps({"proposals": self.workshop_records}))
+        if args[:1] == ("agent",):
+            return self._agent(args, env)
+        raise AssertionError(f"测试不认识的 {self.name} 命令：{args}")
+
+    async def spawn(self, args, *, env=None) -> int:
+        self.gateway_spawned.append(tuple(args))
+        return 4242
+
+    async def stop(self) -> None:
+        return None
+
+    def terminate(self, pid: int) -> None:
+        self.terminated.append(pid)
+
+    # -- helpers -----------------------------------------------------------
+    def config(self, env: dict) -> dict:
+        path = (env or {}).get("OPENCLAW_CONFIG_PATH")
+        assert path, "worker 必须设置 OPENCLAW_CONFIG_PATH"
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+
+    def phase(self, env: dict) -> str:
+        headers = self.config(env)["models"]["providers"]["medevolve"]["request"]["headers"]
+        return headers["x-medevolve-phase"]
+
+    def workspace(self, env: dict) -> Path:
+        return Path(self.config(env)["agents"]["entries"]["medical"]["workspace"])
+
+    def _agent(self, args: tuple, env: dict):
+        message_file = Path(args[args.index("--message-file") + 1])
+        self.prompts.append(message_file.read_text(encoding="utf-8"))
+        self.phases.append(self.phase(env))
+        session = args[args.index("--session-id") + 1]
+        self.sessions.append(session)
+        if self.fail_agent:
+            return _result(args, 1, json.dumps({
+                "ok": False, "status": "error", "model": None, "provider": None,
+                "error": {"type": "cli_error", "message": "provider 拒绝请求"},
+            }))
+        turns = self.turns.pop(0) if self.turns else self.assistant_turns
+        if self.phases[-1] == "learning" and self.skill_on_learning_turn:
+            skill, body = self.skill_on_learning_turn
+            directory = self.workspace(env) / "skills" / skill
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "SKILL.md").write_text(body, encoding="utf-8")
+        envelope = {
+            "ok": True,
+            "status": "ok",
+            "final": "已完成题目要求的核对。",
+            "payloads": [{"text": "已完成题目要求的核对。"}],
+            "usage": {"input": 120, "output": 30, "total": 150},
+            "assistantTurns": turns,
+            "model": "gpt-4o-mini",
+            "provider": "medevolve",
+            "sessionId": session,
+            "meta": {"toolSummary": {"calls": 2, "tools": ["medical_action"]}},
+        }
+        return _result(args, 0, json.dumps(envelope, ensure_ascii=False))
+
+
+def _result(args: tuple, returncode: int, stdout: str = "", stderr: str = ""):
+    return CommandResult(args=args, returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+class LocalWorkerTransport:
+    """Run the container-side worker on the host against the same mount sources.
+
+    Docker is simulated, so the bind mount and the scratch volume are ordinary
+    directories. This transport hands the worker those exact paths, which keeps
+    the worker's write guard, export filter and config rendering real without a
+    container, and keeps the OpenClaw binary itself substituted.
+    """
+
+    def __init__(self, name: HarnessName, fake_docker: FakeDocker, workspace, cli,
+                 tool_bridge: str = ""):
+        self.name = name
+        self.fake_docker = fake_docker
+        self.workspace = workspace
+        self.cli = cli
+        self.tool_bridge = tool_bridge
+        self.requests = []
+        self.responses = []
+
+    @property
+    def paths(self) -> WorkerPaths:
+        durable_root = Path(self.workspace.state_mount_source) / self.name
+        return WorkerPaths(
+            harness=self.name,
+            durable_root=durable_root,
+            workspace=durable_root / "workspace",
+            writable=Path(self.fake_docker.volumes[self.workspace.volume_name]),
+            frozen=self.workspace.state_readonly,
+            tool_bridge=self.tool_bridge,
+        )
+
+    async def call(self, request):
+        self.requests.append(request)
+        response = await dispatch_worker(request, paths=self.paths, cli=self.cli)
+        self.responses.append(response)
+        return response
+
+
+class FakeCliRegistry:
+    """One substitute CLI per harness; later sub-dispatches register their own."""
+
+    def __init__(self):
+        self.clis: dict[str, FakeHarnessCli] = {}
+
+    def register(self, name: str, cli: FakeHarnessCli) -> FakeHarnessCli:
+        self.clis[name] = cli
+        return cli
+
+    def for_harness(self, name: str) -> FakeHarnessCli:
+        if name not in self.clis:
+            raise KeyError(f"测试还没有为 {name} 注册替代 CLI")
+        return self.clis[name]
+
+
+@pytest.fixture
+def model_config() -> ModelConfig:
+    return ModelConfig(
+        model="gpt-4o-mini",
+        base_url="http://gateway:8081/v1",
+        api_key_env="MEDEVOLVE_GATEWAY_TOKEN",
+        context_window=128000,
+        max_output_tokens=4096,
+    )
+
+
+@pytest.fixture
+def harness_limits() -> HarnessLimits:
+    return HarnessLimits(
+        execution=Budget(max_model_turns=12, max_tool_calls=40),
+        learning=Budget(max_model_turns=8, max_tool_calls=10),
+        max_input_tokens=60000,
+        max_output_tokens=8000,
+        max_total_tokens=200000,
+        timeout_seconds=120,
+        learning_timeout_seconds=30,
+    )
+
+
+@pytest.fixture
+def clean_snapshot(tmp_path) -> Snapshot:
+    return make_clean_snapshot(tmp_path / "clean-state")
+
+
+@pytest.fixture
+def fake_harness_cli() -> FakeCliRegistry:
+    registry = FakeCliRegistry()
+    registry.register("openclaw", FakeHarnessCli(name="openclaw"))
+    return registry
+
+
+@pytest.fixture
+def worker_transport_factory(fake_docker, fake_harness_cli, isolation):
+    def factory(name: HarnessName, workspace) -> LocalWorkerTransport:
+        return LocalWorkerTransport(
+            name, fake_docker, workspace, fake_harness_cli.for_harness(name),
+            tool_bridge=isolation.bridge_url,
+        )
+
+    return factory
+
+
+@pytest.fixture
+def adapter_factory(isolation, bridge, worker_transport_factory, model_config, harness_limits):
+    """Build any harness adapter over substitutes: no Docker, no paid model call."""
+
+    def make(name: HarnessName, frozen: bool = True, **overrides):
+        from harnesses.adapters import create_adapter
+
+        transport_factory = overrides.pop(
+            "transport_factory", lambda workspace: worker_transport_factory(name, workspace)
+        )
+        values = {
+            "isolation": isolation,
+            "model": model_config,
+            "limits": harness_limits,
+            "transport_factory": transport_factory,
+            "recorder": bridge,
+            "frozen": frozen,
+            "learning_quiet_seconds": 0.0,
+        }
+        values.update(overrides)
+        return create_adapter(name, **values)
+
+    return make
