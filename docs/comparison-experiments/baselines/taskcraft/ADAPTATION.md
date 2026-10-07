@@ -45,7 +45,7 @@
 | `content_identifier`（文献或网页标题） | 病历记录块标签 `[记录时间] 资源类型/资源ID`（`prepare_trajectory` 的格式） |
 | `golden_answer` | 原子题为 `clean_qa` 的 `refined_answer`；扩展题见第 4 节 |
 | — | 结论抽取额外返回 `source_ids`；映射为 `Evidence(source_id, statement=结论)`，来源不在当前轨迹内即丢弃该候选 |
-| — | 深度辅助核验的 superset 关系事实同样绑定真实来源：`Evidence(source_id, statement="identifier：relation")`，来源取自反向检索返回的记录块标识，与父题证据合并去重 |
+| — | 深度辅助核验的 superset 关系事实同样绑定真实来源：`Evidence(source_id, statement="identifier：relation")`，来源取自反向检索返回的记录块标识；宽度与深度按 `(source_id, statement)` 去重，同一记录支持的不同事实均保留，证据按父题顺序或关系生成顺序排列 |
 | — | 宽度合并题的父证据取各父题自身证据的并集，不重新归因；两阶段都不新增模型事实审查环节 |
 
 病历工具按 `patient`/`subject` 参数鉴权，本次开放的患者标识随 Agent 说明一起下发，避免使用记录正文中的其他标识。

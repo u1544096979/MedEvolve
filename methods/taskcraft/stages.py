@@ -532,8 +532,9 @@ class Pipeline:
         evidence, seen = [], set()
         for parent in parents:
             for record in parent.question.evidence:
-                if record.source_id not in seen:
-                    seen.add(record.source_id)
+                key = (record.source_id, record.statement)
+                if key not in seen:
+                    seen.add(key)
                     evidence.append(record)
         return evidence
 
@@ -734,12 +735,14 @@ class Pipeline:
     def _relation_evidence(self, relations: list[dict],
                            existing: list[Evidence]) -> list[Evidence]:
         """辅助核验的来源：每条 superset 关系事实绑定支持它的记录块标识。"""
-        evidence, seen = [], {record.source_id for record in existing}
+        evidence = []
+        seen = {(record.source_id, record.statement) for record in existing}
         for hop in relations:
             records, _ = self.evidence(f"{hop['identifier']}：{hop['relation']}", hop["source_ids"])
             for record in records:
-                if record.source_id not in seen:
-                    seen.add(record.source_id)
+                key = (record.source_id, record.statement)
+                if key not in seen:
+                    seen.add(key)
                     evidence.append(record)
         return evidence
 

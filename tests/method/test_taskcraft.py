@@ -366,6 +366,30 @@ def atomic_pool(count, *, task_types=None):
         origin="atomic", locator=BLOCK_A) for index in range(count)]
 
 
+def test_width_preserves_distinct_facts_from_one_record():
+    parents = atomic_pool(3)
+    for parent, statement in zip(parents, ("事实 A", "事实 B", "事实 A")):
+        parent.question.evidence = [Evidence(source_id=BLOCK_A, statement=statement)]
+
+    evidence = Pipeline._merged_evidence(parents)
+
+    assert [(item.source_id, item.statement) for item in evidence] == [
+        (BLOCK_A, "事实 A"), (BLOCK_A, "事实 B")]
+
+
+def test_depth_preserves_relation_facts_from_parent_record():
+    pipe = Pipeline(trajectory(), [], directions(), TaskCraftParameters(),
+                    Ledger(GenerationBudget(runtime_config())))
+    existing = [Evidence(source_id=BLOCK_A, statement="父题事实")]
+    relation = {"identifier": "就诊", "relation": "包含该检验", "source_ids": [BLOCK_A]}
+
+    added = pipe._relation_evidence([relation, relation], existing)
+
+    assert [(item.source_id, item.statement) for item in added] == [
+        (BLOCK_A, "就诊：包含该检验")]
+    assert pipe._relation_evidence([relation], [*existing, *added]) == []
+
+
 def stage_pipeline(monkeypatch, fake, *, tools=None):
     """用替身运行层直接驱动一个阶段，便于核对候选的 detail 与阶段记录。"""
     monkeypatch.setattr("runtime.call_llm", fake.call_llm)
