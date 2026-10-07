@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 NUC 完成三个环境、六种方法、四个生成模型与三个公共裁判的实验一，优先完成两个生成模型。
+**Goal:** 在 NUC 完成两个环境、六种方法、四个生成模型与三个公共裁判的实验一，优先完成两个生成模型。
 
 **Architecture:** 通过 EvaluationConfig 的可选裁判列表扩展现有公共评测；矩阵调度复用配置生成器、run_experiment 和原始产物，不复制生成或评测算法。配置隔离模型，批次隔离失败，读取原始调用记录汇总成本。
 
@@ -32,7 +32,7 @@
 
 **Files:** Create scripts/run_experiment_matrix.py, experiments/matrix.py, tests/experiment/test_matrix.py。
 
-**Interfaces:** CLI 接受 `--config`，读取矩阵 JSON，字段为 models（ModelConfig 列表）、judges（三个 ModelConfig）、slugs（三环境）、methods（六方法）、cohort_root、output_root、manager_url、seed_data_overrides、model_concurrency、generation_concurrency、evaluation_concurrency、batch_size。默认使用现有 templates 与 cohort-full.json。通过调用 scripts/emit_comparison_configs.py 生成组内配置，再覆盖模型、裁判及 Linux 环境路径，验证 ExperimentConfig，调用 experiments.runner.run_experiment。CLI 不做 API 凭证加载。
+**Interfaces:** CLI 接受 `--config`，读取矩阵 JSON，字段为 models（ModelConfig 列表）、judges（三个 ModelConfig）、slugs（环境）、methods（六方法）、cohort_root、output_root、manager_url、seed_data_overrides、model_concurrency、generation_concurrency、evaluation_concurrency、batch_size。默认使用现有 templates 与 cohort-full.json。通过调用 scripts/emit_comparison_configs.py 生成组内配置，再覆盖模型、裁判及 Linux 环境路径，验证 ExperimentConfig，调用 experiments.runner.run_experiment。CLI 不做 API 凭证加载。
 
 - [ ] 新增测试：两个模型配置的 output_dir/run_id 不冲突；每个 solver 对应 generator，judges 正确；MedEvolve 仅加载本组策略；已完成批次跳过，未完成批次采用新 attempt 目录；某一组失败后另一组仍运行；未知 token 不计为已知零。
 - [ ] 运行 `/Users/guagua/code/MedEvolve/.venv/bin/python -m pytest tests/experiment/test_matrix.py -q`，确认新增行为测试先失败。
@@ -44,8 +44,8 @@
 
 **Files:** NUC /home/gwh/code/MedEvolve；运行配置与产物放在 outputs/nuc-full-experiment-20261007，凭证位于 /home/gwh/.config/medevolve/api.env（权限 600）。
 
-- [ ] 验证 outputs 归档 SHA256，解包；完成外部患者数据同步，验证 seed dump SHA256 并匹配 NUC amd64 Docker 镜像。
+- [ ] 验证 outputs 归档 SHA256，解包；完成外部患者数据同步，患者数据保存供后续环境使用，本次验证 PhysicianBench 与 MedAgentBench 两个镜像。
 - [ ] 通过用户已有 API 查询模型及结构化输出能力，验证工具调用，不输出凭证；四个模型必须分别标明可用或具体故障。修复请求参数兼容问题保持运行层接口不变。
-- [ ] 三个环境真实 smoke test，两个优先模型的端到端小样本，检查解题模型、三裁判身份、token 记录及错误分类。测量患者数与耗时，估算全量耗时。
+- [ ] 两个环境真实 smoke test，两个优先模型的端到端小样本，检查解题模型、三裁判身份、token 记录及错误分类。测量患者数与耗时，估算全量耗时。
 - [ ] 合并本分支到 main 并 push，NUC 使用同一 commit；持久启动两个模型工作线，进度与日志落盘。设置定期检查，仅在完成、故障或需要用户输入时通知；启动后读取实际任务及评测产物确认正在推进。
 - [ ] 按运行结果修复必要问题，重复失败三次时停止该故障路径并记录原因，其他独立组继续。优先两模型完成后推进余下两模型。全部结束时汇总结果与成本，关闭本次任务创建且已不用的环境实例。
