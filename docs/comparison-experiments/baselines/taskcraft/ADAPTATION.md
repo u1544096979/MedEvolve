@@ -68,7 +68,7 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 
 1. 原子过滤判据。源码 `filter_question`（`gen_atomic_task.py:418-444`）仅在核验返回 `error` 时拒绝，更严格的 `llm_score`、`agent_score` 判断在 `425-433` 被注释掉。适配保持该分支：无工具回答评分达到 1 分及以上或核验出错才拒绝，`agent_score` 只记录不用于拒绝。患者私有事实本就不在模型自身的知识内，该判据在病历域很少触发，实际筛选由「病历 Agent 能否作答」承担。
 2. superset 校验。源码把返回的 JSON 字典与字符串 `"invalid"` 比较（`gen_depth_based_task.py:67`），字典与该字符串不相等。适配按提示词声明的 `{"new_query": "valid"|"invalid"}` 判断，仅显式 `invalid` 时拒绝。
-3. 宽度结果组装。源码最终映射（`gen_width_based_task.py:234-241`）引用循环外的 `golden_answers`、`original_questions`，与当前分组不一致；评分又用响应里的稳定 ID 直接索引过滤后的局部列表（`gen_width_based_task.py:142`）。适配按每题自身的答案、原始问题与原始索引组装，评分按稳定 ID 在已通过分解检查的集合里查找；父题索引保持模型给定的顺序与重复项，越界或缺少父题的分组按模型输出失败丢弃整次响应重试（`gen_width_based_task.py:190-200` 的异常分支），不修剪成更小的组。
+3. 宽度结果组装。源码最终映射（`gen_width_based_task.py:234-241`）引用循环外的 `golden_answers`、`original_questions`，与当前分组不一致；评分又用响应里的稳定 ID 直接索引过滤后的局部列表（`gen_width_based_task.py:142`）。适配按每题自身的答案、原始问题与原始索引组装，评分按稳定 ID 在已通过分解检查的集合里查找；父题索引保持模型给定的顺序与重复项，越界或缺少父题的分组按模型输出失败丢弃整次响应重试（父题索引映射 `gen_width_based_task.py:210-221`，越界与缺字段由同一循环的 `except` 子句 `244-249` 捕获），不修剪成更小的组。
 4. 宽度合并输入。源码把 `golden_answer` 一并送入合并提示词（`gen_width_based_task.py:184-188`，与注释 `without golden_answers` 不一致）。适配保持源码行为；合并结果由后续可分解性与作答检查把关。
 5. 参考答案组织。`TaskBatch` 只有单个 `reference_answer`。深度题的参考答案是源码 `solve_trajectory` 的原始最终答案（`full_results[-1]["answer"]`，即父题答案）；子问题、中间标识及其答案与 Agent 轨迹进入 `solve_trajectory` 和阶段 trace，不拼进参考答案。宽度题按每组自身的原始答案列表无损序列化（`json.dumps(..., ensure_ascii=False)`），顺序与重复项与分组一致。`Candidate.detail` 保存阶段来源：原子题为原结论、R、患者来源与清洗答案；宽度题为 `original_questions`、`golden_answers`、原始 `indexes` 与全部 `parent_types`；深度题为 `full_results`、`solve_trajectory`、辅助来源与失败尝试。
 6. 题型。源码没有题型采样。出题提示词追加题型约束，取值限于 `directions` 中的题型；扩展题继承父题题型，跨题型合并取第一父题的题型。批量输出的选题规则见第 2 节：候选池顺序固定，选题流独立洗牌后按临床题型配额接纳，最多两题。
@@ -95,19 +95,19 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 |---|---|---|---|
 | `depth/superset` | `gen_depth_based_task.py:64` | `max_retries=3` / 每跳 1 次 | `attempts=3` / 每跳 1 次 |
 | `depth/query` | `gen_depth_based_task.py:82` | `max_retries=3` / `for _ in range(3)` | `attempts=3` / `query_attempts=3` |
-| `depth/merge` | `gen_depth_based_task.py:174`（`for _ in range(5)` 内，`:166`） | `max_retries=3` / `for _ in range(5)` | `attempts=3` / `merge_attempts=5` |
-| `depth/merge_judge` | `gen_depth_based_task.py:188`（同一循环内） | `max_retries=3` / `for _ in range(5)` | `attempts=3` / `merge_attempts=5` |
+| `depth/merge` | `gen_depth_based_task.py:174`（`for _ in range(5)` 内，`:166`） | 默认 `max_retries=3`（未显式传参） / `for _ in range(5)` | `attempts=3` / `merge_attempts=5` |
+| `depth/merge_judge` | `gen_depth_based_task.py:188`（同一循环内） | 默认 `max_retries=3`（未显式传参） / `for _ in range(5)` | `attempts=3` / `merge_attempts=5` |
 | `width/merge` | `gen_width_based_task.py:195-197` | `retry_predict`(3) / `for _ in range(3)` | `attempts=3` / `width_attempts=3` |
 | `width/decompose` | `gen_width_based_task.py:101-103` | `retry_predict`(3) / `for _ in range(3)` | `attempts=3` / `width_attempts=3` |
 | `width/answer` | `gen_width_based_task.py:135-137` | `retry_predict`(3) / `for _ in range(3)` | `attempts=3` / `width_attempts=3` |
 
-核验内部的无工具作答与评分请求按源码 `agent_tools.py:195` 的 `max_retries=1` 保持单次尝试；`VerifyAgent.forward` 的外层三次重试不变。
+`depth/merge` 与 `depth/merge_judge` 的源码内层次数取的是 `run_llm_prompt` 的默认值 `max_retries=3`（`utils.py:92`），两处调用点未显式传参；适配侧按同一数值给出 `attempts=3`。核验内部的无工具作答与评分请求按源码 `agent_tools.py:195` 的 `max_retries=1` 保持单次尝试；`VerifyAgent.forward` 的外层三次重试不变。
 25. 候选处理顺序。源码在两个入口各开多个 `ThreadPoolExecutor` 并发处理候选：结论抽取按块、原子过滤与出题按结论、核验按问题、评分判定按采样（`gen_atomic_task.py:175`、`404`、`465`，`agent_tools.py:193`）。适配全部顺序执行，并在三处提前结束：结论数达到 `max_candidate_conclusions`、生成问题数达到 `max_candidate_atomic` 后不再继续，预算耗尽时立即停止后续候选。效果是同一预算下完成的候选更少、顺序固定可复现，且提前终止与并发完成的候选集合可能不同；代价是单次运行的墙钟更长。
 26. 出题与清洗的拒绝分支。原子出题返回的 `task_type` 不在本次请求的 `directions` 内时，按拒绝记录 `atomic/question`，该结论不进入清洗与核验；`clean_qa` 返回空问题或空参考答案时，按拒绝记录 `atomic/clean`，该结论同样不生成候选。源码没有这两项判断（题型来自适配追加的约束，`clean_qa` 也不检查空值），因此效果是相同输入下适配的原子候选数可能少于源码，原因保留在 trace。
 
 ## 5. 预算口径与真实运行结果
 
-本节全部运行在分支 `codex/taskcraft-baseline` 上产生，该分支基于公共层提交 `fb76770`；两组运行都早于 main 当前的公共层，合并时需按该基线核对。每个运行目录对应的实现提交按 `git log --format='%h %cI %s'` 与目录内产物的写入时间比对确定，逐项列在 5.1–5.3。四份产物（`report.json`、`pipeline.json`、`result.json`、`config.json`）只出现在机制运行目录（5.1、5.2），由 `41fe367` 引入，在该提交落库（2026-10-07T01:29:04）之前开始的两个运行带的是它的工作区改动；公共比较目录（5.3）由公共实验入口写入，不含这四份文件。运行目录内 `pipeline.json` 的 `author_commit` 是所适配的作者源码基线，与实现提交不同。
+本节全部运行在分支 `codex/taskcraft-baseline` 上产生，该分支基于公共层提交 `fb76770`；两组运行都早于 main 当前的公共层，合并时需按该基线核对。每个运行目录对应的实现提交按 `git log --format='%h %cI %s'` 与目录内产物的写入时间比对确定，逐项列在 5.1–5.3。三份产物（`report.json`、`pipeline.json`、`result.json`）只出现在机制运行目录（5.1、5.2），由 `41fe367` 引入；`config.json` 不是机制运行独有，公共比较目录（5.3）由公共实验入口同样写出一份。在该提交落库（2026-10-07T01:29:04）之前开始的三个机制运行带的是它的工作区改动；运行目录内 `pipeline.json` 的 `author_commit` 是所适配的作者源码基线，与实现提交不同。
 
 `TaskCraftParameters` 默认值取自源码签名：`chunk_size=16384`、`max_candidate_conclusions=20`、`max_candidate_atomic=10`、`judge_samples=3`、`question_attempts=3`、`query_attempts=3`、`merge_attempts=5`、`extended_attempts=4`、`max_hops=2`、`width_attempts=3`、`request_attempts=3`；Agent 步数上限为 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10`。`max_candidate_atomic` 与共享生成预算共同决定单批候选数。
 

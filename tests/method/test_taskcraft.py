@@ -1111,6 +1111,20 @@ async def test_depth_requests_retry_inside_the_source_loops(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_inner_retry_uses_the_configured_attempt_count(monkeypatch):
+    """配置为 3 次尝试的调用点在前两次失败时恰好发起 3 次请求。"""
+    fake = FlakyRuntime(failures=("NewQuery", "NewQuery"))
+    pipeline = stage_pipeline(monkeypatch, fake)
+
+    backward = await pipeline._backward(prompts.depth_prompts(), BLOCK_A)
+
+    assert backward["query"] == "在该患者的高钾血症问题条目下，血钾结果是多少？"
+    assert stage_attempt_stages(pipeline, "depth/query") == [
+        "depth/query/attempt-1", "depth/query/attempt-2", "depth/query/attempt-3"]
+    assert fake.attempts["NewQuery"] == 3
+
+
+@pytest.mark.asyncio
 async def test_width_requests_retry_inside_the_source_loops(monkeypatch):
     """源码 retry_predict 的 MAX_RETRIES=3：宽度三处请求各自内层重试并逐次记账。"""
     fake = FlakyRuntime(failures=("MergedQuestions", "DecompositionReport", "KnowledgeAnswers"))
