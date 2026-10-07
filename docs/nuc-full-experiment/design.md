@@ -2,7 +2,7 @@
 
 ## 实验矩阵
 
-PhysicianBench、MedAgentBench、FHIR-AgentBench 分别运行 MedEvolve、TaskCraft、Workflow、SingleShot、SelfGen、EnvExplore。四个生成模型为 deepseek-v4.1-flash、gpt-5-nano、gpt-5.4-nano、gpt-4o-mini，共 72 个生成组。沿用各环境 cohort-full.json 的进化与评测患者划分、随机种子及每患者最多两题的口径。
+PhysicianBench、MedAgentBench 分别运行 MedEvolve、TaskCraft、Workflow、SingleShot、SelfGen、EnvExplore。四个生成模型为 deepseek-v4.1-flash、gpt-5-nano、gpt-5.4-nano、gpt-4o-mini，共 48 个生成组。沿用各环境 cohort-full.json 的进化与评测患者划分、随机种子及每患者最多两题的口径。
 
 解题模型与本组生成模型相同。质量与难度分别由 deepseek-v4.1-flash、gpt-5-nano、gpt-5.4-nano 独立打分，保留三个模型的原始评分及理由，使用现有中位数聚合。事实核验及完成判断使用统一的 deepseek-v4.1-flash。核验未通过的题目保持现有跳过后续评测规则，不把运行失败算作低质量或高难度。
 
@@ -12,9 +12,11 @@ PhysicianBench、MedAgentBench、FHIR-AgentBench 分别运行 MedEvolve、TaskCr
 
 对于工具调用与 response_format 无法同时使用的 API，ModelConfig 通过 structured_agent_output=false 选择提示词约束 Agent 最终 JSON 输出；最终答案仍由原有 Pydantic schema 校验。此选项只影响工具 Agent，单次结构化调用与默认模型配置保持现有行为。
 
+DeepSeek V4.1 Flash 优先通过 CC Switch 的 OpenCode Go 配置调用，主提供方明确报告额度耗尽时改用 OpenLux 同名模型。其余模型使用 OpenLux。ModelConfig 的可选 fallback 保存备用 ModelConfig；切换条件为额度耗尽，普通限流、认证失败、格式错误及环境错误不触发提供方切换。保留失败主调用与备用调用的记录和用量，结果标明实际提供方。
+
 ## 运行顺序与并发
 
-优先完成 DeepSeek V4.1 Flash 和 GPT-5 Nano 的三个环境、六种方法及公共评测，再推进其余两个生成模型。两条模型工作线并行；每条工作线串行运行环境和批次，批内生成与评测并发初始均为 12。每个运行最多两个逻辑容器实例，实例在只读阶段共享，NUC 约 30 GiB 内存保留宿主余量。按实测资源与接口响应调整并发，调整必须记录在运行配置。
+优先完成 DeepSeek V4.1 Flash 和 GPT-5 Nano 的两个环境、六种方法及公共评测，再推进其余两个生成模型。两条模型工作线并行；每条工作线串行运行环境和批次，批内生成与评测并发初始均为 12。每个运行最多两个逻辑容器实例，实例在只读阶段共享，NUC 约 30 GiB 内存保留宿主余量。按实测资源与接口响应调整并发，调整必须记录在运行配置。
 
 批次完成状态用于重启跳过；未完成批次保留到独立 attempt 目录重新运行，不覆盖失败产物。单个方法或批次失败不阻断其他独立组。全量覆盖与失败清单分别报告，不能把存在漏跑或公共评测故障的矩阵声明为全部完成。
 
@@ -26,6 +28,4 @@ PhysicianBench、MedAgentBench、FHIR-AgentBench 分别运行 MedEvolve、TaskCr
 
 ## 环境与验收
 
-同步代码、患者数据和三个 Docker 环境，保留旧结果备份，仅清理已识别的旧实验服务。先验证三个真实环境及模型结构化输出和工具调用；再运行小样本端到端实验，确认三裁判模型身份、解题模型身份及 token 落盘后启动全量。运行保存在 NUC 的持久进程中，并设置本会话的定期检查以处理实际故障。
-
-FHIR-AgentBench 的种子清单固定本机架构的 HAPI 与 PostgreSQL 摘要，启动时直接使用已校验清单中的镜像，避免镜像校验与实际容器使用不同来源。数据库 dump 与资源探针保持原校验。
+同步代码、患者数据和 Docker 环境，保留旧结果备份，仅清理已识别的旧实验服务。先验证两个真实环境及模型结构化输出和工具调用；再运行小样本端到端实验，确认三裁判模型身份、解题模型身份及 token 落盘后启动全量。运行保存在 NUC 的持久进程中，并设置本会话的定期检查以处理实际故障。
