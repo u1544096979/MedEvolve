@@ -15,6 +15,7 @@ from contracts import (
     TaskBatch, TaskType,
 )
 
+from environments.fitting import fit_trajectory, generation_budget_chars
 from methods.common import normalize_usage, output_constraints, validate_task_batch
 
 METHOD_MODULES = {
@@ -190,6 +191,20 @@ async def run_experiment(config: ExperimentConfig) -> None:
         finally:
             await release_environment(config.environment, instance)
 
+        # 生成输入受模型上下文限制，超预算患者按记录优先级裁剪；评测仍用原始轨迹。
+        generator_model = config.runtime.models["generator"]
+        budget = generation_budget_chars(
+            context_tokens=generator_model.context_window or 128000,
+            output_tokens=generator_model.max_output_tokens or 16384,
+        )
+        generation = {}
+        for patient, trajectory in trajectories.items():
+            fitted = fit_trajectory(trajectory, budget)
+            if fitted is not trajectory:
+                _save(root / "fitted_trajectories" / f"{patient}.json",
+                      fitted.model_dump(mode="json"))
+            generation[patient] = fitted
+
         guidance = None
         if config.guidance_path:
             guidance = ExplorationGuidance.model_validate_json(
@@ -275,13 +290,13 @@ async def run_experiment(config: ExperimentConfig) -> None:
                             return RunResult(trace=[], usage={}, status="budget_exhausted",
                                              error="Generator model budget exhausted")
                         if config.method == "medevolve":
-                            result = await generator(trajectories[patient], guidance,
+                            result = await generator(generation[patient], guidance,
                                                      current, directions, config.runtime)
                         elif free_selection:
-                            result = await generator(trajectories[patient], config.environment,
+                            result = await generator(generation[patient], config.environment,
                                                      task_types, config.runtime)
                         else:
-                            result = await generator(trajectories[patient], config.environment,
+                            result = await generator(generation[patient], config.environment,
                                                      directions, config.runtime)
                         result = (validate_task_batch(result, task_types=task_types) if free_selection
                                   else validate_task_batch(result, directions,
