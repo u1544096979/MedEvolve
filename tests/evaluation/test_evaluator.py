@@ -413,6 +413,16 @@ def test_evaluation_judges_allow_empty_or_three(harness):
     assert EvaluationConfig(runtime=harness.config.runtime, judges=judges).judges == judges
 
 
+def test_evaluation_judges_reject_duplicate_model_names(harness):
+    duplicate_judges = [
+        ModelConfig(model="judge-a", base_url=f"https://provider-{index}.test",
+                    api_key_env="UNUSED")
+        for index in range(3)
+    ]
+    with pytest.raises(ValueError, match="distinct"):
+        EvaluationConfig(runtime=harness.config.runtime, judges=duplicate_judges)
+
+
 def test_configured_judges_run_for_quality_and_difficulty_only(harness):
     h = harness
     h.config = EvaluationConfig(runtime=h.config.runtime, judges=[
@@ -440,6 +450,30 @@ def test_configured_judges_run_for_quality_and_difficulty_only(harness):
     assert any(item == {"role": "quality", "model": "judge-0", "judge_index": 0}
                for item in identities)
     assert all("api_key" not in item for item in identities)
+
+
+def test_explicit_judges_do_not_require_legacy_quality_or_difficulty_roles(harness):
+    h = harness
+    models = {role: model for role, model in h.config.runtime.models.items()
+              if role not in {"quality", "difficulty"}}
+    judges = [ModelConfig(model=f"judge-{index}", api_key_env="UNUSED")
+              for index in range(3)]
+    h.config = EvaluationConfig(
+        runtime=RuntimeConfig(models=models, budgets=h.config.runtime.budgets),
+        judges=judges,
+    )
+
+    result = evaluate(h)
+
+    assert result.status == "completed"
+    assert result.quality is not None
+    assert result.difficulty is not None
+    assert [call["model"].model for call in h.model_calls
+            if call["output_type"] is QualityJudgment] == [
+                "judge-0", "judge-1", "judge-2"]
+    assert [call["model"].model for call in h.model_calls
+            if call["output_type"] is DifficultyJudgment] == [
+                "judge-0", "judge-1", "judge-2"]
 
 
 def test_difficulty_receives_only_task_and_computed_complexity(harness):

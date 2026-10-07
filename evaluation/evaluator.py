@@ -210,7 +210,10 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
         env = import_module("environments")
         phase = "model_error"
         runtime = import_module("runtime")
-        for role in ("verifier", "quality", "difficulty", "solver", "completion"):
+        required_roles = ["verifier", "solver", "completion"]
+        if not config.judges:
+            required_roles.extend(("quality", "difficulty"))
+        for role in required_roles:
             if role not in config.runtime.models:
                 raise ValueError(f"missing evaluation model: {role}")
         for role in ("verifier", "solver"):
