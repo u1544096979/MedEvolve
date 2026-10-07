@@ -32,6 +32,7 @@ _TRANSIENT_PATTERNS = (
     r"\bapi(?:connection)?timeouterror\b",
     r"defenderforai.{0,160}(?:exceeded|timeout)",
     r"you have used invalid tokens multiple times",
+    r"rate\s+limit\s+exceeded",
     r"\brate_limit_exceeded\b",
 )
 _MAX_ATTEMPTS = 3

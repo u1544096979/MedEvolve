@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import asyncio
 from agents import FunctionTool
@@ -6,6 +8,7 @@ from contracts import Budget, ModelConfig, RunResult, SolverAnswer
 from runtime import call_llm, run_agent
 from runtime import providers
 from runtime import execution
+from experiments.matrix import summarize_costs
 
 
 PRIMARY = ModelConfig(
@@ -88,7 +91,7 @@ async def test_quota_exhaustion_falls_back_once_and_caches_provider(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_does_not_trigger_fallback(monkeypatch):
+async def test_upstream_rate_limit_retries_and_costs_each_attempt_once(monkeypatch, tmp_path):
     calls, delays = [], []
 
     async def fake_sleep(delay):
@@ -96,7 +99,10 @@ async def test_rate_limit_does_not_trigger_fallback(monkeypatch):
 
     async def fake_call(**kwargs):
         calls.append(kwargs["model"])
-        return result("failed", error="Error code 429: rate_limit_exceeded")
+        return result("failed", error=("429 Upstream request failed: Rate limit exceeded. "
+            "Please try again later."), usage={
+                "input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+            })
 
     monkeypatch.setattr(execution, "call_llm", fake_call)
     monkeypatch.setattr(providers.asyncio, "sleep", fake_sleep)
@@ -106,6 +112,20 @@ async def test_rate_limit_does_not_trigger_fallback(monkeypatch):
     assert calls == [PRIMARY, PRIMARY, PRIMARY]
     assert delays == [1, 2]
     assert not providers._EXHAUSTED_PROVIDERS
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "config.json").write_text(json.dumps({
+        "method": "singleshot", "environment": {"name": "PhysicianBench"},
+        "runtime": {"models": {"generator": {"model": PRIMARY.model}}},
+        "evaluation": {"runtime": {"models": {}}},
+    }))
+    (run_dir / "runs.json").write_text(json.dumps([{
+        "stage": "evaluation/generate/0", "result": actual.model_dump(mode="json"),
+    }]))
+    costs = summarize_costs([run_dir])
+    assert costs["totals"]["total_tokens"] == 6
+    assert len(costs["records"]) == 3
+    assert all(record["base_url"] == PRIMARY.base_url for record in costs["records"])
 
 
 @pytest.mark.asyncio
