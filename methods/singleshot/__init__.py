@@ -31,7 +31,7 @@ async def generate_tasks(
     if environment.name != trajectory.environment:
         raise ValueError("Environment configuration does not match the trajectory")
     constraints = output_constraints(task_types=task_types)
-    budget = GenerationBudget(runtime)
+    budget = GenerationBudget(runtime, environment.name)
     await budget.call_llm(
         "generate",
         instructions=GENERATION + "\n" + constraints,

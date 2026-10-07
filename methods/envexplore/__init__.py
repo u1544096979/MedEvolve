@@ -32,7 +32,7 @@ async def generate_tasks(
         raise ValueError("Patient trajectory and environment do not match")
     if not environment_guidance.guidance.strip():
         raise ValueError("environment guidance must not be empty")
-    budget = GenerationBudget(runtime)
+    budget = GenerationBudget(runtime, environment.name)
     run = await budget.call_llm(
         "generate",
         instructions=GENERATION + "\n" + output_constraints(directions),

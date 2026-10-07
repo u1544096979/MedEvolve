@@ -14,7 +14,7 @@ def model(window=12000):
 
 
 def trajectory():
-    return PatientTrajectory(patient_id="train", environment="test", text='日期"病历\\记录' * 8000, sources=[])
+    return PatientTrajectory(patient_id="train", environment="PhysicianBench", text='日期"病历\\记录' * 8000, sources=[])
 
 
 def test_context_truncation_preserves_json_and_original_cache():

@@ -15,7 +15,7 @@ def draft(slots=(0, 1), version="初稿", kinds=None):
     kinds = kinds or TYPES[:2]
     return {"batch": {"questions": [dict(
         instruction=f"{kinds[i]}-{version}", task_type=kinds[i],
-        reference_answer=f"答案-{version}", decision_point=None,
+        reference_answer=f"答案-{version}", decision_point=None, execution_requirement="read_only",
         evidence=[dict(source_id="Observation/1", statement="原始记录事实")],
     ) for i in slots]}, "direction_indices": list(slots)}
 
@@ -81,6 +81,8 @@ async def test_all_five_types_and_early_stop(monkeypatch, env, kind):
     assert kept["kept_indices"] == [0, 1]
     assert [q["candidate_index"] for q in kept["feedback"]["questions"]] == [0, 1]
     assert kept["output"] == d["batch"]
+    assert all("本轮实验只允许基于既有患者记录生成查询任务" in call["instructions"]
+               for call in calls)
     for call in calls:
         body = json.loads(call["input_text"])
         assert body["trajectory"] == patient.model_dump(mode="json")

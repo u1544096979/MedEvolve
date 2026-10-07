@@ -296,6 +296,7 @@ class Pipeline:
                 question=GeneratedQuestion(
                     instruction=item["question"], task_type=item["task_type"],
                     reference_answer=item["answer"], evidence=evidence,
+                    execution_requirement=item["execution_requirement"],
                 ),
                 origin="atomic", locator=self.locator(source_ids),
                 detail={"conclusion": item["conclusion"], "relation": item["relation"],
@@ -341,6 +342,7 @@ class Pipeline:
         # 源码 generate_initial_question 返回 clean_qa 的结果：问题用清洗后的文本，答案用 refined_answer。
         return {"question": cleaned.question, "task_type": parsed.task_type,
                 "answer": cleaned.refined_answer, "relation": conclusion.R,
+                "execution_requirement": cleaned.execution_requirement,
                 "conclusion": conclusion.conclusion, "source_ids": list(conclusion.source_ids),
                 "locator": locator}
 
@@ -396,6 +398,7 @@ class Pipeline:
                 question=GeneratedQuestion(
                     instruction=item["question"], task_type=task_type,
                     reference_answer=self._merged_answer(item), evidence=self._merged_evidence(parents),
+                    execution_requirement=item["execution_requirement"],
                 ),
                 origin="width", parents=[parent.question.instruction for parent in parents],
                 detail={"original_questions": item["original_questions"],
@@ -424,6 +427,7 @@ class Pipeline:
                 "index": len(groups),
                 "question": item.question,
                 "content_identifier": item.content_identifier,
+                "execution_requirement": item.execution_requirement,
                 "original_indexes": list(item.index),
                 "original_questions": [parent.question.instruction for parent in parents],
                 "golden_answers": [parent.question.reference_answer for parent in parents],
@@ -613,6 +617,7 @@ class Pipeline:
             question=GeneratedQuestion(
                 instruction=full_query, task_type=parent.question.task_type,
                 reference_answer=self._chain_answer(initial, full_results), evidence=evidence,
+                execution_requirement="read_only",
             ),
             origin="depth", parents=[parent.question.instruction],
             locator=last_identifier,

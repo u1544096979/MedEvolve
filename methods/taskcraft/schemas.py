@@ -1,6 +1,7 @@
 """各阶段模型输出结构，对应源码提示词声明的 JSON 约定。"""
 
 import json
+from typing import Literal
 
 from pydantic import BaseModel, Field, JsonValue, field_validator
 
@@ -28,12 +29,14 @@ class InitialQuestion(BaseModel):
     Q: str
     # 医疗适配新增：该题属于哪个请求的题型。
     task_type: str = ""
+    execution_requirement: Literal["read_only"] = "read_only"
 
 
 class CleanedQuestion(BaseModel):
     question: str
     original_answer: str = ""
     refined_answer: str
+    execution_requirement: Literal["read_only"] = "read_only"
 
 
 class AnswerList(BaseModel):
@@ -52,11 +55,13 @@ class SupersetCheck(BaseModel):
 
 class NewQuery(BaseModel):
     new_query: str
+    execution_requirement: Literal["read_only"] = "read_only"
 
 
 class QueryMerge(BaseModel):
     analysis: str = ""
     new_query: str
+    execution_requirement: Literal["read_only"] = "read_only"
 
 
 class QueryJudgement(BaseModel):
@@ -75,6 +80,7 @@ class MergedQuestion(BaseModel):
     question: str
     index: list[int]
     content_identifier: str = ""
+    execution_requirement: Literal["read_only"] = "read_only"
 
 
 class MergedQuestions(BaseModel):

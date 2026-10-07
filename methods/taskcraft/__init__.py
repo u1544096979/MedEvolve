@@ -68,7 +68,7 @@ async def generate_tasks(
     if len(directions) != 2:
         raise ValueError("directions must contain exactly two generation positions")
     settings = parameters or TaskCraftParameters()
-    budget = GenerationBudget(runtime)
+    budget = GenerationBudget(runtime, environment.name)
     ledger = Ledger(budget)
     pipeline = Pipeline(trajectory, [], directions, settings, ledger, random_seed)
     if trajectory.environment != environment.name:

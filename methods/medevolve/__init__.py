@@ -20,6 +20,7 @@ from contracts import (
     TaskBatch,
 )
 from environments import create_environment, get_tools, release_environment
+from environments.capabilities import capability_instructions, read_only_scope_instructions
 from runtime import call_llm, run_agent
 from methods.common import USAGE_FIELDS, normalize_usage, output_constraints, validate_task_batch
 from methods.generation import trajectory_payload
@@ -87,7 +88,9 @@ async def explore_data(
             input_text = compression_input(cache[patient_id], model)
         except ValueError as exc:
             return json.dumps({"error": str(exc)})
-        run = await call_llm(instructions=COMPRESSION, input_text=input_text,
+        environment = trajectories[0].environment if trajectories else None
+        instructions = COMPRESSION + ("\n\n" + capability_instructions(environment) if environment else "")
+        run = await call_llm(instructions=instructions, input_text=input_text,
                              output_type=CompressedTrajectory, model=model)
         compression_runs.append({"patient_id": patient_id, "result": run.model_dump(mode="json")})
         if run.status != "completed" or run.output is None:
@@ -98,7 +101,8 @@ async def explore_data(
                           ensure_ascii=False)
 
     result = await run_agent(
-        instructions=DATA_EXPLORATION,
+        instructions=DATA_EXPLORATION + ("\n\n" + capability_instructions(trajectories[0].environment)
+                                         if trajectories else ""),
         input_text="请先列出开放患者，再读取缓存轨迹，归纳抽象数据指导。",
         tools=[list_patients, read_trajectory, compress_trajectory],
         output_type=DataExploration,
@@ -130,7 +134,7 @@ async def explore_environment(
         tools = await get_tools(instance, patient_ids,
                                 tool_result_limit=config.tool_result_limit)
         result = await run_agent(
-            instructions=ENVIRONMENT_EXPLORATION,
+            instructions=ENVIRONMENT_EXPLORATION + "\n\n" + capability_instructions(config.name),
             input_text=json.dumps({"environment": instance.environment, "patient_ids": patient_ids},
                                   ensure_ascii=False),
             tools=tools, output_type=EnvironmentExploration,
@@ -167,7 +171,8 @@ async def generate_tasks(
     if len(directions) != 2:
         raise ValueError("directions must contain exactly two generation positions")
     result = await call_llm(
-        instructions=GENERATION + "\n" + output_constraints(directions),
+        instructions=GENERATION + "\n" + output_constraints(directions) + "\n\n"
+                     + capability_instructions(trajectory.environment),
         input_text=json.dumps(
             {
                 "trajectory": _trajectory_input(trajectory),
@@ -190,7 +195,9 @@ async def analyze_feedback(
     runtime: RuntimeConfig,
 ) -> RunResult:
     return await call_llm(
-        instructions=FEEDBACK,
+        instructions=FEEDBACK + ("\n\n" + capability_instructions(
+            tasks[0].environment if tasks else trajectories[0].environment)
+                                 if tasks or trajectories else ""),
         input_text=json.dumps(
             {
                 "tasks": [task.model_dump(mode="json") for task in tasks],
@@ -208,7 +215,7 @@ async def update_strategy(
     strategy: Strategy, feedback: Feedback, runtime: RuntimeConfig
 ) -> RunResult:
     return await call_llm(
-        instructions=STRATEGY_UPDATE,
+        instructions=STRATEGY_UPDATE + "\n\n" + read_only_scope_instructions(),
         input_text=json.dumps(
             {
                 "strategy": strategy.model_dump(mode="json"),

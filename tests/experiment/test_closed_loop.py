@@ -72,7 +72,8 @@ def install_dependencies(monkeypatch, failure=False, preparation_failure=False):
             return RunResult(trace=[{"raw_response": "unparsed"}], usage={}, status="failed", error="parse failure")
         count = 1 if failure and calls["generate"] == 4 else 2
         return result({"questions": [{"instruction": "question", "task_type": d.task_type,
-                                      "reference_answer": "answer", "evidence": []}
+                                      "reference_answer": "answer", "evidence": [],
+                                      "execution_requirement": "read_only"}
                                      for d in directions[:count]]})
 
     async def evaluate(task, trajectory, environment, config, environments=None):
@@ -215,7 +216,8 @@ def test_taskcraft_generation_receives_the_experiment_seed(tmp_path, monkeypatch
         assert len(directions) == 2 and environment.name == "fake"
         generated.append((trajectory.patient_id, random_seed))
         return result({"questions": [{"instruction": "问题", "task_type": directions[0].task_type,
-                                      "reference_answer": "答案", "evidence": []}]})
+                                      "reference_answer": "答案", "evidence": [],
+                                      "execution_requirement": "read_only"}]})
 
     async def evaluate(task, trajectory, environment, config, environments=None):
         return EvaluationResult(task_id=task.id, observed_state={}, status="invalid", runs=[])
@@ -248,7 +250,7 @@ def test_exhausted_generation_is_evaluated_only_within_budget(tmp_path, monkeypa
                 "instruction": "患者诊断是什么", "task_type": directions[0].task_type,
                 "reference_answer": "答案", "evidence": [{
                     "source_id": "Condition/1", "statement": "记录中的诊断"
-                }], "decision_point": None,
+                }], "decision_point": None, "execution_requirement": "read_only",
             }]},
             trace=[], status="budget_exhausted", error="Cumulative generator budget exhausted",
             usage={"model_turns": runtime.budgets["generator"].max_model_turns + int(over_budget),

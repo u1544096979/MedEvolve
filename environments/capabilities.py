@@ -47,11 +47,16 @@ def get_capabilities(name: str) -> dict:
         raise ValueError(f"Unsupported environment: {name}") from exc
 
 
+def read_only_scope_instructions() -> str:
+    """Return the shared task-generation restriction independent of environment facts."""
+    return _READ_ONLY_LIMIT
+
+
 def capability_instructions(name: str) -> str:
     """Return environment facts and the common read-only constraint for prompts."""
     capability = get_capabilities(name)
     semantics = capability["operation_semantics"]
     return (
         f"环境：{name}。实际操作语义：读取：{semantics['reads']}；写入：{semantics['writes']}。"
-        f"{capability['experiment_limit']}"
+        f"{read_only_scope_instructions()}"
     )

@@ -46,7 +46,9 @@ async def test_shared_exploration_paths_release_and_cost(monkeypatch, name, fail
         assert result.status == "failed" and result.output is None
         return
     assert agent.await_args.kwargs["tools"] is tools
-    assert agent.await_args.kwargs["instructions"] == medevolve.ENVIRONMENT_EXPLORATION
+    instructions = agent.await_args.kwargs["instructions"]
+    assert instructions.startswith(medevolve.ENVIRONMENT_EXPLORATION)
+    assert "本轮实验只允许基于既有患者记录生成查询任务" in instructions
     assert agent.await_args.kwargs["model"] is runtime.models["environment_explorer"]
     assert result.usage == original.usage
     assert result.trace[0] == original.trace[0]

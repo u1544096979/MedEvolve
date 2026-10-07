@@ -65,7 +65,7 @@ def runtime():
 def trajectory(patient_id):
     return PatientTrajectory(
         patient_id=patient_id,
-        environment="test",
+        environment="PhysicianBench",
         text=f"{patient_id} 的时间序列记录",
         sources=[Evidence(source_id=f"record-{patient_id}", statement="缓存证据")],
     )
@@ -118,8 +118,8 @@ async def test_data_exploration_reads_only_supplied_cache(method, runtime, monke
 async def test_environment_exploration_releases_independent_instance(
     method, runtime, monkeypatch, failure
 ):
-    config = EnvironmentConfig(name="test", manager_url="http://unused", seed_data="seed")
-    instance = EnvironmentInstance(instance_id="isolated-exploration", endpoint="http://unused", environment="test")
+    config = EnvironmentConfig(name="PhysicianBench", manager_url="http://unused", seed_data="seed")
+    instance = EnvironmentInstance(instance_id="isolated-exploration", endpoint="http://unused", environment="PhysicianBench")
     create = AsyncMock(return_value=instance)
     tools = AsyncMock(return_value=[])
     release = AsyncMock()
@@ -162,7 +162,7 @@ async def test_generation_feedback_update_and_next_generation(method, runtime, m
     )
     question = GeneratedQuestion(
         instruction="综合病程解释诊断", task_type=direction.task_type,
-        reference_answer="参考解释", evidence=patient.sources,
+        reference_answer="参考解释", evidence=patient.sources, execution_requirement="read_only",
     )
     task = Task(
         **question.model_dump(), id="task-1", patient_id=patient.patient_id,
@@ -203,6 +203,8 @@ async def test_generation_feedback_update_and_next_generation(method, runtime, m
     assert payloads[1]["evaluations"][0]["solver_run"]["trace"] == [{"tool_error": "offline"}]
     assert payloads[1]["evaluations"][0]["observed_state"] == {"write_applied": False}
     assert set(payloads[2]) == {"strategy", "feedback"}
+    assert "本轮实验只允许基于既有患者记录生成查询任务" in calls[2]["instructions"]
+    assert "本轮实验只允许基于既有患者记录生成查询任务" in calls[1]["instructions"]
     assert payloads[3]["guidance"] == payloads[0]["guidance"]
     assert payloads[3]["strategy"]["generation_guidance"] == updated.generation_guidance
     method.run_agent.assert_not_awaited()
@@ -223,7 +225,7 @@ async def test_generation_accepts_only_requested_task_types_and_allows_short_bat
     skipped = GenerationDirection(task_type="治疗规划", difficulty="基础", weight=1)
     strategy = Strategy(generation_guidance="指导", allocation=[allowed])
     good = GeneratedQuestion(
-        instruction="诊断", task_type=allowed.task_type, reference_answer="答案",
+        instruction="诊断", task_type=allowed.task_type, reference_answer="答案", execution_requirement="read_only",
         evidence=patient.sources,
     )
     call = AsyncMock(return_value=completed(TaskBatch(questions=[good])))

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from contracts import (Budget, GenerationDirection, RunResult, RuntimeConfig, TaskBatch,
                        TaskType)
+from environments.capabilities import capability_instructions
 
 RunStatus = Literal["completed", "budget_exhausted", "failed"]
 
@@ -68,7 +69,8 @@ def output_constraints(directions: list[GenerationDirection] | None = None, *,
                       candidate_pool=candidate_pool)
     fields = (
         f"返回 TaskBatch JSON，questions 最多{max_questions}题；证据不足可少出题或返回空列表。"
-        "每题包含 instruction、task_type、reference_answer、evidence、decision_point。"
+        "每题包含 instruction、task_type、reference_answer、evidence、decision_point、execution_requirement。"
+        'execution_requirement 必须为 "read_only"。'
         "instruction 和 reference_answer 非空；evidence 逐条包含可定位的 source_id 和事实 statement。"
         "decision_point 必须为 null。不要附加患者、环境、轮次、方法或任务编号。"
     )
@@ -108,6 +110,8 @@ def validate_task_batch(result: RunResult, directions: list[GenerationDirection]
         for question in batch.questions:
             if question.decision_point is not None:
                 raise ValueError("decision_point must be null until time filtering is supported")
+            if question.execution_requirement != "read_only":
+                raise ValueError("execution_requirement must be read_only")
             if not question.instruction.strip() or not question.reference_answer.strip():
                 raise ValueError("instruction and reference_answer must not be empty")
             if any(not e.source_id.strip() or not e.statement.strip() for e in question.evidence):
@@ -145,10 +149,16 @@ def summarize_results(records: list[tuple[str, RunResult]], *, output: TaskBatch
 class GenerationBudget:
     """One instance per patient batch; execute sequential stages through this object."""
 
-    def __init__(self, runtime: RuntimeConfig):
+    def __init__(self, runtime: RuntimeConfig, environment: str | None = None):
         self.model = runtime.models["generator"]
         self.limit = runtime.budgets["generator"]
         self.records: list[tuple[str, RunResult]] = []
+        self.environment = environment
+
+    def _instructions(self, instructions: str) -> str:
+        if self.environment is None:
+            return instructions
+        return f"{instructions}\n\n{capability_instructions(self.environment)}"
 
     def remaining(self) -> Budget:
         used = summarize_results(self.records).usage
@@ -174,13 +184,13 @@ class GenerationBudget:
 
     async def call_llm(self, stage: str, *, instructions: str, input_text: str, output_type: type[BaseModel]) -> RunResult:
         return await self._execute(stage, importlib.import_module("runtime").call_llm,
-                                   dict(instructions=instructions, input_text=input_text, output_type=output_type),
+                                   dict(instructions=self._instructions(instructions), input_text=input_text, output_type=output_type),
                                    agent=False)
 
     async def run_agent(self, stage: str, *, instructions: str, input_text: str,
                         tools: list, output_type: type[BaseModel]) -> RunResult:
         return await self._execute(stage, importlib.import_module("runtime").run_agent,
-                                   dict(instructions=instructions, input_text=input_text,
+                                   dict(instructions=self._instructions(instructions), input_text=input_text,
                                         tools=tools, output_type=output_type), agent=True)
 
     def finish(self, directions: list[GenerationDirection] | None = None, *,

@@ -38,7 +38,7 @@ def trajectory(name="PhysicianBench"):
 def question(task_type="诊断与解释"):
     return GeneratedQuestion(
         instruction="解释病程变化", task_type=task_type, reference_answer="参考答案",
-        evidence=[Evidence(source_id="Observation/o1", statement="观测")],
+        evidence=[Evidence(source_id="Observation/o1", statement="观测")], execution_requirement="read_only",
     )
 
 
@@ -63,7 +63,7 @@ async def test_full_sources_and_same_type_questions(name, monkeypatch):
         max_model_turns=8, max_tool_calls=40)})
     q = GeneratedQuestion(instruction="说明记录内容", task_type="诊断与解释",
         reference_answer="记录内容", evidence=[Evidence(
-            source_id="Patient/p", statement="gender=female")])
+            source_id="Patient/p", statement="gender=female")], execution_requirement="read_only")
     call = AsyncMock(return_value=RunResult(output=TaskBatch(
         questions=[q, q]).model_dump(mode="json"), trace=[],
         usage={"model_turns": 1, "tool_calls": 0}, status="completed"))
@@ -78,6 +78,8 @@ async def test_full_sources_and_same_type_questions(name, monkeypatch):
     call.assert_awaited_once()
     agent.assert_not_awaited()
     request = call.await_args.kwargs
+    assert "本轮实验只允许基于既有患者记录生成查询任务" in request["instructions"]
+    assert 'execution_requirement 必须为 "read_only"' in request["instructions"]
     assert request["output_type"] is TaskBatch
     assert request["model"] is cfg.models["generator"]
     payload = json.loads(request["input_text"])

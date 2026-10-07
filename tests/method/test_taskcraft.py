@@ -466,6 +466,11 @@ async def test_atomic_stage_filters_scores_and_binds_patient_evidence(patched, e
     batch = TaskBatch.model_validate(result.output)
     assert state["patients"] == [PATIENT]
     assert state["created"] == state["released"] == 1
+    assert all("本轮实验只允许基于既有患者记录生成查询任务"
+               in instructions for instructions in fake.llm_instructions)
+    assert all("本轮实验只允许基于既有患者记录生成查询任务"
+               in instructions for instructions in fake.agent_instructions)
+    assert all(question.execution_requirement == "read_only" for question in batch.questions)
     # 内置核验：每题先做无工具回答判断，再交给病历工具 Agent 检索并作答。
     atomic = "该患者第 1 项记录"
     assert len([item for item in fake.log if item == ("llm", "AnswerList", item[2])
@@ -570,6 +575,8 @@ async def test_depth_extension_depends_on_parent_and_keeps_sub_query_chain(patch
     assert result.status == "completed"
     assert TaskBatch.model_validate(result.output).questions
     pool = pipeline_pool(result)
+    assert all(candidate["question"]["execution_requirement"] == "read_only"
+               for candidate in pool)
     atomic = [entry for entry in pool if entry["origin"] == "atomic"]
     # 每个深度题都挂在某道原子题下；第二道原子题的证据是 BLOCK_B。
     depth = [entry for entry in pool if entry["origin"] == "depth"]

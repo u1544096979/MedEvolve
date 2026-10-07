@@ -122,7 +122,7 @@ async def generate_tasks(
 ) -> RunResult:
     """Run the fixed locate, per-type generate and internal check stages for one patient."""
     output_constraints(directions, candidate_pool=True)
-    budget = GenerationBudget(runtime)
+    budget = GenerationBudget(runtime, environment.name)
 
     located = await budget.call_llm(
         "locate",
