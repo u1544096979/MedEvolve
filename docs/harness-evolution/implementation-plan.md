@@ -12,8 +12,8 @@
 
 1. 以 [实验设计](design.md) 为准：两环境、六任务来源、四基座，种子 42、重复 1 次，各组串行运行。
 2. 每来源抽样后按任务数 70/30 划分；训练数量向下取整，两集合非空、ID 不重叠，四基座使用相同划分。
-3. 每道训练题新会话，同题执行与反馈可以共用会话；合成任务只读，官方 Benchmark 按原生要求开放工具。每次尝试新医疗实例，执行、评审或评分结束后才释放，逐题实例不进入生成流程共享实例池。
-4. 固定程序版本、模型和原生限制；公共评审复用 `runtime/context.py` 的输入预算与完整记录选取，原生 Agent 内部调用由自身限制。执行、学习、评审及两类测试用量分开记录，缺少 usage 时标记未知。后台调用限制不声明为统一硬预算。
+3. 每道训练题新会话，同题执行与反馈可以共用会话；合成任务只读，原生 Benchmark 接入时按其原生要求开放工具。每次尝试新医疗实例，执行、评审或评分结束后才释放，逐题实例不进入生成流程共享实例池。
+4. 固定程序版本、模型和原生限制；公共评审复用 `runtime/context.py` 的输入预算与完整记录选取，原生 Agent 内部调用由自身限制。执行、学习、评审及测试用量分开记录，缺少 usage 时标记未知。后台调用限制不声明为统一硬预算。
 5. 保留已有未提交修改。替代模型测试不产生付费请求；真实验收及正式实验只使用已授权模型和预算。四基座真实接入全部通过后才启动完整实验。
 
 ## 文件与职责
@@ -23,7 +23,7 @@
 | `contracts.py`、`harnesses/contracts.py`、`harnesses/datasets.py`、`configs/harness-evolution.json` | 项目共享数据契约、Harness 接口、任务划分和本地程序配置 |
 | `harnesses/local.py`、`harnesses/snapshots.py` | 本地子进程、初始目录、测试临时目录、经验保存 |
 | `harnesses/runners/{openclaw,hermes,ace,reflexion}.py` | 四份原生运行脚本，执行、学习和经验导出 |
-| `harnesses/medical_bridge.py`、`harnesses/feedback.py`、`harnesses/benchmarks/` | 复用工具与反馈，接入原生评分 |
+| `harnesses/medical_bridge.py`、`harnesses/feedback.py` | 工具会话与完成评审复用 |
 | `experiments/harness_train.py`、`experiments/harness_test.py`、`experiments/harness_summary.py` | 两条命令、串行调度与结果汇总 |
 
 新增 Python 包包含 `__init__.py`，沿用 `pyproject.toml` 的 `harnesses*` 包发现。各基座依赖安装在各自环境，不合并到项目依赖中。工具桥绑定本地地址，使用现有调用身份和患者限制。
@@ -150,11 +150,39 @@ assert directory_digest(final_snapshot.path) == final_snapshot.digest
 
 `native_calls` 为测试注入官方组件的调用记录；训练测试也须断言其大于零，不能通过完全跳过官方组件取得通过结果。
 
-## 任务 4：生成任务测试与原生 Benchmark 评分
+## 任务 4：生成任务测试评分
 
-**文件：** 新增 `harnesses/benchmarks/__init__.py`、`harnesses/benchmarks/physicianbench.py`、`harnesses/benchmarks/medagentbench.py`、`tests/harness/test_benchmarks.py`；修改 `contracts.py`、`evaluation/evaluator.py`、`evaluation/__init__.py`、`harnesses/feedback.py`，扩展 `tests/evaluation/test_evaluator.py`。
+**文件：** 新增 `tests/harness/test_scoring.py`；复用已提交的 `evaluation/evaluator.py:review_completion()` 与 `harnesses/feedback.py`，本轮不新增评分模块。
 
-**接口：** 以下数据结构定义在根目录 `contracts.py`，评分函数放在 `harnesses/benchmarks/`；不把参考答案传给 runner：
+**接口：** 合成任务测试直接调用公共完成评审，参考答案只留在评审进程：
+
+```python
+review, _ = await review_completion(
+    task, trajectory, run, observed_state, config, record=result.runs.append,
+)
+```
+
+- [ ] 写评分测试：正确与错误的答案得到相应完成判定；评分完成前医疗实例未释放；评审故障单列为 `scoring_error` 且不写入经验库。运行 `python -m pytest tests/harness/test_scoring.py -q` 确认失败。
+- [ ] 复用 `review_completion(task, trajectory, solver_run, observed_state, config, *, record=None)`，保留现有完成判定材料、只读能力说明与失败语义；测试只评价真实 runner 的答案和查询轨迹，不重新解题、不以数据库写入作为完成条件。评审通过 `runtime.call_llm()` 自动应用公共输入预算，记录材料缩减情况，原始材料保留。
+- [ ] 运行评分测试和现有评价测试，提交：`feat(harness): 接入合成任务测试评分`。
+
+医疗实例生命周期在测试中必须满足：
+
+```python
+session_id = await registry.open(
+    solver_input, environment, client_id=client_id, read_only=True
+)
+try:
+    context = registry.inspect(session_id, client_id=client_id)
+    run = await runner.execute(solver_input, session_id)
+    review, _ = await review_completion(
+        task, trajectory, run, observed_state, config, record=result.runs.append,
+    )
+finally:
+    await registry.close(session_id, client_id=client_id)
+```
+
+**后续扩展（本轮不实施）：** 原生 Benchmark 评分按以下约定接入，官方提交号与评分入口已记录在 `configs/harness-evolution.json`：
 
 ```python
 class BenchmarkCase(BaseModel):
@@ -174,30 +202,10 @@ def load_cases(environment: str, source: Path) -> list[BenchmarkCase]:
 async def score_case(case: BenchmarkCase, run: RunResult, *,
                      actions: list[dict], endpoint: str,
                      output_dir: Path, config: dict) -> NativeScore:
-    """在仍存活的本题医疗实例上运行原生评分。"""
+    """在仍存活的本题医疗实例上运行官方原生评分。"""
 ```
 
-- [ ] 写评分测试：正确及错误的答案和提交产生相应成绩；评分时实例未释放；评分异常记为 `scoring_error`；缺官方资产明确阻断。运行新增测试确认失败。
-- [ ] PhysicianBench 固定任务与评分源码提交 `c7efa8fd5b1e4744ada50668efe4b7e84023cbb0`，读取 `tasks/v1` 及各题患者映射。按官方 `scripts/run_eval.py` 的 pytest 入口提供 `JOB_DIR`、当前实例的 `FHIR_BASE_URL`、官方格式 `trajectory.log` 和输出文件；工具桥事件转换为官方事件字段，逐项保留判定结果。
-- [ ] MedAgentBench 固定提交 `99260117137b09f04837a8c18d18a1107efa55ae`，调用官方 `eval(case_data, results, fhir_api_base)` 和 `refsol.py`。GET、POST、FINISH记录按官方要求构造 `results`，POST保持模拟提交语义；缺参考函数时报 `benchmark_unavailable`。
-- [ ] 从 main 最新 `evaluate_task()` 提取 `review_completion(task, trajectory, solver_run, observed_state, config, *, record=None)`，保留当前完成判定材料、只读能力说明与失败语义；原有入口继续调用该函数，保留质量/难度三次判定及共享实例生命周期。合成测试只评价真实 runner 的答案和查询轨迹，不重新解题或以数据库写入作为完成条件。评审通过 `runtime.call_llm()` 自动应用公共输入预算；脚本可控辅助输入复用 `runtime.context.prepare_input()`，原始材料保留。原生 judge 直连授权 API，判定成本单列；更换 judge 模型后的分数仅作内部比较。
-- [ ] 运行评分测试和现有评价测试，提交：`feat(harness): 接入生成任务与原生Benchmark评分`。
-
-医疗实例生命周期在测试中必须满足：
-
-```python
-session_id = await registry.open(
-    solver_input, environment, client_id=client_id, read_only=False
-)
-try:
-    context = registry.inspect(session_id, client_id=client_id)
-    run = await runner.execute(solver_input, session_id)
-    score = await score_case(case, run, actions=context.calls,
-                             endpoint=context.instance.endpoint,
-                             output_dir=case_dir, config=judge_config)
-finally:
-    await registry.close(session_id, client_id=client_id)
-```
+PhysicianBench 使用官方 pytest 入口（`JOB_DIR`、指向当前实例的 `FHIR_BASE_URL`、`trajectory.log`），MedAgentBench 使用官方 `eval(case_data, results, fhir_api_base)` 与 `refsol.py`；官方资产缺失时报 `benchmark_unavailable`，不使用公共模型评分代替原生分数。
 
 ## 任务 5：训练、测试命令与四基座验收
 
@@ -212,11 +220,11 @@ python -m experiments.harness_test --config configs/harness-evolution.json \
   --environment PhysicianBench --harness openclaw --source medevolve
 ```
 
-- [ ] 写贯通测试，用四种替代原生组件运行10题7/3划分，断言仅7题反馈进入学习；测试分别读取初始状态与最终经验，官方题及3题测试反馈均不进入学习。断言新题会话不同、题间临时目录不同、评分后释放实例、快照不变。
+- [ ] 写贯通测试，用四种替代原生组件运行10题7/3划分，断言仅7题反馈进入学习；测试分别读取初始状态与最终经验，3题测试反馈不进入学习。断言新题会话不同、题间临时目录不同、评分后释放实例、快照不变。
 - [ ] 训练入口读取或创建共同冻结清单，准备独立组目录，按轮次执行训练题。每次尝试以 `read_only=True` 创建独立医疗实例，不借用生成流程的共享实例；通过 `prepare_trajectory(context.instance, patient_id)` 保存原始患者材料。执行后收集状态和真实工具轨迹，调用 `make_training_feedback()`；评审应用公共输入预算并记录缩减信息。学习结束后关闭工具会话，故障跳过学习并记录，所有清理置于 `finally`。
-- [ ] 测试入口分别运行初始状态和最终状态；每题复制经验到独立临时目录并启动新会话，关闭学习。合成测试使用公共评审，Benchmark使用任务4评分器；逐题保存原始结果，关闭进程与实例后丢弃目录。经验导出与重新加载的目录布局必须一致。
-- [ ] 汇总按环境、基座、来源分别保存两类测试成绩、基线、绝对提升、逐题分母和失败类型；按患者配对 bootstrap 1000次，种子42，小于两组时区间为空。成本按生成、执行、学习、评审及两类测试分开记录，缺价格或用量标记未知，生成成本按任务来源仅计一次。
-- [ ] 运行替代测试及四基座真实接入验收，独立提交命令与汇总改动：`feat(experiment): 提供Harness训练和测试命令`、`feat(experiment): 汇总两类测试成绩与成本`。真实验收缺程序、数据、授权或预算时报告未验证，不产生付费请求。
+- [ ] 测试入口分别运行初始状态和最终状态；每题复制经验到独立临时目录并启动新会话，关闭学习。合成测试使用任务 4 的公共完成评审；逐题保存原始结果，关闭进程与实例后丢弃目录。经验导出与重新加载的目录布局必须一致。
+- [ ] 汇总按环境、基座、来源分别保存测试成绩、基线、绝对提升、逐题分母和失败类型；按患者配对 bootstrap 1000次，种子42，小于两组时区间为空。成本按生成、执行、学习、评审及测试分开记录，缺价格或用量标记未知，生成成本按任务来源仅计一次。
+- [ ] 运行替代测试及四基座真实接入验收，独立提交命令与汇总改动：`feat(experiment): 提供Harness训练和测试命令`、`feat(experiment): 汇总测试成绩与成本`。真实验收缺程序、数据、授权或预算时报告未验证，不产生付费请求。
 
 正式运行前的验证命令：
 
@@ -232,4 +240,4 @@ python -m experiments.harness_test --config configs/harness-evolution.json --che
 MEDEVOLVE_HARNESS_LIVE=1 python -m pytest tests/harness/test_live_harnesses.py -q
 ```
 
-**完成条件：** 四个基座均能通过训练命令积累经验，通过测试命令评价生成任务测试集和原生 Benchmark；原始记录、成本与评分可追溯，测试不更新最终经验，医疗实例在评分结束后释放。交付配置、版本记录、任务划分、经验快照和两类结果文件。
+**完成条件：** 四个基座均能通过训练命令积累经验，通过测试命令评价生成任务测试集；原始记录、成本与评分可追溯，测试不更新最终经验，医疗实例在评分结束后释放。交付配置、版本记录、任务划分、经验快照和测试结果文件。
