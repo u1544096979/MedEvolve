@@ -217,7 +217,7 @@ async def run_experiment(config: ExperimentConfig) -> None:
             )
             _save(root / "data_exploration_patients.json", exploration_patients)
             data_run = await invoke("explore_data", explore_data,
-                                    [trajectories[p] for p in exploration_patients], config.runtime)
+                                    [generation[p] for p in exploration_patients], config.runtime)
             data = await parse("explore_data", data_run, DataExploration)
             environment_run = await invoke("explore_environment", explore_environment,
                                            config.environment, config.evolution_patients, config.runtime)
