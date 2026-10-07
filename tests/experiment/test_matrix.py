@@ -275,6 +275,47 @@ def test_provider_attempt_costs_are_counted_once_and_mark_partial_usage(tmp_path
     assert all(row["phase"] == "generation" for row in summary["records"])
 
 
+def test_nested_generation_stages_export_actual_primary_and_cached_provider_costs(tmp_path):
+    run_dir = tmp_path / "nested-run"
+    run_dir.mkdir()
+    (run_dir / "config.json").write_text(json.dumps({
+        "method": "singleshot", "environment": {"name": "PhysicianBench"},
+        "runtime": {"models": {"generator": {"model": "configured", "base_url": "https://configured"}}},
+        "evaluation": {"runtime": {"models": {}}},
+    }))
+    usage_primary = {"input_tokens": 6, "output_tokens": 4, "total_tokens": 10}
+    usage_fallback = {"input_tokens": 8, "output_tokens": 4, "total_tokens": 12}
+    (run_dir / "runs.json").write_text(json.dumps([{
+        "stage": "evaluation/generate/0",
+        "result": {
+            "status": "completed", "usage": {"input_tokens": 14, "output_tokens": 8, "total_tokens": 22},
+            "trace": [
+                {"stage": "candidate_generation", "result": {
+                    "status": "completed", "usage": usage_primary,
+                    "trace": [{"type": "provider_identity", "model": "opencode-model",
+                               "base_url": "https://opencode.example/v1"}],
+                }},
+                {"stage": "cached_fallback", "result": {
+                    "status": "completed", "usage": usage_fallback,
+                    "trace": [{"type": "provider_switch"}, {
+                        "type": "provider_attempt", "provider_identity": {
+                            "model": "openlux-model", "base_url": "https://openlux.example/v1"},
+                        "result": {"status": "completed", "usage": usage_fallback, "trace": []},
+                    }],
+                }},
+            ],
+        },
+    }]))
+    summary = summarize_costs([run_dir])
+    assert summary["totals"]["total_tokens"] == 22
+    assert len(summary["records"]) == 2
+    assert [(item["model"], item["base_url"], item["total_tokens"]) for item in summary["records"]] == [
+        ("opencode-model", "https://opencode.example/v1", 10),
+        ("openlux-model", "https://openlux.example/v1", 12),
+    ]
+    assert all(item["phase"] == "generation" for item in summary["records"])
+
+
 def test_budget_exhaustion_with_full_batch_does_not_hide_task_counts(tmp_path):
     (tmp_path / "manifest.json").write_text(json.dumps({"status": "completed", "errors": []}))
     (tmp_path / "evaluation").mkdir()

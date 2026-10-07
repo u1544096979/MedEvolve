@@ -223,7 +223,11 @@ def _find_model_identity(trace: list[dict[str, Any]]) -> dict[str, Any] | None:
 def _find_provider_identity(trace: list[dict[str, Any]]) -> dict[str, Any] | None:
     found = None
     for event in trace:
-        identity = event.get("provider_identity") if isinstance(event, dict) else None
+        if not isinstance(event, dict):
+            continue
+        identity = event.get("provider_identity")
+        if identity is None and event.get("type") == "provider_identity":
+            identity = event
         if isinstance(identity, dict):
             found = identity
     return found
@@ -233,6 +237,45 @@ def _provider_attempts(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [event for event in trace if isinstance(event, dict)
             and event.get("type") == "provider_attempt"
             and isinstance(event.get("result"), dict)]
+
+
+def _leaf_cost_calls(result: dict[str, Any], *, inherited_provider: dict[str, Any] | None = None,
+                     inherited_identity: dict[str, Any] | None = None,
+                     inherited_stage: str | None = None
+                     ) -> list[tuple[dict[str, Any], dict[str, Any], str, dict[str, Any], str]]:
+    """展开聚合 trace，只返回实际模型调用，避免父级汇总用量重复计费。"""
+    trace = result.get("trace", [])
+    identity = _find_model_identity(trace) or inherited_identity or {}
+    provider = _find_provider_identity(trace) or inherited_provider or {}
+    stage = inherited_stage or "unknown"
+
+    attempts = _provider_attempts(trace)
+    if attempts:
+        calls = []
+        for attempt in attempts:
+            attempt_result = attempt["result"]
+            calls.extend(_leaf_cost_calls(
+                attempt_result,
+                inherited_provider=attempt.get("provider_identity", provider),
+                inherited_identity=identity,
+                inherited_stage=stage,
+            ))
+        return calls
+
+    nested = [event for event in trace if isinstance(event, dict)
+              and isinstance(event.get("stage"), str)
+              and isinstance(event.get("result"), dict)
+              and "usage" in event["result"]]
+    if nested:
+        calls = []
+        for event in nested:
+            calls.extend(_leaf_cost_calls(
+                event["result"], inherited_provider=provider,
+                inherited_identity=identity, inherited_stage=event["stage"],
+            ))
+        return calls
+
+    return [(provider, result.get("usage", {}), result.get("status", "unknown"), identity, stage)]
 
 
 def _role_for_stage(stage: str) -> str:
@@ -278,39 +321,34 @@ def _run_cost_rows(run_dir: Path) -> list[dict[str, Any]]:
     for record_index, record in enumerate(records):
         result = record.get("result", {})
         stage = str(record.get("stage", "unknown"))
-        trace = result.get("trace", [])
-        role_identity = _find_model_identity(trace)
-        role = str(role_identity.get("role")) if role_identity and role_identity.get("role") else _role_for_stage(stage)
-        attempts = _provider_attempts(trace)
-        if attempts:
-            calls = [(attempt.get("provider_identity", {}), attempt["result"].get("usage", {}),
-                      attempt["result"].get("status", "unknown")) for attempt in attempts]
-        else:
-            calls = [(_find_provider_identity(trace) or {}, result.get("usage", {}),
-                      result.get("status", "unknown"))]
-        normalized_calls = [(identity, normalize_usage(usage), call_status)
-                            for identity, usage, call_status in calls]
+        leaves = _leaf_cost_calls(result, inherited_stage=stage)
+        normalized_calls = [(provider, normalize_usage(usage), call_status, identity, call_stage)
+                            for provider, usage, call_status, identity, call_stage in leaves]
         known_call = any(any(usage.get(field) is not None for field in TOKEN_FIELDS)
-                         for _, usage, _ in normalized_calls)
+                         for _, usage, _, _, _ in normalized_calls)
         missing_call = any(
             int(usage.get("runs_without_known_tokens", 0)) > 0
             or not any(usage.get(field) is not None for field in TOKEN_FIELDS)
-            for _, usage, _ in normalized_calls
+            for _, usage, _, _, _ in normalized_calls
         )
         merged_usage = normalize_usage(result.get("usage", {}))
         partial_record = known_call and (missing_call or
             int(merged_usage.get("runs_without_known_tokens", 0)) > 0)
-        for provider_identity, usage, call_status in normalized_calls:
+        for call_index, (provider_identity, usage, call_status, call_identity, call_stage) in enumerate(normalized_calls):
+            role = (call_identity.get("role") or _role_for_stage(call_stage)
+                    or _role_for_stage(stage))
+            if role == "unknown":
+                role = _role_for_stage(stage)
             model_config = _model_from_config(config, role)
             actual_model = ((provider_identity or {}).get("model")
-                            or (role_identity or {}).get("model")
+                            or call_identity.get("model")
                             or (model_config or {}).get("model"))
             tokens_known = any(usage.get(field) is not None for field in TOKEN_FIELDS)
             base_url = ((provider_identity or {}).get("base_url")
                         or (provider_identity or {}).get("endpoint")
                         or (provider_identity or {}).get("provider_endpoint")
                         or (provider_identity or {}).get("api_base")
-                        or (role_identity or {}).get("base_url")
+                        or call_identity.get("base_url")
                         or (model_config or {}).get("base_url"))
             rows.append({
                 "run_dir": str(run_dir),
@@ -318,8 +356,10 @@ def _run_cost_rows(run_dir: Path) -> list[dict[str, Any]]:
                 "method": config.get("method", "unknown"),
                 "generator_model": config.get("runtime", {}).get("models", {}).get("generator", {}).get("model", "unknown"),
                 "record_stage": stage,
+                "call_stage": call_stage,
                 "source_record_id": f"{run_dir}|{record_index}",
-                "phase": _phase_for(role, stage),
+                "call_index": call_index,
+                "phase": _phase_for(role, call_stage if call_stage != "unknown" else stage),
                 "role": role,
                 "model": actual_model or "unknown",
                 "base_url": base_url,
@@ -368,8 +408,8 @@ def summarize_costs(run_dirs: list[Path | str]) -> dict[str, Any]:
 
 
 def _write_cost_csv(path: Path, cost_summary: dict[str, Any]) -> None:
-    fields = ("run_dir", "environment", "method", "generator_model", "record_stage", "phase",
-              "source_record_id", "role", "model", "base_url", "provider",
+    fields = ("run_dir", "environment", "method", "generator_model", "record_stage", "call_stage", "phase",
+              "source_record_id", "call_index", "role", "model", "base_url", "provider",
               "status", "input_tokens", "output_tokens", "total_tokens", "tokens_known",
               "missing_usage_calls", "partial_source_record")
     path.parent.mkdir(parents=True, exist_ok=True)
