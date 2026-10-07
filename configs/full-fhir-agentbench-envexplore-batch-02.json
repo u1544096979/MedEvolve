@@ -25,8 +25,8 @@
     },
     "budgets": {
       "environment_explorer": {
-        "max_model_turns": 30,
-        "max_tool_calls": 200
+        "max_model_turns": 60,
+        "max_tool_calls": 400
       },
       "generator": {
         "max_model_turns": 1,
@@ -98,34 +98,34 @@
     }
   },
   "evolution_patients": [
-    "7d61fb4e-dc5e-5b1b-a7a6-1d96a3818546",
-    "77e10fd0-6a1c-5547-a130-fae1341acf36"
+    "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0",
+    "e232ee4d-3042-51c6-b730-a79eb8579d42"
   ],
   "evaluation_patients": [
-    "dc332fb6-61f8-552e-8743-765d626f0a4e",
-    "568cb149-804c-59e8-bdf5-816e8151cd22",
-    "df756e08-6ea8-5d69-b918-67911945f827",
-    "72d56b49-a7ee-5b9a-a679-25d1c836d3c3",
-    "23069939-0c4c-517b-a3ec-baae0d4e3988",
-    "842680b3-e421-58cc-8050-3b29668b438c",
-    "9c3ebb7e-d087-519e-bea4-31c3d4aac7ff",
-    "a5d4cb17-db8d-574b-bd88-71473088fd9a",
     "b9a9ae7b-2455-59fe-938d-ce19ef360dd1",
-    "807d2a03-9c57-55e3-a443-09fc8f1de866",
-    "f77a5b72-65fd-5b20-8cef-6b6be4791265",
-    "8c3ba37b-ba80-576a-8028-5a58eccb6156",
-    "dd773280-4157-5168-9481-3d29a5ff82d8",
-    "28776290-4349-56d3-8c13-adc554feabb8",
-    "73fb53d8-f1fa-53cd-a25c-2314caccbb99",
-    "51d2190c-cc46-56c5-b2ea-363895cbea75",
+    "e7e213ac-81c0-5c7f-8d57-81519132353e",
     "752d15e2-bd27-52ed-b055-ed79edb86aba",
-    "76202c51-1b9d-5cc2-a7bc-3dfb2ac3ab32",
-    "42f0ed8f-d744-5edb-a05d-8e011c1fbd64",
-    "a87c1099-8c87-5548-8fc0-56972a82cebf",
-    "a2605b15-4f1b-5839-b4ce-fb7a6bc1005f",
-    "a0bcbbc0-b432-5f7d-ac63-28212f20dead",
-    "22a3e422-663a-561c-b305-a0c04bf42235",
-    "735c5ea5-a995-5613-9c30-5421bcc2cf25"
+    "c4c29979-f2f5-56db-af5b-1715887727b8",
+    "bbad4581-d089-54a7-b7a0-8d986c5fb5ec",
+    "b7b92f05-c913-5a94-9a06-7b015e838f14",
+    "7d61fb4e-dc5e-5b1b-a7a6-1d96a3818546",
+    "af0e5009-d87d-52a8-ac8a-676e471c41f1",
+    "9111ccb1-fc93-5599-ab7d-35f1e61d4214",
+    "52462b6a-9b39-5460-9ee6-1a2d7a20394e",
+    "74a2fd87-885b-5eca-9f8b-9141915dba51",
+    "28dcf33b-0c52-587f-83ad-2a3270976719",
+    "a6e7e991-6801-5425-b435-4ca6b7decfcc",
+    "a7bbf9a2-f7fe-5815-a637-fa59bd70b374",
+    "b410dd44-7d65-56f9-974f-2751e8aa80e2",
+    "e635f2dd-aaec-5fef-a100-b9dfb523cbb6",
+    "e5408569-9931-5afe-b62d-4175e6b44784",
+    "a3a12d01-dc21-565b-89e2-da60e7fc80dc",
+    "c0d83ad6-0b65-5fd6-b241-f50cf552232c",
+    "86bce885-4646-59f1-8f95-d92545376ce6",
+    "8c3ba37b-ba80-576a-8028-5a58eccb6156",
+    "51d2190c-cc46-56c5-b2ea-363895cbea75",
+    "8326334a-d5e4-5339-8c54-8463f95786a7",
+    "807d2a03-9c57-55e3-a443-09fc8f1de866"
   ],
   "round_patients": [],
   "initial_strategy": {

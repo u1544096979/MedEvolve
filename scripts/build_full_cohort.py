@@ -22,7 +22,7 @@ def main() -> None:
     parser.add_argument("--environment", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--evolution", nargs="*", help="固定进化患者，默认按种子抽取 2 名")
+    parser.add_argument("--evolution", nargs="*", help="固定进化患者，默认取轨迹最小的 2 名")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     args = parser.parse_args()
 
@@ -36,9 +36,9 @@ def main() -> None:
             raise ValueError(f"evolution patients are not in the pool: {missing}")
         remaining = [patient for patient in identifiers if patient not in set(evolution)]
     else:
-        shuffled = list(identifiers)
-        random.Random(args.seed).shuffle(shuffled)
-        evolution, remaining = shuffled[:2], shuffled[2:]
+        # 进化患者要参与数据探索与环境探索，取池内轨迹最小的两名，保证探索输入可控。
+        ordered = sorted(identifiers, key=lambda patient: (by_id[patient]["tokens"], patient))
+        evolution, remaining = ordered[:2], ordered[2:]
     batches = [remaining[index:index + args.batch_size]
                for index in range(0, len(remaining), args.batch_size)]
     cohort = {

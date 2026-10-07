@@ -46,12 +46,12 @@
     },
     "budgets": {
       "data_explorer": {
-        "max_model_turns": 30,
-        "max_tool_calls": 200
+        "max_model_turns": 60,
+        "max_tool_calls": 400
       },
       "environment_explorer": {
-        "max_model_turns": 30,
-        "max_tool_calls": 200
+        "max_model_turns": 60,
+        "max_tool_calls": 400
       },
       "generator": {
         "max_model_turns": 1,
@@ -123,18 +123,18 @@
     }
   },
   "evolution_patients": [
-    "S0532676",
-    "S1669769"
+    "S0848879",
+    "S0747154"
   ],
   "evaluation_patients": [],
   "round_patients": [
     [
-      "S0532676",
-      "S1669769"
+      "S0848879",
+      "S0747154"
     ],
     [
-      "S0532676",
-      "S1669769"
+      "S0848879",
+      "S0747154"
     ]
   ],
   "initial_strategy": {

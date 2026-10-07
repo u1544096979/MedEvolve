@@ -22,13 +22,13 @@ from contracts import ExperimentConfig
 METHOD_SPEC = {
     "medevolve": {
         "roles": ["data_explorer", "environment_explorer", "generator", "feedback", "updater"],
-        "budgets": {"data_explorer": (30, 200), "environment_explorer": (30, 200),
+        "budgets": {"data_explorer": (60, 400), "environment_explorer": (60, 400),
                     "generator": (1, 0)},
         "exploration": True,
     },
     "envexplore": {
         "roles": ["environment_explorer", "generator"],
-        "budgets": {"environment_explorer": (30, 200), "generator": (1, 0)},
+        "budgets": {"environment_explorer": (60, 400), "generator": (1, 0)},
         "exploration": True,
         "exploration_in_batches": True,
     },

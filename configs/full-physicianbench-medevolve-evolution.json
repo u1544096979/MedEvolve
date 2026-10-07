@@ -46,12 +46,12 @@
     },
     "budgets": {
       "data_explorer": {
-        "max_model_turns": 30,
-        "max_tool_calls": 200
+        "max_model_turns": 60,
+        "max_tool_calls": 400
       },
       "environment_explorer": {
-        "max_model_turns": 30,
-        "max_tool_calls": 200
+        "max_model_turns": 60,
+        "max_tool_calls": 400
       },
       "generator": {
         "max_model_turns": 1,
@@ -123,18 +123,18 @@
     }
   },
   "evolution_patients": [
-    "MRN8934927891",
-    "MRN8166025032"
+    "MRN4904783602",
+    "MRN9219046621"
   ],
   "evaluation_patients": [],
   "round_patients": [
     [
-      "MRN8934927891",
-      "MRN8166025032"
+      "MRN4904783602",
+      "MRN9219046621"
     ],
     [
-      "MRN8934927891",
-      "MRN8166025032"
+      "MRN4904783602",
+      "MRN9219046621"
     ]
   ],
   "initial_strategy": {

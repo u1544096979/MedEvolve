@@ -192,18 +192,21 @@ async def run_experiment(config: ExperimentConfig) -> None:
             await release_environment(config.environment, instance)
 
         # 生成输入受模型上下文限制，超预算患者按记录优先级裁剪；评测仍用原始轨迹。
+        # 数据探索会把轨迹作为工具结果读入，同一患者可能被读多次，因此用更小的预算。
         generator_model = config.runtime.models["generator"]
         budget = generation_budget_chars(
             context_tokens=generator_model.context_window or 128000,
             output_tokens=generator_model.max_output_tokens or 16384,
         )
-        generation = {}
+        exploration_budget = budget // 2
+        generation, exploration = {}, {}
         for patient, trajectory in trajectories.items():
             fitted = fit_trajectory(trajectory, budget)
             if fitted is not trajectory:
                 _save(root / "fitted_trajectories" / f"{patient}.json",
                       fitted.model_dump(mode="json"))
             generation[patient] = fitted
+            exploration[patient] = fit_trajectory(trajectory, exploration_budget)
 
         guidance = None
         if config.guidance_path:
@@ -217,7 +220,7 @@ async def run_experiment(config: ExperimentConfig) -> None:
             )
             _save(root / "data_exploration_patients.json", exploration_patients)
             data_run = await invoke("explore_data", explore_data,
-                                    [generation[p] for p in exploration_patients], config.runtime)
+                                    [exploration[p] for p in exploration_patients], config.runtime)
             data = await parse("explore_data", data_run, DataExploration)
             environment_run = await invoke("explore_environment", explore_environment,
                                            config.environment, config.evolution_patients, config.runtime)

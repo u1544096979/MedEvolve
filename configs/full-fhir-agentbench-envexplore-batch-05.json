@@ -25,8 +25,8 @@
     },
     "budgets": {
       "environment_explorer": {
-        "max_model_turns": 30,
-        "max_tool_calls": 200
+        "max_model_turns": 60,
+        "max_tool_calls": 400
       },
       "generator": {
         "max_model_turns": 1,
@@ -98,12 +98,12 @@
     }
   },
   "evolution_patients": [
-    "7d61fb4e-dc5e-5b1b-a7a6-1d96a3818546",
-    "77e10fd0-6a1c-5547-a130-fae1341acf36"
+    "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0",
+    "e232ee4d-3042-51c6-b730-a79eb8579d42"
   ],
   "evaluation_patients": [
-    "2955c958-192a-50eb-b59d-23a29d7d374e",
-    "cd462e42-c070-5235-ae76-c37733a451be"
+    "8e77dd0b-932d-5790-9ba6-5c6df8434457",
+    "77e10fd0-6a1c-5547-a130-fae1341acf36"
   ],
   "round_patients": [],
   "initial_strategy": {

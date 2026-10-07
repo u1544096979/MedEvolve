@@ -25,8 +25,8 @@
     },
     "budgets": {
       "environment_explorer": {
-        "max_model_turns": 30,
-        "max_tool_calls": 200
+        "max_model_turns": 60,
+        "max_tool_calls": 400
       },
       "generator": {
         "max_model_turns": 1,
@@ -98,20 +98,20 @@
     }
   },
   "evolution_patients": [
-    "MRN8934927891",
-    "MRN8166025032"
+    "MRN4904783602",
+    "MRN9219046621"
   ],
   "evaluation_patients": [
-    "MRN9646496750",
-    "MRN9697354961",
-    "MRN9703905715",
-    "MRN9742590886",
-    "MRN9758908152",
-    "MRN9786748825",
-    "MRN9838448928",
-    "MRN9904716087",
-    "MRN9963334018",
-    "MRN9988355352"
+    "MRN5710360983",
+    "MRN6884882440",
+    "MRN4274958945",
+    "MRN1958682846",
+    "MRN3420779307",
+    "MRN9988355352",
+    "MRN7483366056",
+    "MRN3615507143",
+    "MRN3694860228",
+    "MRN8429141456"
   ],
   "round_patients": [],
   "initial_strategy": {
