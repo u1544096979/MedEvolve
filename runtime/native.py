@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from contracts import Budget, EnvironmentExploration, ModelConfig, RunResult, SolverAnswer
 from environments.medagentbench import NativeTools
+from .context import budget_entry, count_tokens, dumps, fit_history, output_limit, prepare_input
 
 
 def _usage(response) -> dict:
@@ -107,9 +108,19 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
         if budget.max_model_turns == 0:
             return result_factory(model=model, trace=trace, usage=usage,
                                   status="budget_exhausted", error="Model turn budget exhausted")
+        prompt_prefix = native_prompt[:-len(input_text)] if input_text else native_prompt
+        input_text, entry = prepare_input(input_text, model,
+            instructions=instructions + prompt_prefix, schema={})
+        messages[1]["content"] = prompt_prefix + input_text
+        trace.append(entry)
         async with client_factory(model) as client:
             for _ in range(budget.max_model_turns):
-                request = {"model": model.model, "messages": messages}
+                messages, dropped = fit_history(messages, model, fixed_tokens=0, prefix_count=2,
+                    group_start=lambda item: item.get("role") == "assistant")
+                trace.append(budget_entry(model, count_tokens(dumps(messages), model),
+                                          history_items_dropped=dropped))
+                request = {"model": model.model, "messages": messages,
+                           "max_tokens": output_limit(model)}
                 trace.append({"type": "model_request", **copy.deepcopy(request)})
                 usage["model_turns"] += 1
                 response = await client.chat.completions.create(**request)
