@@ -1,0 +1,142 @@
+{
+  "run_id": "full-fhir-agentbench-selfgen-batch-01",
+  "method": "selfgen",
+  "environment": {
+    "name": "FHIR-AgentBench",
+    "manager_url": "http://127.0.0.1:18084",
+    "seed_data": "/Users/guagua/data/mimic-iv-fhir-demo/2.1.0/seed"
+  },
+  "runtime": {
+    "models": {
+      "generator": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      }
+    },
+    "budgets": {
+      "generator": {
+        "max_model_turns": 6,
+        "max_tool_calls": 0
+      }
+    }
+  },
+  "evaluation": {
+    "runtime": {
+      "models": {
+        "verifier": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "quality": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "difficulty": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "solver": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "completion": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        }
+      },
+      "budgets": {
+        "verifier": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "quality": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "difficulty": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "solver": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "completion": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        }
+      }
+    }
+  },
+  "evolution_patients": [],
+  "evaluation_patients": [
+    "e5408569-9931-5afe-b62d-4175e6b44784",
+    "23f959c1-6ac2-562b-9cbe-c111f338e27b",
+    "a7bbf9a2-f7fe-5815-a637-fa59bd70b374",
+    "88fcbf73-7d80-52ae-8f11-ee73c71df69b",
+    "0c2243d2-987b-5cbd-8eb1-170a80647693",
+    "af0e5009-d87d-52a8-ac8a-676e471c41f1",
+    "2edf1f64-2919-50e3-b98c-7a55dcfda00d",
+    "c3412a5f-f8b9-57d2-9c70-53e3e40c91f0",
+    "b7b92f05-c913-5a94-9a06-7b015e838f14",
+    "24450f28-a039-57d8-95c9-d7ba5508ecd4",
+    "9111ccb1-fc93-5599-ab7d-35f1e61d4214",
+    "91e0e410-0782-5478-90e0-1bedc3aa1525",
+    "b410dd44-7d65-56f9-974f-2751e8aa80e2",
+    "8326334a-d5e4-5339-8c54-8463f95786a7",
+    "8659a6be-db5c-5f66-b629-1a3b858a487a",
+    "e635f2dd-aaec-5fef-a100-b9dfb523cbb6"
+  ],
+  "round_patients": [],
+  "initial_strategy": {
+    "generation_guidance": "依据患者纵向轨迹生成具有明确临床价值、依赖多条记录整合的医疗任务。每题明确作答要求，使用轨迹里实际存在的来源 ID 提供证据，给出有依据的参考答案。两题关注不同临床问题。难度来自跨就诊、跨时间的信息整合及合理临床判断，不来自歧义、缺失信息或环境故障。解题只使用两个原生检索工具，环境只读，不要求开立或修改资源；决策点为 null。",
+    "allocation": [
+      {
+        "task_type": "诊断与解释",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "检查与风险分层",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗规划",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "药物处方",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗重规划",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      }
+    ]
+  },
+  "random_seed": 42,
+  "output_dir": "outputs/full-comparison/fhir-agentbench/selfgen/batch-01",
+  "compare_initial_strategy": false
+}

@@ -6,6 +6,8 @@
 核验读取的也是原始来源记录。
 """
 
+import json
+
 from contracts import Evidence, PatientTrajectory
 
 # 关键临床类型优先保留，未列出的类型排在其后。
@@ -27,8 +29,8 @@ def _priority(resource_type: str) -> tuple[int, str]:
 
 
 def payload_chars(trajectory: PatientTrajectory) -> int:
-    return len(trajectory.text) + sum(len(source.statement) + SOURCE_OVERHEAD_CHARS
-                                      for source in trajectory.sources)
+    """生成模型实际收到的字符数：轨迹按 JSON 序列化后的大小。"""
+    return len(json.dumps(trajectory.model_dump(mode="json"), ensure_ascii=False))
 
 
 def _select(records: list[dict], budget: int, always_keep: set[str]) -> list[dict]:

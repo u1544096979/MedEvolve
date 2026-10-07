@@ -1,0 +1,164 @@
+{
+  "run_id": "full-fhir-agentbench-envexplore-batch-02",
+  "method": "envexplore",
+  "environment": {
+    "name": "FHIR-AgentBench",
+    "manager_url": "http://127.0.0.1:18084",
+    "seed_data": "/Users/guagua/data/mimic-iv-fhir-demo/2.1.0/seed"
+  },
+  "runtime": {
+    "models": {
+      "environment_explorer": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      },
+      "generator": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openlux.ai/v1",
+        "api_key_env": "OPENLUX_API_KEY",
+        "instructions_role": "system",
+        "parallel_tool_calls": true
+      }
+    },
+    "budgets": {
+      "environment_explorer": {
+        "max_model_turns": 30,
+        "max_tool_calls": 200
+      },
+      "generator": {
+        "max_model_turns": 1,
+        "max_tool_calls": 0
+      }
+    }
+  },
+  "evaluation": {
+    "runtime": {
+      "models": {
+        "verifier": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "quality": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "difficulty": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "solver": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        },
+        "completion": {
+          "model": "gpt-4o-mini",
+          "base_url": "https://api.openlux.ai/v1",
+          "api_key_env": "OPENLUX_API_KEY",
+          "instructions_role": "system",
+          "parallel_tool_calls": true
+        }
+      },
+      "budgets": {
+        "verifier": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "quality": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "difficulty": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "solver": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        },
+        "completion": {
+          "max_model_turns": 30,
+          "max_tool_calls": 200
+        }
+      }
+    }
+  },
+  "evolution_patients": [
+    "7d61fb4e-dc5e-5b1b-a7a6-1d96a3818546",
+    "77e10fd0-6a1c-5547-a130-fae1341acf36"
+  ],
+  "evaluation_patients": [
+    "dc332fb6-61f8-552e-8743-765d626f0a4e",
+    "568cb149-804c-59e8-bdf5-816e8151cd22",
+    "df756e08-6ea8-5d69-b918-67911945f827",
+    "72d56b49-a7ee-5b9a-a679-25d1c836d3c3",
+    "23069939-0c4c-517b-a3ec-baae0d4e3988",
+    "842680b3-e421-58cc-8050-3b29668b438c",
+    "9c3ebb7e-d087-519e-bea4-31c3d4aac7ff",
+    "a5d4cb17-db8d-574b-bd88-71473088fd9a",
+    "b9a9ae7b-2455-59fe-938d-ce19ef360dd1",
+    "807d2a03-9c57-55e3-a443-09fc8f1de866",
+    "f77a5b72-65fd-5b20-8cef-6b6be4791265",
+    "8c3ba37b-ba80-576a-8028-5a58eccb6156",
+    "dd773280-4157-5168-9481-3d29a5ff82d8",
+    "28776290-4349-56d3-8c13-adc554feabb8",
+    "73fb53d8-f1fa-53cd-a25c-2314caccbb99",
+    "51d2190c-cc46-56c5-b2ea-363895cbea75",
+    "752d15e2-bd27-52ed-b055-ed79edb86aba",
+    "76202c51-1b9d-5cc2-a7bc-3dfb2ac3ab32",
+    "42f0ed8f-d744-5edb-a05d-8e011c1fbd64",
+    "a87c1099-8c87-5548-8fc0-56972a82cebf",
+    "a2605b15-4f1b-5839-b4ce-fb7a6bc1005f",
+    "a0bcbbc0-b432-5f7d-ac63-28212f20dead",
+    "22a3e422-663a-561c-b305-a0c04bf42235",
+    "735c5ea5-a995-5613-9c30-5421bcc2cf25"
+  ],
+  "round_patients": [],
+  "initial_strategy": {
+    "generation_guidance": "依据患者纵向轨迹生成具有明确临床价值、依赖多条记录整合的医疗任务。每题明确作答要求，使用轨迹里实际存在的来源 ID 提供证据，给出有依据的参考答案。两题关注不同临床问题。难度来自跨就诊、跨时间的信息整合及合理临床判断，不来自歧义、缺失信息或环境故障。解题只使用两个原生检索工具，环境只读，不要求开立或修改资源；决策点为 null。",
+    "allocation": [
+      {
+        "task_type": "诊断与解释",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "检查与风险分层",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗规划",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "药物处方",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      },
+      {
+        "task_type": "治疗重规划",
+        "difficulty": "关联两个及以上就诊节点的记录，识别病情或治疗变化并给出有据的判断",
+        "weight": 1.0
+      }
+    ]
+  },
+  "random_seed": 42,
+  "output_dir": "outputs/full-comparison/fhir-agentbench/envexplore/batch-02",
+  "compare_initial_strategy": false
+}
