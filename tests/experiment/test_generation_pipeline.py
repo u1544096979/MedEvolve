@@ -74,6 +74,34 @@ def test_empty_generation_is_not_evaluated_and_task_failure_can_be_recorded_indi
     asyncio.run(scenario())
 
 
+def test_evaluation_limit_allows_two_tasks_from_one_patient_to_start_together():
+    async def scenario():
+        started = set()
+        both_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def generate(patient):
+            return ["q1", "q2"]
+
+        async def evaluate(patient, index, task):
+            started.add(task)
+            if len(started) == 2:
+                both_started.set()
+            await release.wait()
+            return task
+
+        pending = asyncio.create_task(run_generation_evaluation(
+            ["patient"], 1, 2, generate, evaluate,
+        ))
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        assert started == {"q1", "q2"}
+        release.set()
+        outcomes = await pending
+        assert [outcomes[0].evaluations[index] for index in (0, 1)] == ["q1", "q2"]
+
+    asyncio.run(scenario())
+
+
 def test_cancellation_cancels_and_awaits_generation_and_evaluation_workers():
     async def scenario():
         started = asyncio.Event()

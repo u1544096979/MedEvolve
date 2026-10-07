@@ -36,7 +36,7 @@ async def run_generation_evaluation(
         raise ValueError("Concurrency limits must be positive")
 
     indexed_plans = list(enumerate(plans))
-    evaluation_workers = min(evaluation_limit, max(1, len(indexed_plans)))
+    evaluation_workers = evaluation_limit
     generated: dict[int, PatientResult] = {}
     queue: asyncio.Queue[tuple[int, Plan, int, TaskValue] | None] = asyncio.Queue()
     generation_slots = asyncio.Semaphore(generation_limit)
