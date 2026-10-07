@@ -40,7 +40,7 @@ async def generate_tasks(
 
 task_types 是允许生成的题型集合，不是题目位置：集合须完整包含五种题型且不重复，一次最多两题，两题可同类型，不要求覆盖全部题型，也不按权重分配题数。公共输出约束与结果校验据此提供按题型集合校验的路径，检查最多两题、题型属于该集合、字段非空与 decision_point 为 null；其他方法保留 directions 的两个方向配额校验。生成输入包含完整轨迹与原始 sources，不含主方法的数据探索指导、环境探索产物、生成指导或评测答案。
 
-五个方法内部生成及筛选统一使用 runtime.models["generator"]。预算取 runtime.budgets["generator"]，model_turns 对多阶段方法指本批累计模型调用数；工具调用单独累计。公共实验 section 提供公共输出约束和轻量运行结果汇总函数，各方法调用而不另写一份。usage 统一保存 model_turns、tool_calls、input_tokens、output_tokens、total_tokens；单次接口的 prompt_tokens、completion_tokens 映射为输入、输出 token。trace 按阶段附加原始运行记录，保留失败信息。
+六种方法内部生成及筛选统一使用 runtime.models["generator"]，每患者生成预算上限统一为 max_model_turns=800、max_tool_calls=800。预算取 runtime.budgets["generator"]，model_turns 对多阶段方法指本批累计模型调用数；工具调用单独累计。800/800 是上限，各方法保留自身生成流程与停止规则，不为消耗额度追加调用。公共实验 section 提供公共输出约束和轻量运行结果汇总函数，各方法调用而不另写一份。usage 统一保存 model_turns、tool_calls、input_tokens、output_tokens、total_tokens；单次接口的 prompt_tokens、completion_tokens 映射为输入、输出 token。trace 按阶段附加原始运行记录，保留失败信息。
 
 环境复用 create_environment、prepare_trajectory、get_tools、read_evidence、read_state、release_environment。模型复用 call_llm 与 run_agent。评测复用 evaluate_task，禁止对方法名称设置不同判定规则。
 

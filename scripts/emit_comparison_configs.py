@@ -18,24 +18,24 @@ from pathlib import Path
 
 from contracts import ExperimentConfig
 
-# 生成阶段角色与预算：单一模型、零工具调用的方法保持 1/0；多阶段方法按其阶段数配置。
+# 生成阶段角色预算：所有方法共享 800/800 上限，探索与公共评测预算独立。
 METHOD_SPEC = {
     "medevolve": {
         "roles": ["data_explorer", "environment_explorer", "generator", "feedback", "updater"],
         "budgets": {"data_explorer": (60, 400), "environment_explorer": (60, 400),
-                    "generator": (1, 0)},
+                    "generator": (800, 800)},
         "exploration": True,
     },
     "envexplore": {
         "roles": ["environment_explorer", "generator"],
-        "budgets": {"environment_explorer": (60, 400), "generator": (1, 0)},
+        "budgets": {"environment_explorer": (60, 400), "generator": (800, 800)},
         "exploration": True,
         "exploration_in_batches": True,
     },
-    "selfgen": {"roles": ["generator"], "budgets": {"generator": (6, 0)}},
-    "singleshot": {"roles": ["generator"], "budgets": {"generator": (1, 0)}},
-    "workflow": {"roles": ["generator"], "budgets": {"generator": (8, 40)}},
-    "taskcraft": {"roles": ["generator"], "budgets": {"generator": (8, 40)}},
+    "selfgen": {"roles": ["generator"], "budgets": {"generator": (800, 800)}},
+    "singleshot": {"roles": ["generator"], "budgets": {"generator": (800, 800)}},
+    "workflow": {"roles": ["generator"], "budgets": {"generator": (800, 800)}},
+    "taskcraft": {"roles": ["generator"], "budgets": {"generator": (800, 800)}},
 }
 ENVIRONMENT_BASE = {
     "physicianbench": "physicianbench-comparison",

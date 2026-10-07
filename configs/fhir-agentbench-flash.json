@@ -64,8 +64,8 @@
         "max_tool_calls": 200
       },
       "generator": {
-        "max_model_turns": 1,
-        "max_tool_calls": 0
+        "max_model_turns": 800,
+        "max_tool_calls": 800
       }
     }
   },
