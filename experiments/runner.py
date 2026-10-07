@@ -17,6 +17,7 @@ from contracts import (
 
 from environments.fitting import fit_trajectory, generation_budget_chars
 from methods.common import normalize_usage, output_constraints, validate_task_batch
+from .scheduling import run_generation_evaluation
 
 METHOD_MODULES = {
     "medevolve": "methods.medevolve",
@@ -153,7 +154,8 @@ async def run_experiment(config: ExperimentConfig) -> None:
     manifest = {"status": "running", "errors": []}
     runs = []
     artifact_lock = asyncio.Lock()
-    concurrency = run_concurrency()
+    generation_concurrency = saved_config.generation_concurrency
+    evaluation_concurrency = saved_config.evaluation_concurrency
     environments = EvaluationEnvironments(create=create_environment, release=release_environment)
     if config.method == "taskcraft":
         generator = taskcraft.bind_generator(config.random_seed, environments=environments)
@@ -268,7 +270,6 @@ async def run_experiment(config: ExperimentConfig) -> None:
             generator = bound_generator
 
         async def generate_and_evaluate(folder, patients, round_index, current):
-            tasks, evaluations, attempts = [], [], []
             if config.method == "medevolve":
                 _save(folder / "strategy.json", current.model_dump(mode="json"))
             is_test = folder.name in {"evaluation", "initial_evaluation"}
@@ -288,89 +289,94 @@ async def run_experiment(config: ExperimentConfig) -> None:
                 plans.append((patient_index, patient, directions,
                               {"directions": [d.model_dump(mode="json") for d in directions]}))
 
-            workers = asyncio.Semaphore(concurrency)
             results = {}
 
-            def ordered(field):
-                items = []
-                for index in sorted(results):
-                    value = results[index][field]
-                    items.extend(value if isinstance(value, list) else [value])
-                return items
+            async def generate_patient(plan):
+                patient_index, patient, directions, selection_record = plan
+                task_types = list(get_args(TaskType))
+                stage = f"{folder.name}/generate/{patient_index}"
 
-            async def process(patient_index, patient, directions, selection_record):
-                async with workers:
-                    task_types = list(get_args(TaskType))
-                    stage = f"{folder.name}/generate/{patient_index}"
+                async def generate_batch():
+                    if config.runtime.budgets["generator"].max_model_turns == 0:
+                        return RunResult(trace=[], usage={}, status="budget_exhausted",
+                                         error="Generator model budget exhausted")
+                    if config.method == "medevolve":
+                        result = await generator(generation[patient], guidance,
+                                                 current, directions, config.runtime)
+                    elif free_selection:
+                        result = await generator(generation[patient], config.environment,
+                                                 task_types, config.runtime)
+                    else:
+                        result = await generator(generation[patient], config.environment,
+                                                 directions, config.runtime)
+                    result = (validate_task_batch(result, task_types=task_types) if free_selection
+                              else validate_task_batch(result, directions,
+                                                       candidate_pool=config.method == "workflow"))
+                    budget = config.runtime.budgets["generator"]
+                    if (result.usage["model_turns"] > budget.max_model_turns or
+                            result.usage["tool_calls"] > budget.max_tool_calls):
+                        result = result.model_copy(update={"output": None, "status": "budget_exhausted",
+                                                           "error": "Generation exceeded cumulative budget",
+                                                           "trace": [*result.trace, {"rejected_output": result.output}]})
+                    return result
 
-                    async def generate_batch():
-                        if config.runtime.budgets["generator"].max_model_turns == 0:
-                            return RunResult(trace=[], usage={}, status="budget_exhausted",
-                                             error="Generator model budget exhausted")
-                        if config.method == "medevolve":
-                            result = await generator(generation[patient], guidance,
-                                                     current, directions, config.runtime)
-                        elif free_selection:
-                            result = await generator(generation[patient], config.environment,
-                                                     task_types, config.runtime)
-                        else:
-                            result = await generator(generation[patient], config.environment,
-                                                     directions, config.runtime)
-                        result = (validate_task_batch(result, task_types=task_types) if free_selection
-                                  else validate_task_batch(result, directions,
-                                                           candidate_pool=config.method == "workflow"))
-                        budget = config.runtime.budgets["generator"]
-                        if (result.usage["model_turns"] > budget.max_model_turns or
-                                result.usage["tool_calls"] > budget.max_tool_calls):
-                            result = result.model_copy(update={"output": None, "status": "budget_exhausted",
-                                                               "error": "Generation exceeded cumulative budget",
-                                                               "trace": [*result.trace, {"rejected_output": result.output}]})
-                        return result
+                run = await invoke(stage, generate_batch)
+                batch = await parse(stage, run, TaskBatch, allow_budget_exhausted=True)
+                attempt = {"patient_id": patient, "requested": 2,
+                           **selection_record,
+                           "produced": len(batch.questions) if batch else 0,
+                           "status": run.status, "error": run.error, "usage": run.usage}
+                batch_tasks = [
+                    Task(**question.model_dump(),
+                         id=f"{config.run_id}:{folder.name}:{patient_index}:{question_index}",
+                         patient_id=patient, environment=config.environment.name,
+                         round_index=round_index, source_method=config.method)
+                    for question_index, question in enumerate(batch.questions if batch else [])
+                ]
+                async with artifact_lock:
+                    results[patient_index] = {"attempt": attempt, "tasks": batch_tasks,
+                                              "evaluations": {}}
+                    _save(folder / "attempts.json", [results[i]["attempt"] for i in sorted(results)])
+                    _save(folder / "tasks.json", [t.model_dump(mode="json")
+                                                   for i in sorted(results) for t in results[i]["tasks"]])
+                    checkpoint()
+                return batch_tasks
 
-                    run = await invoke(stage, generate_batch)
-                    batch = await parse(stage, run, TaskBatch, allow_budget_exhausted=True)
-                    attempt = {"patient_id": patient, "requested": 2,
-                               **selection_record,
-                               "produced": len(batch.questions) if batch else 0,
-                               "status": run.status, "error": run.error, "usage": run.usage}
-                    batch_tasks, batch_evaluations = [], []
-                    for question_index, question in enumerate(batch.questions if batch else []):
-                        task = Task(**question.model_dump(),
-                                    id=f"{config.run_id}:{folder.name}:{patient_index}:{question_index}",
-                                    patient_id=patient, environment=config.environment.name,
-                                    round_index=round_index, source_method=config.method)
-                        batch_tasks.append(task)
-                        try:
-                            evaluation = await evaluate_task(task, trajectories[patient],
-                                                             config.environment, config.evaluation,
-                                                             environments)
-                            if evaluation.task_id != task.id:
-                                raise ValueError("Evaluation task ID mismatch")
-                        except Exception as exc:
-                            await error(f"{folder.name}/evaluate/{task.id}", exc)
-                            evaluation = EvaluationResult(task_id=task.id, observed_state={},
-                                                          status="failed",
-                                                          runs=[])
-                        batch_evaluations.append(evaluation)
-                        evaluation_runs = list(evaluation.runs)
-                        if evaluation.solver_run is not None and evaluation.solver_run not in evaluation_runs:
-                            evaluation_runs.append(evaluation.solver_run)
-                        async with artifact_lock:
-                            runs.extend({"stage": f"{folder.name}/evaluate/{task.id}",
-                                         "result": r.model_copy(update={"usage": normalize_usage(r.usage)}).model_dump(mode="json")}
-                                        for r in evaluation_runs)
-                    async with artifact_lock:
-                        results[patient_index] = {"attempt": attempt, "tasks": batch_tasks,
-                                                  "evaluations": batch_evaluations}
-                        _save(folder / "attempts.json", ordered("attempt"))
-                        _save(folder / "tasks.json",
-                              [t.model_dump(mode="json") for t in ordered("tasks")])
-                        _save(folder / "evaluations.json",
-                              [e.model_dump(mode="json") for e in ordered("evaluations")])
-                        checkpoint()
+            async def evaluate_one(plan, question_index, task):
+                patient_index, patient, _, _ = plan
+                try:
+                    evaluation = await evaluate_task(task, trajectories[patient],
+                                                     config.environment, config.evaluation,
+                                                     environments)
+                    if evaluation.task_id != task.id:
+                        raise ValueError("Evaluation task ID mismatch")
+                except Exception as exc:
+                    await error(f"{folder.name}/evaluate/{task.id}", exc)
+                    evaluation = EvaluationResult(task_id=task.id, observed_state={},
+                                                  status="failed", runs=[])
+                evaluation_runs = list(evaluation.runs)
+                if evaluation.solver_run is not None and evaluation.solver_run not in evaluation_runs:
+                    evaluation_runs.append(evaluation.solver_run)
+                async with artifact_lock:
+                    results[patient_index]["evaluations"][question_index] = evaluation
+                    runs.extend({"stage": f"{folder.name}/evaluate/{task.id}",
+                                 "result": r.model_copy(update={"usage": normalize_usage(r.usage)}).model_dump(mode="json")}
+                                for r in evaluation_runs)
+                    _save(folder / "evaluations.json", [
+                        results[i]["evaluations"][j].model_dump(mode="json")
+                        for i in sorted(results) for j in sorted(results[i]["evaluations"])
+                    ])
+                    checkpoint()
+                return evaluation
 
-            await asyncio.gather(*(process(*plan) for plan in plans))
-            tasks, evaluations, attempts = ordered("tasks"), ordered("evaluations"), ordered("attempt")
+            outcomes = await run_generation_evaluation(
+                plans, generation_concurrency, evaluation_concurrency,
+                generate_patient, evaluate_one,
+            )
+            tasks = [task for outcome in outcomes for task in outcome.tasks]
+            evaluations = [outcome.evaluations[index] for outcome in outcomes
+                           for index in sorted(outcome.evaluations)]
+            attempts = [results[index]["attempt"] for index in sorted(results)]
             _save(folder / "tasks.json", [t.model_dump(mode="json") for t in tasks])
             _save(folder / "evaluations.json", [e.model_dump(mode="json") for e in evaluations])
             _save(folder / "attempts.json", attempts)
