@@ -107,7 +107,7 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 
 ## 5. 预算口径与真实运行结果
 
-本节全部运行在分支 `codex/taskcraft-baseline` 上产生，该分支基于公共层提交 `fb76770`；两组运行都早于 main 当前的公共层，合并时需按该基线核对。每个运行目录对应的实现提交按 `git log --format='%h %cI %s'` 与目录内产物的写入时间比对确定，逐项列在 5.1–5.3。三份产物（`report.json`、`pipeline.json`、`result.json`）只出现在机制运行目录（5.1、5.2），由 `41fe367` 引入；`config.json` 不是机制运行独有，公共比较目录（5.3）由公共实验入口同样写出一份。在该提交落库（2026-10-07T01:29:04）之前开始的三个机制运行带的是它的工作区改动；运行目录内 `pipeline.json` 的 `author_commit` 是所适配的作者源码基线，与实现提交不同。
+本节全部运行在分支 `codex/taskcraft-baseline` 上产生，该分支基于公共层提交 `fb76770`；两组运行都早于 main 当前的公共层，合并时需按该基线核对。每个运行目录对应的实现提交按 `git log --format='%h %cI %s'` 与目录内产物的写入时间比对确定，逐项列在 5.1–5.3。三份产物（`report.json`、`pipeline.json`、`result.json`）只出现在机制运行目录（5.1、5.2），由 `41fe367` 引入；`config.json` 不是机制运行独有，公共比较目录（5.3）由公共实验入口同样写出一份。在该提交落库（2026-10-07T01:29:04）之前开始的两个机制运行带的是它的工作区改动；运行目录内 `pipeline.json` 的 `author_commit` 是所适配的作者源码基线，与实现提交不同。
 
 `TaskCraftParameters` 默认值取自源码签名：`chunk_size=16384`、`max_candidate_conclusions=20`、`max_candidate_atomic=10`、`judge_samples=3`、`question_attempts=3`、`query_attempts=3`、`merge_attempts=5`、`extended_attempts=4`、`max_hops=2`、`width_attempts=3`、`request_attempts=3`；Agent 步数上限为 `atomic_max_action_steps=20`、`depth_backward_max_action_steps=10`、`depth_verify_max_action_steps=10`。`max_candidate_atomic` 与共享生成预算共同决定单批候选数。
 
@@ -118,7 +118,7 @@ MedAgentBench 使用原生文本动作协议，两种协议共用 `methods/taskc
 | 机制验收 | `configs/taskcraft-mechanism-physicianbench.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-physicianbench.json` 复制，只改 `run_id`、`output_dir`、该预算 |
 | 机制验收 | `configs/taskcraft-mechanism-medagentbench.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-medagentbench.json` 复制，只改同三处 |
 | 机制验收 | `configs/taskcraft-mechanism-physicianbench-rerun3.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-mechanism-physicianbench.json` 复制，只改 `run_id`、`output_dir` |
-| 机制验收 | `configs/taskcraft-mechanism-physicianbench-rerun4.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-mechanism-physicianbench.json` 复制，只改 `output_dir` |
+| 机制验收 | `configs/taskcraft-mechanism-physicianbench-rerun4.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-mechanism-physicianbench.json` 复制，只改 `run_id`、`output_dir` |
 | 机制验收 | `configs/taskcraft-mechanism-medagentbench-rerun.json` | 800 轮 / 800 次工具 | 由 `configs/taskcraft-mechanism-medagentbench.json` 复制，只改同两处 |
 | 公共比较 | `configs/taskcraft-physicianbench.json` | 8 轮 / 40 次工具 | 冻结公共值，未改动 |
 | 公共比较 | `configs/taskcraft-medagentbench.json` | 1 轮 / 0 次工具 | 冻结公共值，未改动 |
@@ -153,7 +153,7 @@ rerun3 明细（该次采样的 depth 与 width 都是零候选）：
 | 分支顺序 | `["width", "depth"]`（派生种子决定） |
 | 原子阶段 | 4 块文本、54 708 字符；chunk 0 抽到 47 条结论，出题 10 次，核验接纳 2 题；6 次出题因题型超出请求方向被拒；10 次核验中 7 次 `action response carries no tool call`、1 次 `LLM can solve this task`、2 次无错误（`agent_score=0.0`） |
 | 宽度阶段 | 合并 1 组，可分解性检查保留 0 组，产出 0 题 |
-| 深度阶段 | 2 道父题各 4 次尝试全部失败；反向检索 8 次：0 次成功、4 次 superset 校验拒绝、4 次硬失败；15 次 action 请求中 4 次为空 action 响应，4 次 superset 提案全部被 `is_superset_valid` 拒绝；`depth/result.extended=0` |
+| 深度阶段 | 2 道父题各 4 次尝试全部失败；反向检索 8 次 / superset 提案 4 次：4 次硬失败（全部为 `action response carries no tool call`）、4 次返回 superset 提案且全部被 `is_superset_valid` 拒绝；15 次 action 请求中 4 次为空 action 响应；`depth/result.extended=0` |
 | 候选证据 | 原子题 `Condition/2571`、`Condition/2566` |
 | 最终选题 | 1 题（请求方向为药物处方与诊断与解释；候选均为诊断与解释，另一题按 `task_type_quota_exhausted` 未进入） |
 | 无已知 token 的请求 | 0 次（`runs_without_known_tokens=0`） |
@@ -175,7 +175,7 @@ rerun4 明细（该次采样的 depth 为零候选，width 产出 4 题）：
 | 分支顺序 | `["width", "depth"]`（派生种子决定） |
 | 原子阶段 | 4 块文本、54 708 字符；chunk 0 抽到 43 条结论，候选上限 20；13 次出题因题型超出请求方向被拒，其余 7 题生成并全部通过核验（`agent_score` 1.0、0.67 各 1 题，0.0 五题） |
 | 宽度阶段 | 合并 4 组，可分解性检查保留 4 组，产出 4 题；每题两个父题，参考答案为两个父题答案的列表，证据为 `Condition/2571`、`Condition/2567` 等真实来源 |
-| 深度阶段 | 7 道父题各 4 次尝试全部失败；17 次反向检索：3 次成功、14 次硬失败（全部为 `action response carries no tool call`）；11 次 superset 提案全部被 `is_superset_valid` 拒绝（identifier 多为 `active problem list`、`Problem List for Patient` 一类容器）；3 次核验；`depth/result.extended=0` |
+| 深度阶段 | 7 道父题各 4 次尝试全部失败；反向检索 28 次 / superset 提案 14 次：14 次硬失败（全部为 `action response carries no tool call`）、11 次提案被 `is_superset_valid` 拒绝（identifier 多为 `active problem list`、`Problem List for Patient` 一类容器）、3 次提案通过但核验未通过；3 次核验；`depth/result.extended=0` |
 | 最终选题 | 1 题（原子题；其余按 `task_type_quota_exhausted` 未进入） |
 | 无已知 token 的请求 | 0 次（`runs_without_known_tokens=0`） |
 | 实现提交 | `0f78e13`（运行于当前分支，墙钟 17 分 02 秒；方法代码与 `5a771a5` 只差注释引文行号） |
