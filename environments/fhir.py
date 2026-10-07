@@ -74,7 +74,7 @@ def decode_document_notes(resource: dict) -> dict:
 
 
 class FHIRClient:
-    def __init__(self, endpoint: str, patient_ids: list[str]):
+    def __init__(self, endpoint: str, patient_ids: list[str], *, allow_database_write: bool = True):
         parsed = urlsplit(endpoint)
         if (
             parsed.scheme not in {"http", "https"}
@@ -85,6 +85,7 @@ class FHIRClient:
             raise ValueError("endpoint must be a native FHIR HTTP(S) base URL")
         self.endpoint = endpoint.rstrip("/") + "/"
         self.patient_ids = frozenset(patient_id(p) for p in patient_ids)
+        self.allow_database_write = allow_database_write
         if not self.patient_ids:
             raise PatientAccessError("At least one allowed patient ID is required")
 
@@ -121,6 +122,8 @@ class FHIRClient:
         return url
 
     async def _request(self, method: str, path: str, **kwargs) -> dict:
+        if method.upper() != "GET" and not self.allow_database_write:
+            raise PatientAccessError("This environment view permits read-only FHIR queries")
         async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
             response = await client.request(
                 method,

@@ -125,39 +125,43 @@ async def explore_data(
 
 async def explore_environment(
     config: EnvironmentConfig, patient_ids: list[str], runtime: RuntimeConfig,
+    environments=None,
 ) -> RunResult:
-    instance = None
+    from evaluation.session import EvaluationEnvironments
+
+    session = environments or EvaluationEnvironments(
+        create=create_environment, release=release_environment)
+    owns_session = environments is None
     result = None
-    release_error = None
     try:
-        instance = await create_environment(config)
-        tools = await get_tools(instance, patient_ids,
-                                tool_result_limit=config.tool_result_limit)
-        result = await run_agent(
-            instructions=ENVIRONMENT_EXPLORATION + "\n\n" + capability_instructions(config.name),
-            input_text=json.dumps({"environment": instance.environment, "patient_ids": patient_ids},
-                                  ensure_ascii=False),
-            tools=tools, output_type=EnvironmentExploration,
-            model=runtime.models["environment_explorer"],
-            budget=runtime.budgets["environment_explorer"],
-        )
+        async with session.instance(config, phase="explore") as instance:
+            tools = await get_tools(instance, patient_ids,
+                                    tool_result_limit=config.tool_result_limit,
+                                    read_only=True)
+            result = await run_agent(
+                instructions=ENVIRONMENT_EXPLORATION + "\n\n" + capability_instructions(config.name),
+                input_text=json.dumps({"environment": instance.environment, "patient_ids": patient_ids},
+                                      ensure_ascii=False),
+                tools=tools, output_type=EnvironmentExploration,
+                model=runtime.models["environment_explorer"],
+                budget=runtime.budgets["environment_explorer"],
+            )
     except Exception as exc:
         result = RunResult(trace=[{"type": "run_error", "failure_category": "environment_error",
                                   "error": str(exc)}], usage={"model_turns": 0, "tool_calls": 0},
                            status="failed", error=f"{type(exc).__name__}: {exc}")
     finally:
-        if instance is not None:
+        if owns_session:
             try:
-                await release_environment(config, instance)
+                await session.close()
             except Exception as exc:
-                release_error = f"{type(exc).__name__}: {exc}"
-    if release_error is not None:
-        result = result.model_copy(update={
-            "output": None, "status": "failed", "error": "release_environment failed: " + release_error,
-            "trace": [*result.trace, {"type": "environment_release", "released": False,
-                "instance_id": instance.instance_id, "error": release_error,
-                "rejected_output": result.output}],
-        })
+                result = result.model_copy(update={
+                    "output": None, "status": "failed",
+                    "error": f"release_environment failed: {type(exc).__name__}: {exc}",
+                    "trace": [*result.trace, {"type": "environment_release", "released": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "rejected_output": result.output}],
+                })
     return result
 
 

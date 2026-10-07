@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from unittest.mock import AsyncMock
 
 from contracts import EnvironmentInstance, Task
 from environments import get_tools, prepare_trajectory, read_evidence, read_state
@@ -211,6 +212,18 @@ async def test_native_get_post_finish_and_instance_boundary(fhir):
             "extension": [{"valueReference": {"reference": "Patient/p2"}}],
         }))
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_public_read_only_view_blocks_post_before_source_execution():
+    tools = await get_tools(instance(), ["p1"], read_only=True)
+    assert [item["name"].split(" ", 1)[0] for item in tools.functions] == ["GET"] * 6
+    tools._source.execute = AsyncMock()
+    denied = await tools.execute(
+        "POST " + tools.endpoint + "MedicationRequest\n{}"
+    )
+    assert denied["kind"] == "error"
+    tools._source.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio

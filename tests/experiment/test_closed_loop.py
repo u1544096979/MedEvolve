@@ -56,7 +56,7 @@ def install_dependencies(monkeypatch, failure=False, preparation_failure=False):
         assert len(items) == 1 and items[0].patient_id in {"e1", "e2"}
         return result({"guidance": "data"})
 
-    async def environment(config, patients, runtime):
+    async def environment(config, patients, runtime, environments=None):
         calls["environment"] += 1
         assert patients == ["e1", "e2"]
         return result({"guidance": "environment"})
@@ -211,7 +211,8 @@ def test_taskcraft_generation_receives_the_experiment_seed(tmp_path, monkeypatch
     async def release(config, instance):
         released.append(instance.instance_id)
 
-    async def generate(trajectory, environment, directions, runtime, *, random_seed=None):
+    async def generate(trajectory, environment, directions, runtime, *, random_seed=None,
+                       environments=None):
         assert trajectory is trajectories[trajectory.patient_id]
         assert len(directions) == 2 and environment.name == "fake"
         generated.append((trajectory.patient_id, random_seed))
@@ -244,7 +245,8 @@ def test_exhausted_generation_is_evaluated_only_within_budget(tmp_path, monkeypa
         "method": "taskcraft", "evolution_patients": [], "round_patients": []
     })
 
-    async def generate(trajectory, environment, directions, runtime, *, random_seed=None):
+    async def generate(trajectory, environment, directions, runtime, *, random_seed=None,
+                       environments=None):
         return RunResult(
             output={"questions": [{
                 "instruction": "患者诊断是什么", "task_type": directions[0].task_type,

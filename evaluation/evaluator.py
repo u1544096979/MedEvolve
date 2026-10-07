@@ -13,6 +13,7 @@ from contracts import (
     QualityDimension, QualityJudgment, QualityReview, RunResult, SolverAnswer,
     SolverInput, Task, Verification,
 )
+from environments.capabilities import read_only_scope_instructions
 from . import prompts
 from .session import EvaluationEnvironments
 
@@ -162,9 +163,9 @@ async def evaluate_task(task: Task, trajectory: PatientTrajectory,
     """Evaluate one task.
 
     ``environments`` carries reusable instances and the container budget of the run.
-    Without it the call stays self-contained and creates a fresh instance per phase.
+    Without it the call stays self-contained and releases its shared instance on return.
     """
-    session = environments if environments is not None else EvaluationEnvironments(sharing=False)
+    session = environments if environments is not None else EvaluationEnvironments()
     try:
         return await _evaluate_task(task, trajectory, environment, config, session)
     finally:
@@ -298,11 +299,12 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
                     tools = await env.get_tools(
                         instance, [task.patient_id], decision_point=task.decision_point,
                         tool_result_limit=environment.tool_result_limit,
+                        read_only=True,
                     )
                     phase = "model_error"
                     result.solver_run = await model_run(
                         runtime.run_agent, role="solver", schema=SolverAnswer,
-                        instructions=prompts.SOLVER,
+                        instructions=read_only_scope_instructions() + "\n\n" + prompts.SOLVER,
                         payload=SolverInput(
                             instruction=task.instruction, patient_id=task.patient_id,
                             decision_point=task.decision_point,

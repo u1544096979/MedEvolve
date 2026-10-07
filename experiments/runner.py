@@ -119,7 +119,7 @@ async def run_experiment(config: ExperimentConfig) -> None:
         raise ValueError("Initial strategy comparison requires medevolve")
     if config.method == "taskcraft":
         # 实验种子只在方法内部以可选关键字传递，不进入 RuntimeConfig。
-        generator = importlib.import_module("methods.taskcraft").bind_generator(config.random_seed)
+        taskcraft = importlib.import_module("methods.taskcraft")
     if "generator" not in config.runtime.models or "generator" not in config.runtime.budgets:
         raise ValueError("runtime requires generator model and cumulative generator budget")
     if config.method == "workflow":
@@ -154,7 +154,9 @@ async def run_experiment(config: ExperimentConfig) -> None:
     runs = []
     artifact_lock = asyncio.Lock()
     concurrency = run_concurrency()
-    environments = EvaluationEnvironments()
+    environments = EvaluationEnvironments(create=create_environment, release=release_environment)
+    if config.method == "taskcraft":
+        generator = taskcraft.bind_generator(config.random_seed, environments=environments)
 
     def checkpoint():
         _save(root / "manifest.json", manifest)
@@ -165,9 +167,9 @@ async def run_experiment(config: ExperimentConfig) -> None:
             manifest["errors"].append({"stage": stage, "error": str(exc)})
             checkpoint()
 
-    async def invoke(stage, function, *args):
+    async def invoke(stage, function, *args, **kwargs):
         try:
-            result = await function(*args)
+            result = await function(*args, **kwargs)
         except Exception as exc:
             result = RunResult(trace=[], usage={}, status="failed", error=str(exc))
         result = result.model_copy(update={"usage": normalize_usage(result.usage)})
@@ -191,8 +193,7 @@ async def run_experiment(config: ExperimentConfig) -> None:
     rng = random.Random(config.random_seed)
     checkpoint()
     try:
-        instance = await create_environment(config.environment)
-        try:
+        async with environments.instance(config.environment, phase="prepare") as instance:
             for group, patients in (("evolution", config.evolution_patients if config.method == "medevolve" else []),
                                     ("evaluation", config.evaluation_patients)):
                 for index, patient in enumerate(patients):
@@ -202,8 +203,6 @@ async def run_experiment(config: ExperimentConfig) -> None:
                     trajectories[patient] = trajectory
                     _save(root / "trajectories" / group / f"{index:04d}.json",
                           trajectory.model_dump(mode="json"))
-        finally:
-            await release_environment(config.environment, instance)
 
         # 生成输入受模型上下文限制，超预算患者按记录优先级裁剪；评测仍用原始轨迹。
         # 数据探索会把轨迹作为工具结果读入，同一患者可能被读多次，因此用更小的预算。
@@ -237,7 +236,8 @@ async def run_experiment(config: ExperimentConfig) -> None:
                                     [exploration[p] for p in exploration_patients], config.runtime)
             data = await parse("explore_data", data_run, DataExploration)
             environment_run = await invoke("explore_environment", explore_environment,
-                                           config.environment, config.evolution_patients, config.runtime)
+                                           config.environment, config.evolution_patients, config.runtime,
+                                           environments=environments)
             environment = await parse("explore_environment", environment_run, EnvironmentExploration)
             if data is None or environment is None:
                 raise RuntimeError("Initial exploration did not produce both guidance outputs")
@@ -249,6 +249,7 @@ async def run_experiment(config: ExperimentConfig) -> None:
             environment_run = await invoke(
                 "explore_environment", explore_environment,
                 config.environment, config.evolution_patients, config.runtime,
+                environments=environments,
             )
             environment_guidance = await parse("explore_environment", environment_run, EnvironmentExploration)
             if environment_guidance is None or not environment_guidance.guidance.strip():

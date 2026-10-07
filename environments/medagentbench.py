@@ -14,6 +14,7 @@ error, while every other transport or HTTP failure stays an environment error.
 """
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -213,6 +214,24 @@ class NativeTools(list[Tool]):
                 return {"kind": "error", "request": {"action": original}, "reply": "Invalid FINISH request"}
             return {"kind": "FINISH", "request": {"action": original}, "reply": "FINISH", "answers": answers}
         return {"kind": "error", "request": {"action": original}, "reply": "Invalid action"}
+
+
+class ReadOnlyNativeTools(NativeTools):
+    """Immutable query-only view that rejects POST before the source executes."""
+
+    def __init__(self, source: NativeTools):
+        super().__init__(source.endpoint, source.patient_ids, [])
+        self._source = source
+        self.functions = [deepcopy(item) for item in source.functions
+                          if item.get("name", "").startswith("GET ")]
+
+    async def execute(self, action: str) -> JsonObject:
+        normalized = action.replace("```tool_code", "").replace("```", "").strip()
+        if not (normalized.startswith("GET ") or
+                (normalized.startswith("FINISH(") and normalized.endswith(")"))):
+            return {"kind": "error", "request": {"action": action},
+                    "reply": "This environment view permits GET and FINISH only"}
+        return await self._source.execute(action)
 
 
 def load_functions() -> list[JsonObject]:

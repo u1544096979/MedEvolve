@@ -43,12 +43,12 @@ def _with_pipeline(result: RunResult, pipeline: Pipeline, parameters: TaskCraftP
     return result.model_copy(update={"trace": [*result.trace, entry]})
 
 
-def bind_generator(random_seed: int):
+def bind_generator(random_seed: int, environments=None):
     """把实验种子绑定到公共四参数入口；``RuntimeConfig`` 不承载方法私有字段。"""
     async def bound(trajectory: PatientTrajectory, environment: EnvironmentConfig,
                     directions: list[GenerationDirection], runtime: RuntimeConfig) -> RunResult:
         return await generate_tasks(trajectory, environment, directions, runtime,
-                                    random_seed=random_seed)
+                                    random_seed=random_seed, environments=environments)
     return bound
 
 
@@ -60,6 +60,7 @@ async def generate_tasks(
     *,
     parameters: TaskCraftParameters | None = None,
     random_seed: int = DEFAULT_SEED,
+    environments=None,
 ) -> RunResult:
     """按 common/SPEC.md 的 generate_tasks 契约生成任务；阶段规模由 parameters 显式配置。
 
@@ -77,12 +78,18 @@ async def generate_tasks(
             error=(f"Trajectory environment {trajectory.environment!r} does not match "
                    f"the experiment environment {environment.name!r}"))
         return _with_pipeline(result, pipeline, settings, directions)
-    instance = None
+    from evaluation.session import EvaluationEnvironments
+
+    session = environments or EvaluationEnvironments(
+        create=create_environment, release=release_environment)
+    owns_session = environments is None
     try:
-        instance = await create_environment(environment)
-        tools = bind_generation_tools(await get_tools(instance, [trajectory.patient_id]))
-        pipeline = Pipeline(trajectory, tools, directions, settings, ledger, random_seed)
-        await pipeline.run()
+        async with session.instance(environment, phase="generate") as instance:
+            tools = bind_generation_tools(await get_tools(
+                instance, [trajectory.patient_id], read_only=True,
+                tool_result_limit=environment.tool_result_limit))
+            pipeline = Pipeline(trajectory, tools, directions, settings, ledger, random_seed)
+            await pipeline.run()
         if ledger.exhausted:
             selected = pipeline.select() if pipeline.pool else []
             result = budget.finish(directions, status="budget_exhausted",
@@ -103,6 +110,10 @@ async def generate_tasks(
     except Exception as exc:
         result = budget.finish(directions, status="failed", error=f"{type(exc).__name__}: {exc}")
     finally:
-        if instance is not None:
-            await release_environment(environment, instance)
+        if owns_session:
+            try:
+                await session.close()
+            except Exception as exc:
+                result = budget.finish(directions, status="failed",
+                                       error=f"{type(exc).__name__}: {exc}")
     return _with_pipeline(result, pipeline, settings, directions)

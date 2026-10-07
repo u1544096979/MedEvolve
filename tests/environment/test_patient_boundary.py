@@ -11,6 +11,7 @@ from agents.tool_context import ToolContext
 from contracts import EnvironmentInstance, Task
 from environments import get_tools, prepare_trajectory, read_evidence, read_state
 from environments.errors import PatientAccessError, UnsupportedDecisionPoint
+from environments.fhir import FHIRClient
 
 
 def bundle(resources, next_url=None):
@@ -291,6 +292,19 @@ async def test_native_reads_writes_state_and_instance_isolation(native_fhir):
         "resourceType": "Patient",
         "id": "b",
     }
+
+
+@pytest.mark.asyncio
+async def test_public_read_only_functions_exclude_writes_and_client_blocks_post(native_fhir):
+    tools = await get_tools(instance(), ["a"], read_only=True)
+    assert {tool.name for tool in tools}.isdisjoint({
+        "fhir_communication_create_message", "fhir_service_request_create",
+        "fhir_medication_request_create", "fhir_appointment_create",
+    })
+    client = FHIRClient("http://instance-one/fhir/", ["a"], allow_database_write=False)
+    with pytest.raises(PatientAccessError, match="read-only"):
+        await client._request("POST", "MedicationRequest", json={})
+    assert not native_fhir[1]
 
 
 @pytest.mark.asyncio

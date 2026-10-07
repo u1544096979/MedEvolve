@@ -146,7 +146,8 @@ async def test_environment_exploration_releases_independent_instance(
         assert await method.explore_environment(config, ["evolution-1"], runtime) is result
         assert agent.await_args.kwargs["output_type"] is EnvironmentExploration
     create.assert_awaited_once_with(config)
-    tools.assert_awaited_once_with(instance, ["evolution-1"], tool_result_limit=config.tool_result_limit)
+    tools.assert_awaited_once_with(instance, ["evolution-1"],
+                                   tool_result_limit=config.tool_result_limit, read_only=True)
     release.assert_awaited_once_with(config, instance)
 
 

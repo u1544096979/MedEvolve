@@ -5,11 +5,8 @@ MedAgentBench 暴露原生 GET/POST/FINISH 文本动作工具对象，生成阶�
 两种协议都不修改环境给出的原对象与患者访问范围。
 """
 
-from copy import deepcopy
-
-from contracts import JsonObject
 from environments.errors import EnvironmentUnavailable
-from environments.medagentbench import NativeTools
+from environments.medagentbench import NativeTools, ReadOnlyNativeTools
 
 __all__ = [
     "NATIVE_FINISH_ANSWERS", "NATIVE_FINISH_OBJECT", "NATIVE_RULES",
@@ -53,28 +50,6 @@ NATIVE_FINISH_OBJECT = (
 
 def is_native(tools) -> bool:
     return isinstance(tools, NativeTools)
-
-
-class ReadOnlyNativeTools(NativeTools):
-    """生成阶段的原生协议视图：保留患者客户端与动作语义，只放行检索与收尾。
-
-    动作交给来源对象执行，患者范围、实例地址与分页行为都由来源对象承担；
-    工具声明复制为来源对象的 GET 声明，来源对象本身不被修改。
-    """
-
-    def __init__(self, source: NativeTools):
-        super().__init__(source.endpoint, source.patient_ids, [])
-        self._source = source
-        self.functions = [deepcopy(item) for item in source.functions
-                          if item.get("name", "").startswith("GET ")]
-
-    async def execute(self, action: str) -> JsonObject:
-        normalized = action.replace("```tool_code", "").replace("```", "").strip()
-        if not (normalized.startswith("GET ") or
-                (normalized.startswith("FINISH(") and normalized.endswith(")"))):
-            return {"kind": "error", "request": {"action": action},
-                    "reply": "TaskCraft generation permits GET and FINISH only"}
-        return await self._source.execute(action)
 
 
 def read_only_tools(tools: list) -> list:

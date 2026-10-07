@@ -32,6 +32,7 @@ def result(questions=(), *, status="completed", usage=None):
 
 def question(task_type="诊断与解释", **kwargs):
     kwargs.setdefault("decision_point", None)
+    kwargs.setdefault("execution_requirement", "read_only")
     return dict(instruction="诊断问题", task_type=task_type, reference_answer="参考答案", evidence=[], **kwargs)
 
 

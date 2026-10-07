@@ -436,7 +436,7 @@ def patched(monkeypatch):
             return EnvironmentInstance(instance_id="taskcraft-1", endpoint="http://unused",
                                        environment=config.name)
 
-        async def get_tools(instance, patient_ids):
+        async def get_tools(instance, patient_ids, **kwargs):
             if tools_fail:
                 raise RuntimeError("tools unavailable")
             state["patients"] = patient_ids

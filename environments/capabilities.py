@@ -12,6 +12,13 @@ _CAPABILITIES = {
     "PhysicianBench": {
         "name": "PhysicianBench",
         "experiment_read_only": True,
+        "query_tools": (
+            "fhir_condition_search_problems", "fhir_observation_search_labs",
+            "fhir_observation_search_vitals", "fhir_patient_search_demographics",
+            "fhir_procedure_search_orders", "fhir_medication_request_search_orders",
+            "fhir_document_reference_search_clinical_notes", "fhir_service_request_search",
+            "fhir_observation_search_social_history",
+        ),
         "operation_semantics": {
             "reads": "FHIR 查询读取既有患者记录",
             "writes": "FHIR 创建接口会持久化资源",
@@ -21,6 +28,7 @@ _CAPABILITIES = {
     "MedAgentBench": {
         "name": "MedAgentBench",
         "experiment_read_only": True,
+        "query_tools": ("GET", "FINISH"),
         "operation_semantics": {
             "reads": "FHIR 查询读取既有患者记录",
             "writes": "POST 可接受请求，但不会持久化数据库变更",
@@ -30,6 +38,7 @@ _CAPABILITIES = {
     "FHIR-AgentBench": {
         "name": "FHIR-AgentBench",
         "experiment_read_only": True,
+        "query_tools": ("all",),
         "operation_semantics": {
             "reads": "通过只读 FHIR 工具检索既有患者记录",
             "writes": "环境不提供写入操作",

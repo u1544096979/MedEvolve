@@ -52,11 +52,12 @@ def harness(monkeypatch):
     async def release_environment(config, instance):
         h.released.append(instance)
 
-    async def get_tools(instance, patient_ids, decision_point=None, tool_result_limit=None):
-        h.tool_calls.append((instance, patient_ids, decision_point))
+    async def get_tools(instance, patient_ids, decision_point=None, tool_result_limit=None,
+                       read_only=False):
+        h.tool_calls.append((instance, patient_ids, decision_point, read_only))
         if h.fail == "tools":
             raise RuntimeError("tool setup failed")
-        return [instance.instance_id]
+        return ["fhir_condition_search_problems"]
 
     async def read_state(instance, task):
         h.state_reads.append(instance)
@@ -122,8 +123,8 @@ def harness(monkeypatch):
         if role == "solver":
             trace = [
                 {"type": "model_request", "instructions": "历史提示词"},
-                {"type": "tool_start", "name": "create_prescription", "call_id": "write-1", "arguments": "{}"},
-                {"type": "tool_output", "name": "create_prescription", "call_id": "write-1", "output": h.state},
+                {"type": "tool_start", "name": "fhir_condition_search_problems", "call_id": "query-1", "arguments": "{}"},
+                {"type": "tool_output", "name": "fhir_condition_search_problems", "call_id": "query-1", "output": h.state},
             ]
         return RunResult(output=output, trace=trace, usage={}, status="completed")
 
@@ -150,8 +151,8 @@ def test_solver_receives_only_patient_question_and_decision_point(harness):
     }
     for call in h.model_calls:
         assert "private-method" not in call["input_text"]
-    assert h.tool_calls[0][1:] == ([h.task.patient_id], h.task.decision_point)
-    assert h.created[0] != h.created[1]
+    assert h.tool_calls[0][1:] == ([h.task.patient_id], h.task.decision_point, True)
+    assert h.created[0] == h.state_reads[0]
     assert len(result.runs) == 10
 
 
@@ -174,7 +175,7 @@ def test_write_completion_uses_observed_state(harness, state, completed):
     assert "历史提示词" not in call["input_text"]
     assert payload["evidence_records"] == [{"source_id": "source-1", "statement": "轨迹证据"}]
     assert result.solver_run.trace[0]["instructions"] == "历史提示词"
-    assert h.state_reads == [h.created[1]]
+    assert h.state_reads == [h.created[0]]
     assert h.released == h.created
 
 
@@ -212,14 +213,14 @@ def test_recovered_parameter_error_reaches_completion(harness, monkeypatch):
     ("verifier_budget", "model_error", 1, 1),
     ("quality", "model_error", 1, 5),
     ("difficulty", "model_error", 1, 8),
-    ("solver", "model_error", 2, 9),
-    ("solver_tool_error", "tool_error", 2, 9),
-    ("solver_environment_error", "environment_error", 2, 9),
-    ("solver_model_error", "model_error", 2, 9),
-    ("solver_unknown_error", "model_error", 2, 9),
-    ("solver_budget", "model_error", 2, 9),
-    ("state", "environment_error", 2, 9),
-    ("completion", "model_error", 2, 10),
+    ("solver", "model_error", 1, 9),
+    ("solver_tool_error", "tool_error", 1, 9),
+    ("solver_environment_error", "environment_error", 1, 9),
+    ("solver_model_error", "model_error", 1, 9),
+    ("solver_unknown_error", "model_error", 1, 9),
+    ("solver_budget", "model_error", 1, 9),
+    ("state", "environment_error", 1, 9),
+    ("completion", "model_error", 1, 10),
 ])
 def test_faults_release_instances_without_clinical_conclusions(
     harness, failure, category, instances, runs
@@ -286,7 +287,7 @@ def test_cancellation_releases_solver_instance(harness, monkeypatch):
     monkeypatch.setattr(sys.modules["runtime"], "run_agent", cancelled_run)
     with pytest.raises(asyncio.CancelledError):
         evaluate(h)
-    assert len(h.created) == 2
+    assert len(h.created) == 1
     assert h.released == h.created
 
 

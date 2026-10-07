@@ -18,8 +18,9 @@ from contracts import (
     Task,
 )
 from environments.errors import EnvironmentUnavailable, UnsupportedDecisionPoint
+from environments.capabilities import get_capabilities
 from environments.fhir import FHIRClient, decode_document_notes
-from environments.medagentbench import NativeTools, load_functions
+from environments.medagentbench import NativeTools, ReadOnlyNativeTools, load_functions
 from environments.physicianbench import FHIR_TOOL_SCHEMAS, NATIVE_FUNCTIONS
 from environments.tool_results import serialize_tool_result, validate_tool_result_limit
 
@@ -167,6 +168,7 @@ async def get_tools(
     decision_point: str | None = None,
     *,
     tool_result_limit: int = TOOL_RESULT_LIMIT,
+    read_only: bool = False,
 ) -> list[Tool]:
     _check_environment(instance.environment)
     _check_decision_point(decision_point)
@@ -175,9 +177,12 @@ async def get_tools(
 
         return get_native_tools(instance, patient_ids)
     if instance.environment == "MedAgentBench":
-        return NativeTools(instance.endpoint, patient_ids, load_functions())
+        tools = NativeTools(instance.endpoint, patient_ids, load_functions())
+        if read_only:
+            return ReadOnlyNativeTools(tools)
+        return tools
     validate_tool_result_limit(tool_result_limit)
-    client = FHIRClient(instance.endpoint, patient_ids)
+    client = FHIRClient(instance.endpoint, patient_ids, allow_database_write=not read_only)
     schemas = {schema["name"]: schema for schema in FHIR_TOOL_SCHEMAS}
 
     def tool_error(context, error):
@@ -215,7 +220,9 @@ async def get_tools(
         tool.params_json_schema = schema["parameters"]
         return tool
 
-    return [bind(native) for native in NATIVE_FUNCTIONS]
+    query_tools = set(get_capabilities(instance.environment)["query_tools"])
+    return [bind(native) for native in NATIVE_FUNCTIONS
+            if not read_only or native.__name__ in query_tools]
 
 
 async def read_state(instance: EnvironmentInstance, task: Task) -> JsonObject:

@@ -36,7 +36,7 @@ def test_config_keeps_sampling_environment_and_model(source, target):
 def draft(version="初稿", kinds=KINDS):
     return {"batch": {"questions": [dict(
         instruction=f"{kind}-{version}", task_type=kind, reference_answer=f"答案-{version}",
-        decision_point=None,
+        decision_point=None, execution_requirement="read_only",
         evidence=[dict(source_id="Observation/1", statement="原始记录事实")],
     ) for kind in kinds]}, "direction_indices": list(range(len(kinds)))}
 
