@@ -151,6 +151,42 @@ async def test_run_agent_uses_same_fallback_router(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_agent_keeps_both_attempts_completion_events_at_top_level(monkeypatch):
+    calls = []
+    primary_events = [
+        {"type": "tool_start", "name": "lookup", "call_id": "primary-1"},
+        {"type": "tool_output", "name": "lookup", "call_id": "primary-1",
+         "output": "primary facts"},
+        {"type": "run_error", "failure_category": "model_error",
+         "error": "insufficient_quota"},
+    ]
+    fallback_events = [
+        {"type": "tool_start", "name": "lookup", "call_id": "fallback-1"},
+        {"type": "tool_output", "name": "lookup", "call_id": "fallback-1",
+         "output": "fallback facts"},
+    ]
+
+    async def fake_run(**kwargs):
+        calls.append(kwargs["model"])
+        if len(calls) == 1:
+            return result("failed", error="insufficient_quota", trace=primary_events)
+        return result(output={"answer": "agent answer"}, trace=fallback_events)
+
+    monkeypatch.setattr(execution, "run_agent", fake_run)
+    actual = await run_agent(instructions="", input_text="", tools=[],
+        output_type=SolverAnswer, model=PRIMARY, budget=Budget(max_model_turns=2,
+                                                               max_tool_calls=1))
+    completion_events = [event for event in actual.trace
+                         if event["type"] in {"tool_start", "tool_output", "run_error",
+                                              "tool_budget"}]
+    assert completion_events == [*primary_events, *fallback_events]
+    assert [event["type"] for event in actual.trace].count("provider_attempt") == 2
+    assert actual.output == {"answer": "agent answer"}
+    # Provider envelopes and top-level evidence remain serializable without cycles.
+    actual.model_dump_json()
+
+
+@pytest.mark.asyncio
 async def test_result_redacts_both_provider_keys(monkeypatch):
     monkeypatch.setenv("TEST_OPENCODE_KEY", "opencode-secret")
     monkeypatch.setenv("TEST_OPENLUX_KEY", "openlux-secret")

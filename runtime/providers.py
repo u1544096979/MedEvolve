@@ -13,6 +13,7 @@ from . import execution
 
 
 _EXHAUSTED_PROVIDERS: set[tuple[str | None, str]] = set()
+_COMPLETION_EVENT_TYPES = {"tool_start", "tool_output", "run_error", "tool_budget"}
 _QUOTA_PATTERNS = (
     r"insufficient[_ ]quota",
     r"quota\s+(?:is\s+)?(?:exhausted|exceeded|depleted)",
@@ -104,6 +105,12 @@ def _attempt(model: ModelConfig, result: RunResult) -> dict:
     }
 
 
+def _completion_events(result: RunResult) -> list[dict]:
+    """Keep evaluator evidence visible without copying model usage events."""
+    return [event for event in result.trace
+            if event.get("type") in _COMPLETION_EVENT_TYPES]
+
+
 async def _route(call: Callable[..., Awaitable[RunResult]], *, model: ModelConfig,
                  kwargs: dict) -> RunResult:
     fallback = model.fallback
@@ -121,10 +128,12 @@ async def _route(call: Callable[..., Awaitable[RunResult]], *, model: ModelConfi
     attempts = []
     if first is not None:
         attempts.append(_attempt(model, first))
+        attempts.extend(_completion_events(first))
     attempts.append({"type": "provider_switch", "from": _identity(model),
                      "to": _identity(fallback), "reason": switch_reason})
     backup = await call(**kwargs, model=fallback)
     attempts.append(_attempt(fallback, backup))
+    attempts.extend(_completion_events(backup))
     usage = _merge_usage(*(result.usage for result in ([first] if first is not None else [])),
                          backup.usage)
     if backup.status == "failed" and backup.error:
