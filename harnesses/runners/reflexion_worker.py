@@ -163,7 +163,8 @@ def main(req):
                 f"Metadata procedure: {metadata.get('procedure','')}\nMetadata pitfall: {metadata.get('pitfall','')}")
             extracted=extract_experience(extraction_prompt)
             try:
-                candidate=json.loads(extracted)
+                fenced=re.fullmatch(r"```(?:json)?\s*\n([\s\S]*?)\n\s*```",extracted.strip(),re.IGNORECASE)
+                candidate=json.loads(fenced.group(1) if fenced else extracted)
                 values=[str(candidate.get(k,"")) for k in ("condition","procedure","pitfall")]
                 patient_id=str(req.get("patient_id", ""))
                 answer=str(state.get("answer", ""))

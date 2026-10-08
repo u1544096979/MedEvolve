@@ -42,15 +42,17 @@ def install_legacy_langchain(monkeypatch):
 
 
 @pytest.mark.parametrize("separator", ["|", ","])
-def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkeypatch,tmp_path,separator):
+@pytest.mark.parametrize("fenced_experience", [False, True])
+def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkeypatch,tmp_path,separator,fenced_experience):
     install_legacy_langchain(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY","fake")
     for name in ("llm","prompts","fewshots","utils","logger","reflexion_locked_agents"):
         if name in sys.modules: monkeypatch.delitem(sys.modules,name)
     prompts_seen=[]
+    experience_json='{"condition":"diagnostic task","procedure":"Review relevant records","pitfall":"Avoid relying on one finding"}'
     outputs=iter(["review the task " * 900,f"Tool[read_record{separator}{{}}]","use evidence " * 900,"Finish[secret-answer]",
         "Review evidence before concluding.",
-        '{"condition":"diagnostic task","procedure":"Review relevant records","pitfall":"Avoid relying on one finding"}'])
+        f"```json\n{experience_json}\n```" if fenced_experience else experience_json])
     monkeypatch.setattr(reflexion_worker,"_chat_completion",lambda model,key,prompt,tokens,stop=None:(prompts_seen.append(prompt) or {
         "choices":[{"message":{"content":next(outputs)}}],"usage":{"prompt_tokens":4,"completion_tokens":3}}))
     tool_schema=[{"name":"read_record","description":"read scoped record","parameters":{"type":"object","properties":{}}}]
