@@ -43,6 +43,9 @@ class ACEClientShim:
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
 
     def create(self, **kwargs):
+        prompt_baseline = self.prompt_tokens
+        completion_baseline = self.completion_tokens
+        calls_baseline = self.calls
         tools = (_get(f"{self.bridge_url}/sessions/{self.session}/tools", self.client_id)
                  if self.session else [])
         definitions = [{"type":"function", "function":{"name":t["name"], "description":t["description"], "parameters":t["parameters"]}} for t in tools]
@@ -50,7 +53,9 @@ class ACEClientShim:
         prompt = messages[0]["content"] if messages else ""
         # 保留 ACE 官方 Generator 提示词，并在系统消息中提供医疗动作约束。
         messages.insert(0, {"role":"system", "content":"使用可用医疗工具查询任务所需证据。每轮最多执行有限工具动作，最终严格按要求输出 JSON。不得尝试写入患者记录。"})
-        while self.calls < self.max_model_turns:
+        while True:
+            if self.calls >= self.max_model_turns:
+                raise RuntimeError(f"ACE_MODEL_TURN_BUDGET_EXHAUSTED: calls={self.calls}")
             request_kwargs=dict(kwargs)
             request_kwargs["model"]=self.model
             request_kwargs["messages"]=messages
@@ -61,8 +66,13 @@ class ACEClientShim:
             configured=request_kwargs.get(token_key)
             if configured is None: configured=self.max_output_tokens or 2048
             request_kwargs[token_key]=int(configured if self.max_output_tokens is None else min(int(configured),self.max_output_tokens))
-            response = self.client.chat.completions.create(**request_kwargs)
             self.calls += 1
+            try:
+                response = self.client.chat.completions.create(**request_kwargs)
+            except Exception:
+                # 失败请求同样消耗模型轮次；上游可重试，但重试会再次经过本预算闸门。
+                self.usage_known=False
+                raise
             if getattr(response,"usage",None) is None:
                 self.usage_known=False
             else:
@@ -73,7 +83,9 @@ class ACEClientShim:
             calls = getattr(message, "tool_calls", None) or []
             if not calls:
                 return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=SimpleNamespace(
-                    prompt_tokens=self.prompt_tokens, completion_tokens=self.completion_tokens))
+                    prompt_tokens=self.prompt_tokens-prompt_baseline,
+                    completion_tokens=self.completion_tokens-completion_baseline,
+                    calls=self.calls-calls_baseline))
             if self.calls >= self.max_model_turns:
                 raise RuntimeError(f"ACE_MODEL_TURN_BUDGET_EXHAUSTED: calls={self.calls}")
             messages.append(message.model_dump(exclude_none=True))
@@ -86,7 +98,6 @@ class ACEClientShim:
                     "name": function.name, "arguments": json.loads(function.arguments or "{}")}, self.client_id)
                 self.tool_trace.append({"name":function.name,"arguments":json.loads(function.arguments or "{}"),"result":result})
                 messages.append({"role":"tool", "tool_call_id":call.id, "content":json.dumps(result, ensure_ascii=False)})
-        raise RuntimeError(f"ACE_MODEL_TURN_BUDGET_EXHAUSTED: calls={self.calls}")
 
 
 def _load_official(source_dir):
@@ -147,6 +158,7 @@ def main(req):
             feedback.get("reference_answer"), feedback.get("reason", ""),
             "\n".join(req.get("bullets_used", [])), use_ground_truth=True,
             use_json_mode=True, call_id="medical-reflector")
+        reflect_calls=shim.calls
         stats = playbook.get_playbook_stats(current)
         curator = core.Curator(shim, "openai", model["model"], max_tokens=req.get("max_output_tokens", 2048))
         safe_reflection=reflection
@@ -160,13 +172,14 @@ def main(req):
             req.get("total_samples", 1), req.get("playbook_token_budget", 2000), stats,
             use_ground_truth=True, use_json_mode=True, call_id="medical-curator",
             next_global_id=playbook.get_next_global_id(current))
+        curate_calls=shim.calls-reflect_calls
         playbook_path.write_text(updated, encoding="utf-8")
         return {"learning_status":"updated" if updated != current else "unchanged", "reflection":reflection,
             "learning_runs":[{"reflect":reflect_info,"curate":curate_info,"tool_calls":shim.calls}],
             "usage":{"known":shim.usage_known,"prompt_tokens":reflect_info.get("prompt_num_tokens",0)+curate_info.get("prompt_num_tokens",0),
                      "completion_tokens":reflect_info.get("response_num_tokens",0)+curate_info.get("response_num_tokens",0),"calls":shim.calls},
-            "learning_runs":[{"kind":"reflector","usage":{"known":shim.usage_known,"prompt_tokens":reflect_info.get("prompt_num_tokens",0),"completion_tokens":reflect_info.get("response_num_tokens",0),"calls":1}},
-                              {"kind":"curator","usage":{"known":shim.usage_known,"prompt_tokens":curate_info.get("prompt_num_tokens",0),"completion_tokens":curate_info.get("response_num_tokens",0),"calls":1}}],
+            "learning_runs":[{"kind":"reflector","usage":{"known":shim.usage_known,"prompt_tokens":reflect_info.get("prompt_num_tokens",0),"completion_tokens":reflect_info.get("response_num_tokens",0),"calls":reflect_calls}},
+                              {"kind":"curator","usage":{"known":shim.usage_known,"prompt_tokens":curate_info.get("prompt_num_tokens",0),"completion_tokens":curate_info.get("response_num_tokens",0),"calls":curate_calls}}],
             "next_global_id":next_id, "operations":operations}
     raise RuntimeError(f"不支持的 ACE worker action: {req['action']}")
 

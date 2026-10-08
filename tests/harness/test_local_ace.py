@@ -13,9 +13,9 @@ UPSTREAM = Path(__file__).parents[2] / ".superpowers/sdd/implementation-plan/ups
 
 
 class FakeResponse:
-    def __init__(self, content=None, tool_calls=None):
+    def __init__(self, content=None, tool_calls=None, prompt_tokens=11, completion_tokens=7):
         self.choices=[SimpleNamespace(message=FakeMessage(content,tool_calls))]
-        self.usage=SimpleNamespace(prompt_tokens=11,completion_tokens=7)
+        self.usage=SimpleNamespace(prompt_tokens=prompt_tokens,completion_tokens=completion_tokens)
 
 class FakeMessage:
     def __init__(self, content, tool_calls): self.content=content; self.tool_calls=tool_calls
@@ -37,7 +37,7 @@ def test_locked_ace_generator_reflector_curator_and_tool_client(monkeypatch,tmp_
         FakeResponse(tool_calls=[tool]),
         FakeResponse('{"reasoning":"review evidence","bullet_ids":[],"final_answer":"answer-one"}'),
         FakeResponse('{"reasoning":"check evidence","error_identification":"missing context","root_cause_analysis":"short review","correct_approach":"query needed evidence","key_insight":"use evidence","bullet_tags":[]}'),
-        FakeResponse('{"reasoning":"add safe workflow","operations":[{"type":"ADD","section":"workflow","content":"Cross-check evidence before concluding."}]}'),
+        FakeResponse('{"reasoning":"add safe workflow","operations":[{"type":"ADD","section":"workflow","content":"Cross-check evidence before concluding."}]}',prompt_tokens=22,completion_tokens=9),
         FakeResponse('{"reasoning":"review another feedback","error_identification":"missed a source","root_cause_analysis":"stopped early","correct_approach":"check all relevant records","key_insight":"verify scope","bullet_tags":[]}'),
         FakeResponse('{"reasoning":"add verification step","operations":[{"type":"ADD","section":"workflow","content":"Confirm the requested scope before finalizing."}]}'),
     ])
@@ -71,6 +71,9 @@ def test_locked_ace_generator_reflector_curator_and_tool_client(monkeypatch,tmp_
         "question_context":"reusable task type","current_step":2})
     playbook=(tmp_path/"playbook.md").read_text()
     assert learned["learning_status"] == learned_again["learning_status"] == "updated"
+    assert learned["usage"]["prompt_tokens"]==33 and learned["usage"]["completion_tokens"]==16
+    assert [item["usage"]["calls"] for item in learned["learning_runs"]]==[1,1]
+    assert [item["usage"]["prompt_tokens"] for item in learned["learning_runs"]]==[11,22]
     assert "[misc-00001] helpful=0 harmful=0 :: Cross-check evidence before concluding." in playbook
     assert "[misc-00002] helpful=0 harmful=0 :: Confirm the requested scope before finalizing." in playbook
     assert len(completions.requests) == 6
@@ -115,6 +118,28 @@ def test_ace_client_shim_model_turn_limit_is_separate_from_tool_limit(monkeypatc
     with pytest.raises(RuntimeError,match="ACE_MODEL_TURN_BUDGET_EXHAUSTED"):
         shim.create(model="fake",messages=[{"role":"user","content":"prompt"}],max_completion_tokens=100)
     assert len(completions.requests)==2 and len(calls)==1
+
+
+def test_ace_client_shim_counts_failed_requests_before_upstream_retries(monkeypatch):
+    import openai
+
+    class TimeoutCompletions:
+        def __init__(self): self.requests=[]
+        def create(self, **kwargs):
+            self.requests.append(kwargs)
+            raise TimeoutError("request timed out")
+
+    completions=TimeoutCompletions()
+    monkeypatch.setattr(openai,"OpenAI",lambda **kwargs:SimpleNamespace(chat=SimpleNamespace(completions=completions)))
+    monkeypatch.setattr(ace_worker,"_get",lambda *a:[])
+    shim=ace_worker.ACEClientShim("fake","key",None,"http://bridge","","client",3,20,100)
+    for _ in range(3):
+        with pytest.raises(TimeoutError,match="timed out"):
+            shim.create(model="fake",messages=[{"role":"user","content":"prompt"}],max_tokens=100)
+    with pytest.raises(RuntimeError,match="ACE_MODEL_TURN_BUDGET_EXHAUSTED"):
+        shim.create(model="fake",messages=[{"role":"user","content":"prompt"}],max_tokens=100)
+    assert len(completions.requests)==shim.calls==3
+    assert shim.usage_known is False
 
 
 @pytest.mark.asyncio
