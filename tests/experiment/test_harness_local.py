@@ -241,3 +241,22 @@ async def test_partial_runner_startup_is_closed(rig,monkeypatch):
     assert any(event[0]=="runner_close" and event[1]=="openclaw" for event in events)
     assert not any(event[0]=="open" for event in events)
     assert not sessions.active
+
+
+def test_preflight_and_runner_preserve_virtualenv_interpreter_symlink(rig, monkeypatch, tmp_path):
+    from harnesses.runners import create_runner
+    config, _, _ = rig
+    interpreter = tmp_path / "venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(os.sys.executable)
+    config["local_harnesses"]["ace"]["python_path"] = str(interpreter)
+    seen = {}
+    def probe(harness, source, program, python, lock):
+        seen["python"] = python
+        return {"source_dir": True, "program_path": True, "source_sha": "x",
+                "components": {}, "runtime": {"official_import_ok": True}}
+    monkeypatch.setattr(harness_train, "_source_probe", probe)
+    harness_train.preflight(config, [("PhysicianBench", "ace", "medevolve")])
+    runner = create_runner("ace", config=config, group_dir=tmp_path / "group", bridge_url="")
+    assert seen["python"] == interpreter
+    assert runner.python == str(interpreter)

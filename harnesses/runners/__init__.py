@@ -1,4 +1,5 @@
 """本机原生 Agent runner 工厂。"""
+import os
 from pathlib import Path
 from importlib import import_module
 
@@ -29,7 +30,8 @@ def create_runner(name, *, config, group_dir, bridge_url):
         for key in ("source_dir", "program_path", "python_path"):
             value = local.get(key)
             if value:
-                runner_config[key] = str(Path(value).expanduser().resolve())
+                runner_config[key] = (os.path.abspath(Path(value).expanduser()) if key == "python_path"
+                                      else str(Path(value).expanduser().resolve()))
         if name == "openclaw" and runner_config.get("program_path"):
             runner_config["openclaw_bin"] = runner_config["program_path"]
     cls = getattr(import_module(module_name), class_name)

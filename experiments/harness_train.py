@@ -172,7 +172,10 @@ def preflight(config, combos, *, mode="train"):
     for environment, harness, source in combos:
         settings = config["local_harnesses"][harness]
         local_paths = {key: rooted(settings[key]) for key in ("source_dir", "program_path", "initial_state_template")}
-        python_path = rooted(settings["python_path"]) if settings.get("python_path") else Path(sys.executable)
+        python_path = Path(settings.get("python_path") or sys.executable).expanduser()
+        if not python_path.is_absolute():
+            python_path = ROOT / python_path
+        python_path = Path(os.path.abspath(python_path))
         probe = _source_probe(harness, local_paths["source_dir"], local_paths["program_path"], python_path, config["upstreams_lock"])
         source_cfg = config["environments"][environment]["sources"].get(source, {})
         data_status = "missing"
