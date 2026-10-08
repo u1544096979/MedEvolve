@@ -119,28 +119,54 @@ class OpenClawRunner:
         except json.JSONDecodeError:
             return RunResult(status="failed", output=None, error=f"OpenClaw 未返回 JSON：{stderr[-300:]}", trace=[], usage={"known": False})
         answer = self._answer(envelope)
-        meta = envelope.get("meta", {}).get("agentMeta", {})
+        meta = self._agent_meta(envelope)
         usage = meta.get("usage") or envelope.get("usage")
         count = meta.get("assistantTurns", envelope.get("assistantTurns"))
         self._pending[self._session_id]["iterations"] = count if isinstance(count, int) else None
-        trace = [{"type": "native_response", "tool_calls": meta.get("toolCalls"), "error": envelope.get("error")}]
-        failed = envelope.get("status") in {"error", "failed", "timeout"} or envelope.get("error") is not None
+        native_error = self._native_error(envelope)
+        trace = [{"type": "native_response", "tool_calls": meta.get("toolCalls"), "error": native_error}]
+        failed = self._native_status_failed(envelope) or native_error is not None
         if code or failed or not answer:
-            return RunResult(status="failed", output={"answer": answer} if answer else None, error=stderr[-1000:] or ("OpenClaw 未提取到答案" if not answer else f"OpenClaw退出码 {code}"), trace=trace, usage={"known": bool(usage), **(usage or {})})
+            return RunResult(status="failed", output={"answer": answer} if answer else None, error=stderr[-1000:] or native_error or ("OpenClaw 未提取到答案" if not answer else f"OpenClaw退出码 {code}"), trace=trace, usage={"known": isinstance(usage, dict), **(usage or {})})
         return RunResult(status="completed", output={"answer": answer}, error=None, trace=trace, usage={"known": bool(usage), **(usage or {})})
 
     @staticmethod
     def _answer(obj):
-        texts = []
-        def walk(x):
-            if isinstance(x, dict):
-                for key, value in x.items():
-                    if key in {"text", "content"} and isinstance(value, str): texts.append(value)
-                    else: walk(value)
-            elif isinstance(x, list):
-                for value in x: walk(value)
-        walk(obj.get("result", obj))
+        result = obj.get("result") if isinstance(obj.get("result"), dict) else obj
+        payloads = result.get("payloads", [])
+        texts = [item.get("text") for item in payloads if isinstance(item, dict) and isinstance(item.get("text"), str)] if isinstance(payloads, list) else []
+        for source in (result, obj):
+            for key in ("final", "finalResponse", "text", "content"):
+                value = source.get(key) if isinstance(source, dict) else None
+                if isinstance(value, str) and value.strip():
+                    texts.append(value)
         return next((value for value in reversed(texts) if value.strip()), "")
+
+    @staticmethod
+    def _agent_meta(envelope):
+        result = envelope.get("result") if isinstance(envelope.get("result"), dict) else {}
+        result_meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+        envelope_meta = envelope.get("meta") if isinstance(envelope.get("meta"), dict) else {}
+        agent_meta = result_meta.get("agentMeta") or envelope_meta.get("agentMeta") or {}
+        return agent_meta if isinstance(agent_meta, dict) else {}
+
+    @staticmethod
+    def _native_error(envelope):
+        result = envelope.get("result") if isinstance(envelope.get("result"), dict) else {}
+        error = envelope.get("error") or result.get("error")
+        if not error and OpenClawRunner._native_status_failed(envelope):
+            error = envelope.get("summary") or result.get("summary")
+        payloads = result.get("payloads", [])
+        if not error and isinstance(payloads, list):
+            error_payload = next((item for item in payloads if isinstance(item, dict) and item.get("isError")), None)
+            if error_payload:
+                error = error_payload.get("text") or "OpenClaw 返回错误 payload"
+        return error
+
+    @staticmethod
+    def _native_status_failed(envelope):
+        result = envelope.get("result") if isinstance(envelope.get("result"), dict) else {}
+        return envelope.get("status") in {"error", "failed", "timeout", "in_flight"} or result.get("status") in {"error", "failed", "timeout", "in_flight"}
 
     async def learn(self, feedback: TrainingFeedback) -> HarnessStep:
         if feedback.completed is None:
@@ -175,10 +201,10 @@ class OpenClawRunner:
             feedback_response = json.loads(stdout)
         except json.JSONDecodeError:
             pass
-        feedback_meta = (feedback_response or {}).get("meta", {}).get("agentMeta", {})
+        feedback_meta = self._agent_meta(feedback_response or {})
         feedback_usage = feedback_meta.get("usage") or (feedback_response or {}).get("usage")
         feedback_run = RunResult(
-            status="failed" if code or feedback_response is None or feedback_response.get("status") in {"error", "failed", "timeout"} or feedback_response.get("error") is not None else "completed",
+            status="failed" if code or feedback_response is None or self._native_status_failed(feedback_response) or self._native_error(feedback_response) is not None else "completed",
             output={"answer": self._answer(feedback_response)} if feedback_response else None,
             error=stderr[-1000:] if code else ("OpenClaw反馈回合无JSON响应" if feedback_response is None else None),
             trace=[{"type": "learning_feedback_turn", "tool_calls": feedback_meta.get("toolCalls")}],

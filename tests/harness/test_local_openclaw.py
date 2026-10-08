@@ -1,4 +1,7 @@
 import asyncio
+import hashlib
+import json
+import sqlite3
 import time
 import pytest
 
@@ -37,7 +40,7 @@ async def test_openclaw_starts_with_isolated_configuration_and_rotates_task_sess
     async def fake_command(command, *, group_dir, group_env, timeout):
         calls.append((list(command), dict(group_env), timeout))
         if "agent" in command:
-            return 0, '{"result":{"payloads":[{"text":"诊断答案"}]},"meta":{"agentMeta":{"usage":{"input":12,"output":4},"assistantTurns":10}}}', ""
+            return 0, '{"status":"ok","result":{"payloads":[{"text":"诊断答案"}],"meta":{"durationMs":12,"agentMeta":{"usage":{"input":12,"output":4},"assistantTurns":10,"toolCalls":2}}}}', ""
         return 0, "", ""
 
     def review_reader():
@@ -59,8 +62,11 @@ async def test_openclaw_starts_with_isolated_configuration_and_rotates_task_sess
     await runner.start(GroupKey(run_id="run", environment="PhysicianBench", harness="openclaw", source_method="medevolve", seed=42), Snapshot(path=tmp_path, digest="x"))
     first = await runner.execute(SolverInput(instruction="任务一", patient_id="p1"), "tool-1")
     session = runner.current_session_id
-    await runner.learn(TrainingFeedback(task_id="task-1", completed=True, failure_category=None, reason="reason", reference_answer="secret", evidence=[]))
+    learned = await runner.learn(TrainingFeedback(task_id="task-1", completed=True, failure_category=None, reason="reason", reference_answer="secret", evidence=[]))
     assert runner.current_session_id == session
+    assert learned.learning_status == "updated"
+    assert learned.run.usage["model"] == "model-x"
+    assert learned.learning_runs[0].usage["known"] is True
     await runner.execute(SolverInput(instruction="任务二", patient_id="p2"), "tool-2")
     assert runner.current_session_id != session
     assert first.output == {"answer": "诊断答案"}
@@ -75,3 +81,24 @@ async def test_openclaw_completed_none_does_not_learn(tmp_path):
     result = await runner.learn(TrainingFeedback(task_id="t", completed=None, failure_category="tool_error", reason="error", reference_answer="secret", evidence=[]))
     assert result.learning_status == "failed"
     assert result.learning_runs == []
+
+
+def test_openclaw_reads_actual_workspace_review_state_key(tmp_path):
+    runner = create_runner("openclaw", config={}, group_dir=tmp_path, bridge_url="http://127.0.0.1:9000")
+    runner.workspace.mkdir(parents=True)
+    db_path = runner.state_dir / "state/openclaw.sqlite"
+    db_path.parent.mkdir(parents=True)
+    workspace_key = hashlib.sha256(str(runner.workspace.resolve()).encode()).hexdigest()
+    state = {"lastResult": {"experienceReviews": {workspace_key: {
+        "attemptedAtMs": 1234567890, "outcome": "proposed", "proposalId": "p-1",
+    }}}}
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        db.execute("INSERT INTO config_machine_state VALUES (?, ?)", ("skills.curatorState", json.dumps(state)))
+    assert runner._read_review_status() == state["lastResult"]["experienceReviews"][workspace_key]
+
+
+def test_openclaw_accepts_flattened_agent_exec_final_response():
+    assert create_runner("openclaw", config={}, group_dir=".", bridge_url="http://127.0.0.1")._answer(
+        {"status": "ok", "result": {"final": "flattened answer", "meta": {"agentMeta": {"assistantTurns": 10}}}}
+    ) == "flattened answer"

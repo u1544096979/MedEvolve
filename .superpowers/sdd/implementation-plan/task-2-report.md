@@ -26,3 +26,12 @@ OpenClaw 使用 Gateway embedded agent path。上游 `src/skills/workshop/experi
 - `/Users/guagua/code/MedEvolve/.venv/bin/python -m pytest tests/harness -q`：123 passed。
 - `git diff --check`：通过。
 - 真实 OpenClaw Gateway、Hermes upstream Python 环境、外部 provider、模型请求与医疗 live 服务未启动或调用；因此真实依赖运行行为仍未验证。测试使用假命令/进程、假 Hermes agent/registry 和本地假医疗边界。
+
+
+## Scoped review 修复
+
+- Gateway CLI JSON 保持原始 response envelope；runner 现在优先读取 `result.meta.agentMeta`，并兼容扁平 envelope，提取嵌套 usage、assistantTurns 与 toolCalls。执行和 feedback 共用此解析逻辑；原生 status/error/in_flight 与错误 payload 会归为失败。
+- 答案提取支持 Gateway `result.payloads[].text` 和 exec 扁平 `final` / `finalResponse` 字段。
+- 测试夹具改为上游 Gateway 的 `status` + `result.payloads` + `result.meta.agentMeta` 形状，并验证 10-turn 原生 review 等待路径及 feedback usage。增加 `agent-exec-result` 扁平 final 和本机 SQLite review state 读取测试。
+- review state 源码确认：`src/skills/workshop/collection-review-state.ts` 使用 `sha256Hex(path.resolve(workspaceDir))` 写入 `skills.curatorState.lastResult.experienceReviews[workspaceKey]`；SQLite `config_machine_state.value_json` 保存整份状态。runner 的只读查询及 workspace hash 与该实现一致，且仍要求 review 时间晚于本题开始/基线。
+- 验证：`tests/harness/test_local_openclaw.py tests/harness`，125 passed；`git diff --check` 通过。
