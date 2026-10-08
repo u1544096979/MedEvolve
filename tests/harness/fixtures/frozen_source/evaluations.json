@@ -1,0 +1,32 @@
+[
+  {
+    "task_id": "valid-task",
+    "verification": {
+      "valid": true,
+      "reason": "",
+      "read_only_task": true
+    },
+    "quality": null,
+    "completion": null,
+    "solver_run": null,
+    "observed_state": {},
+    "status": "completed",
+    "failure_category": null,
+    "runs": []
+  },
+  {
+    "task_id": "invalid-task",
+    "verification": {
+      "valid": false,
+      "reason": "证据不支持参考答案的结论",
+      "read_only_task": true
+    },
+    "quality": null,
+    "completion": null,
+    "solver_run": null,
+    "observed_state": {},
+    "status": "invalid",
+    "failure_category": "insufficient_evidence",
+    "runs": []
+  }
+]

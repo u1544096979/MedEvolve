@@ -25,4 +25,4 @@ py-modules = ["contracts"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["runtime*", "environments*", "server*", "methods*", "evaluation*", "experiments*"]
+include = ["runtime*", "environments*", "server*", "methods*", "evaluation*", "experiments*", "harnesses*"]

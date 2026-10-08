@@ -1,0 +1,12 @@
+{
+  "name": "@medevolve/openclaw-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MedEvolve 医疗工具插件：把 OpenClaw 的原生工具调用转发到本次尝试的医疗工具桥会话",
+  "openclaw": {
+    "extensions": [
+      "./index.mjs"
+    ]
+  }
+}

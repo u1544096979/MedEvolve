@@ -14,7 +14,7 @@ from contracts import (
     QualityDimension, QualityJudgment, QualityReview, RunResult, SolverAnswer,
     SolverInput, Task, Verification,
 )
-from environments.capabilities import capability_instructions
+from environments.capabilities import capability_instructions, read_only_scope_instructions
 from . import prompts
 from .session import EvaluationEnvironments
 
@@ -50,6 +50,78 @@ def _output(run: RunResult, schema: type[BaseModel]) -> BaseModel:
     if run.status != "completed" or run.output is None:
         raise ValueError(run.error or f"model run {run.status}")
     return schema.model_validate(run.output)
+
+
+def _review_instructions(environment: str, instructions: str) -> str:
+    """Prefix reviewer instructions with the read-only scope and environment facts.
+
+    A reviewer may run for a harness that names its own environment outside the
+    fixed capability table; the read-only restriction still binds every role, so
+    only the environment facts are dropped there.
+    """
+    try:
+        capability = capability_instructions(environment)
+    except ValueError:
+        capability = read_only_scope_instructions()
+    return f"{capability}\n\n{instructions}"
+
+
+def _completion_material(task: Task, trajectory: PatientTrajectory,
+                        solver_run: RunResult, observed_state: dict) -> dict:
+    material = _review_material(task, trajectory)
+    answer = _output(solver_run, SolverAnswer)
+    reviewed = {
+        "task": material["task"],
+        "evidence_records": [
+            source.model_dump() for source in trajectory.sources
+            if source.source_id in {evidence.source_id for evidence in task.evidence}
+        ],
+        "solver_answer": answer.model_dump(),
+        # Review execution evidence without replaying the solver's prompts and model requests.
+        "solver_trace": [
+            item for item in solver_run.trace
+            if item.get("type") in {"tool_start", "tool_output", "run_error", "tool_budget"}
+        ],
+    }
+    # The evaluator solves without reading database state; only a caller that
+    # observed one adds it, so absent state never reaches the reviewer.
+    if observed_state:
+        reviewed["observed_state"] = observed_state
+    return reviewed
+
+
+async def review_completion(
+    task: Task, trajectory: PatientTrajectory, solver_run: RunResult,
+    observed_state: dict, config: EvaluationConfig, *, record=None,
+) -> tuple[CompletionReview, RunResult]:
+    """Judge one executed run against the frozen task; never re-solve the task.
+
+    The reviewed material is the real harness answer, its filtered execution
+    trace and the observed state. Verification and quality results stay with the
+    frozen dataset, so changing harness does not regenerate the question or
+    replay the fixed solver. The reference answer is held here by the review
+    process; `record` receives the model run so callers keep their run history.
+    """
+    runtime = import_module("runtime")
+    if "completion" not in config.runtime.models:
+        raise ValueError("missing evaluation model: completion")
+    material = _completion_material(task, trajectory, solver_run, observed_state)
+    model = config.runtime.models["completion"]
+    try:
+        run = await runtime.call_llm(
+            instructions=_review_instructions(task.environment, prompts.COMPLETION),
+            input_text=_json(material), output_type=CompletionReview, model=model,
+        )
+    except Exception as exc:
+        run = RunResult(trace=[], usage={}, status="failed", error=str(exc))
+    run = run.model_copy(update={"trace": [
+        *run.trace,
+        {"type": "model_identity",
+         "model_identity": {"role": "completion", "model": model.model}},
+    ]})
+    if record is not None:
+        record(run)
+    return _output(run, CompletionReview), run
 
 
 def _judge_outputs(runs: list[RunResult], schema: type[BaseModel]) -> list[BaseModel]:
@@ -355,25 +427,10 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
                 phase = "environment_error"
             raise
         phase = "model_error"
-        answer = _output(result.solver_run, SolverAnswer)
-        # Review execution evidence without replaying the solver's prompts and model requests.
-        completion_material = {
-            "task": material["task"],
-            "evidence_records": [
-                source.model_dump() for source in trajectory.sources
-                if source.source_id in {evidence.source_id for evidence in task.evidence}
-            ],
-            "solver_answer": answer.model_dump(),
-            "solver_trace": [
-                item for item in result.solver_run.trace
-                if item.get("type") in {"tool_start", "tool_output", "run_error", "tool_budget"}
-            ],
-        }
-        run = await model_run(
-            runtime.call_llm, role="completion", schema=CompletionReview,
-            instructions=role_instructions(prompts.COMPLETION), payload=completion_material,
+        result.completion, _ = await review_completion(
+            task, trajectory, result.solver_run, result.observed_state, config,
+            record=result.runs.append,
         )
-        result.completion = _output(run, CompletionReview)
         result.status = "completed"
         if not result.completion.completed:
             result.failure_category = "clinical"

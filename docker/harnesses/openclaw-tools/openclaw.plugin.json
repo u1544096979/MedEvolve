@@ -1,0 +1,25 @@
+{
+  "id": "medevolve-medical-tools",
+  "name": "MedEvolve Medical Tools",
+  "description": "把医疗工具桥的组内会话暴露为 OpenClaw 原生工具；工具本身不实现任何 FHIR 逻辑。",
+  "kind": "tools",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "medical_tools_list",
+      "medical_tool_call"
+    ]
+  },
+  "toolMetadata": {
+    "medical_tool_call": {
+      "sideEffecting": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

@@ -80,6 +80,13 @@ class Task(GeneratedQuestion):
     source_method: str
 
 
+class TaskSplit(BaseModel):
+    """固定种子生成的训练与测试任务集合。"""
+
+    train: list[Task]
+    test: list[Task]
+
+
 class ModelConfig(BaseModel):
     model: str
     base_url: str | None = None
@@ -195,6 +202,18 @@ class SolverInput(BaseModel):
     instruction: str
     patient_id: str
     decision_point: str | None = None
+
+
+class CrossTaskExperience(BaseModel):
+    """患者无关、可迁移的单条任务经验。"""
+
+    id: str
+    task_type: str
+    tool_names: list[str] = Field(default_factory=list)
+    condition: str
+    procedure: str
+    pitfall: str
+    source_task_id: str
 
 
 class SolverAnswer(BaseModel):

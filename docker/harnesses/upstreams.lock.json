@@ -1,0 +1,92 @@
+{
+  "note": "只记录本次观测到的上游事实：完整 Git SHA、许可证、依赖锁与组件路径。镜像摘要未观测，构建后由镜像任务回填；镜像标签由已观测版本与提交前缀构成，不使用浮动 main 或 latest。",
+  "license_policy": "镜像内保留上游 LICENSE 原文，并按许可证标注修改；不把重写实现冒充官方源码，医学适配以 docker/harnesses/patches/ 下的差异文件保存。",
+  "upstreams": {
+    "openclaw": {
+      "repository": "https://github.com/openclaw/openclaw",
+      "version": "2026.9.2",
+      "ref": "refs/tags/v2026.9.2",
+      "commit": "3928bad9badfcb6c7d140530435e806fb8092190",
+      "license": "MIT",
+      "license_path": "LICENSE",
+      "components": [
+        "openclaw.mjs",
+        "extensions/",
+        "docs/tools/self-learning.md",
+        "docs/cli/agent.md"
+      ],
+      "dependency_lock": "pnpm-lock.yaml",
+      "image": {
+        "reference": "medevolve-harness-openclaw:2026.9.2-3928bad9",
+        "digest": null,
+        "verified": false,
+        "unverified": "本次未构建镜像，容器摘要未观测"
+      },
+      "observed": "git ls-remote 解析 refs/tags/v2026.9.2 的 peeled 提交；本机 openclaw --version 报 2026.9.2 (3928bad)"
+    },
+    "hermes": {
+      "repository": "https://github.com/NousResearch/hermes-agent",
+      "version": "v0.17.0",
+      "release_tag": "v2026.6.19",
+      "release_tag_commit": "2bd1977d8fad185c9b4be47884f7e87f1add0ce3",
+      "commit": "c32927948269daf15ddd75fd362f00b20bdbef65",
+      "license": "MIT",
+      "license_path": "LICENSE",
+      "components": [
+        "cli.py",
+        "agent/",
+        "hermes_cli/",
+        "tools/registry.py"
+      ],
+      "dependency_lock": ["flake.lock", "uv.lock", "package-lock.json"],
+      "image": {
+        "reference": "medevolve-harness-hermes:v0.17.0-c3292794",
+        "digest": null,
+        "verified": false,
+        "unverified": "本次未构建镜像，容器摘要未观测"
+      },
+      "observed": "本机 hermes --version 报 v0.17.0 (2026.6.19) · upstream c3292794；提交 c3292794 比标签 v2026.6.19 的 peeled 提交晚一个提交，因此按本机报告的提交锁定"
+    },
+    "ace": {
+      "repository": "https://github.com/ace-agent/ace",
+      "ref": "refs/heads/main",
+      "commit": "82709de050e1db6e6ef2f07bcb0393560b94992a",
+      "license": "Apache-2.0",
+      "license_path": "LICENSE.txt",
+      "components": [
+        "ace/ace.py",
+        "ace/core/reflector.py",
+        "ace/core/curator.py",
+        "playbook_utils.py"
+      ],
+      "dependency_lock": "uv.lock",
+      "image": {
+        "reference": "medevolve-harness-ace:82709de0",
+        "digest": null,
+        "verified": false,
+        "unverified": "本次未构建镜像，容器摘要未观测"
+      },
+      "observed": "上游仓库没有发布标签，按 refs/heads/main 当时的提交 SHA 锁定（不可变）"
+    },
+    "reflexion": {
+      "repository": "https://github.com/noahshinn/reflexion",
+      "ref": "refs/heads/main",
+      "commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+      "license": "MIT",
+      "license_path": "LICENSE",
+      "components": [
+        "hotpotqa_runs/agents.py",
+        "alfworld_runs/generate_reflections.py"
+      ],
+      "dependency_lock": null,
+      "dependency_lock_unverified": "上游仓库未提供依赖锁文件",
+      "image": {
+        "reference": "medevolve-harness-reflexion:218cf0ef",
+        "digest": null,
+        "verified": false,
+        "unverified": "本次未构建镜像，容器摘要未观测"
+      },
+      "observed": "上游仓库没有发布标签，按 refs/heads/main 当时的提交 SHA 锁定（不可变）"
+    }
+  }
+}
