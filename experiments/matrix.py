@@ -198,8 +198,20 @@ def classify_run(output_dir: Path | str) -> dict[str, Any]:
         status = "completed_with_errors" if errors or review_errors or failed_generation else "completed"
     else:
         status = "incomplete"
+    config = _read_json(root / "config.json", {})
+    evolution_errors = []
+    if config.get("method") == "medevolve":
+        for index, _ in enumerate(config.get("round_patients", []), start=1):
+            for phase in ("feedback", "update"):
+                result = _read_json(root / "rounds" / f"{index:04d}" / f"{phase}_run.json", {})
+                if result.get("status") != "completed" or result.get("output") is None:
+                    evolution_errors.append({"round": index, "phase": phase,
+                                             "error": result.get("error") or "missing successful strategy phase"})
+        if evolution_errors:
+            status = "failed"
     return {
         "status": status,
+        "evolution_errors": evolution_errors,
         "manifest_status": manifest.get("status", "unknown"),
         "manifest_errors": errors,
         "missing_reviews": sorted(set(missing_reviews)),
@@ -503,6 +515,11 @@ async def run_matrix(
                             "review_errors": assessment["missing_reviews"] + assessment["failed_reviews"]}
                     job["batches"].append(item)
                     if evolution:
+                        if assessment["status"] == "failed":
+                            job["status"] = "failed"
+                            job["error"] = assessment.get("evolution_errors", [])
+                            checkpoint()
+                            return job, None
                         selected_strategy = completed / "final_strategy.json"
                     checkpoint()
                     continue

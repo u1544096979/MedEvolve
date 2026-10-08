@@ -249,7 +249,7 @@ async def analyze_feedback(
     usage["runs_without_known_tokens"] = sum(
         item.get("runs_without_known_tokens", int(item["total_tokens"] is None)) for item in usages
     )
-    trace = [{"type": "patient_feedback", **run} for run in runs]
+    trace = [{"type": "patient_feedback", "stage": "feedback", **run} for run in runs]
     if not successful:
         return RunResult(trace=trace, usage=usage, status="failed",
                          error="feedback analysis produced no successful patient results")

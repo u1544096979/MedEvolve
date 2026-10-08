@@ -14,6 +14,7 @@ from experiments.matrix import (
     run_matrix,
     summarize_costs,
     _write_cost_csv,
+    _run_cost_rows,
 )
 
 
@@ -342,6 +343,54 @@ def test_nested_generation_stages_export_actual_primary_and_cached_provider_cost
     assert all(item["phase"] == "generation" for item in summary["records"])
 
 
+def test_patient_feedback_costs_flatten_each_success_and_failed_call_once(tmp_path):
+    run_dir = tmp_path / "feedback-run"
+    run_dir.mkdir()
+    (run_dir / "config.json").write_text(json.dumps({
+        "method": "medevolve", "environment": {"name": "PhysicianBench"},
+        "runtime": {"models": {"feedback": {"model": "configured-feedback"}}},
+        "evaluation": {"runtime": {"models": {}}},
+    }))
+    child_one = {"status": "completed", "usage": {
+        "input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+        "trace": [{"type": "provider_identity", "role": "feedback",
+                   "model": "feedback-a", "base_url": "https://a.example"}]}
+    child_failed = {"status": "failed", "usage": {"model_turns": 1, "tool_calls": 0},
+        "error": "provider unavailable",
+        "trace": [{"type": "provider_identity", "role": "feedback",
+                   "model": "feedback-b", "base_url": "https://b.example"}]}
+    child_three = {"status": "completed", "usage": {
+        "input_tokens": 20, "output_tokens": 3, "total_tokens": 23},
+        "trace": [{"type": "provider_identity", "role": "feedback",
+                   "model": "feedback-c", "base_url": "https://c.example"}]}
+    (run_dir / "runs.json").write_text(json.dumps([{
+        "stage": "round/0001/feedback",
+        "result": {"status": "completed", "usage": {
+            "model_turns": 3, "tool_calls": 0, "input_tokens": 30, "output_tokens": 5,
+            "total_tokens": 35, "runs_without_known_tokens": 1},
+            "trace": [
+                {"type": "patient_feedback", "stage": "feedback", "patient_id": "p1",
+                 "result": child_one},
+                {"type": "patient_feedback", "stage": "feedback", "patient_id": "p2",
+                 "result": child_failed},
+                {"type": "patient_feedback", "stage": "feedback", "patient_id": "p3",
+                 "result": child_three},
+            ]},
+    }]))
+
+    rows = _run_cost_rows(run_dir)
+    summary = summarize_costs([run_dir])
+
+    assert len(rows) == 3
+    assert [row["model"] for row in rows] == ["feedback-a", "feedback-b", "feedback-c"]
+    assert [row["phase"] for row in rows] == ["feedback"] * 3
+    assert [row["total_tokens"] for row in rows] == [12, None, 23]
+    assert [row["missing_usage_calls"] for row in rows] == [0, 1, 0]
+    assert summary["totals"]["total_tokens"] == 35
+    assert summary["missing_usage_runs"] == 1
+    assert summary["partial_usage_runs"] == 1
+
+
 def test_budget_exhaustion_with_full_batch_does_not_hide_task_counts(tmp_path):
     (tmp_path / "manifest.json").write_text(json.dumps({"status": "completed", "errors": []}))
     (tmp_path / "evaluation").mkdir()
@@ -438,3 +487,16 @@ async def test_medevolve_uses_only_each_model_groups_frozen_strategy(tmp_path):
     assert {path.parents[4].name for path in strategies} == {
         model_key(model) for model in matrix.models
     }
+
+
+def test_failed_strategy_update_cannot_be_frozen_as_completed_evolution(tmp_path):
+    (tmp_path / "manifest.json").write_text(json.dumps({"status": "completed", "errors": []}))
+    (tmp_path / "config.json").write_text(json.dumps({"method": "medevolve", "round_patients": [["p1"], ["p2"]]}))
+    for index in (1, 2):
+        folder = tmp_path / "rounds" / f"{index:04d}"
+        folder.mkdir(parents=True)
+        (folder / "feedback_run.json").write_text(json.dumps({"status": "completed", "output": {}}))
+        (folder / "update_run.json").write_text(json.dumps({"status": "failed" if index == 2 else "completed", "output": None if index == 2 else {}, "error": "input budget exceeded" if index == 2 else None}))
+    assessment = classify_run(tmp_path)
+    assert assessment["status"] == "failed"
+    assert assessment["evolution_errors"] == [{"round": 2, "phase": "update", "error": "input budget exceeded"}]
