@@ -65,7 +65,15 @@ class ReflexionRunner:
         self.group_dir.mkdir(parents=True,exist_ok=True)
         request,response=self.group_dir/"reflexion-request.json",self.group_dir/"reflexion-response.json"
         response.unlink(missing_ok=True)
-        request.write_text(json.dumps({**payload,"source_dir":str(Path(self.source_dir).expanduser().resolve()),
+        from contracts import ModelConfig
+        from runtime.context import input_limit
+        model=self.config.get(f"{phase}_model",self.config.get("execution_model",{}))
+        context_limit=input_limit(ModelConfig(**model))
+        configured_input=self.config.get("limits",{}).get("max_input_tokens",context_limit)
+        request.write_text(json.dumps({**payload,
+            "max_input_tokens":min(context_limit,configured_input),
+            "max_model_turns":self.config.get(f"{phase}_budget",{}).get("max_model_turns",30 if phase=="execution" else 10),
+            "source_dir":str(Path(self.source_dir).expanduser().resolve()),
             "state_dir":str(self.state),"bridge_url":self.bridge_url,"client_id":self._client_id},ensure_ascii=False),encoding="utf-8")
         model=self.config.get(f"{phase}_model",self.config.get("execution_model",{})); env={"PYTHONPATH":str(Path(__file__).resolve().parents[2])}
         key=model.get("api_key_env")
@@ -94,7 +102,7 @@ class ReflexionRunner:
         model=self.config.get("execution_model",{})
         result,error=await self._call({"action":"execute","instruction":task.instruction,"patient_id":task.patient_id,
             "decision_point":task.decision_point,
-            "tool_session":tool_session,"model":model,"max_steps":self.config.get("execution_budget",{}).get("max_model_turns",30),
+            "tool_session":tool_session,"model":model,"max_steps":max(1,self.config.get("execution_budget",{}).get("max_model_turns",30)//2),
             "reset_reflections":reset_reflections,"metadata":self._metadata(task),"experiences":self._select_experiences(task)},"execution")
         if error:return RunResult(status="failed",output=None,error=error,trace=[],usage={"known":False})
         self._attempts+=1; self._retry_ready=False; self._last_scratchpad=result.get("scratchpad","")

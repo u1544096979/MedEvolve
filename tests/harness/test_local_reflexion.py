@@ -61,7 +61,7 @@ def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkey
     state=tmp_path/"state"; model={"model":"fake","api_key_env":"FAKE_KEY","base_url":"http://model/v1"}
     monkeypatch.setenv("FAKE_KEY","fake")
     req={"action":"execute","source_dir":str(UPSTREAM),"state_dir":str(state),"bridge_url":"http://bridge",
-        "tool_session":"fresh-session","client_id":"test","model":model,"instruction":"Review the medication plan",
+        "tool_session":"fresh-session","client_id":"test","model":model,"instruction":"Review the medication plan " + "medical context " * 3000,
         "patient_id":"patient-007","decision_point":"medication","reset_reflections":True,"max_steps":8,
         "metadata":{"task_type":"药物处方","tool_names":["read_record"]}}
     executed=reflexion_worker.main(req)

@@ -56,9 +56,14 @@ def build_agent(module,prompts,req,model,tools,usage):
     functions={t["name"]:t for t in tools}
     key=os.environ.get(model.get("api_key_env",""),"")
     def call(prompt, phase, call_type):
+        if usage["calls"] >= int(req.get("max_model_turns",30)):
+            raise RuntimeError("Reflexion model turn budget exhausted")
+        if len(actor.enc.encode(prompt)) > int(req.get("max_input_tokens",120000)):
+            raise RuntimeError("Reflexion input context budget exhausted")
+        usage["calls"] += 1
         response=_chat_completion(model,key,prompt,800 if phase=="execution" else 600)
         bucket=usage["by_call_type"].setdefault(call_type,{"calls":0,"prompt_tokens":0,"completion_tokens":0,"tokens_known":True})
-        bucket["calls"]+=1; usage["calls"]+=1
+        bucket["calls"]+=1
         if response.get("usage"):
             bucket["prompt_tokens"]+=response["usage"].get("prompt_tokens",0) or 0
             bucket["completion_tokens"]+=response["usage"].get("completion_tokens",0) or 0
@@ -72,6 +77,10 @@ def build_agent(module,prompts,req,model,tools,usage):
     medical_prompt=PromptTemplate(input_variables=["examples","reflections","question","scratchpad"],
         template="""Solve a medical task using Thought, Action, Observation. Available actions are Tool[name|JSON arguments] and Finish[answer]. Use only listed tools, cite observed evidence, and do not write patient records.\nMedical tool names and JSON schemas:\n"""+tool_catalog.replace("{","{{").replace("}","}}")+"""\n{examples}\n{reflections}\nQuestion: {question}{scratchpad}""")
     class Adapter(agent_base):
+        def is_halted(self):
+            return ((self.step_n > self.max_steps) or
+                    len(self.enc.encode(self._build_agent_prompt())) > int(req.get("max_input_tokens",120000))) and not self.finished
+
         def step(self):
             self.scratchpad += f"\nThought {self.step_n}: " + self.prompt_agent()
             self.scratchpad += f"\nAction {self.step_n}: "
@@ -121,6 +130,8 @@ def main(req):
     actor,strategy,extract_experience=build_agent(module,prompts,req,model,tools,usage)
     actor.reflections=list(state.get("reflections",[])); actor.reflections_str="\n".join(actor.reflections)
     if req["action"]=="execute":
+        if actor.is_halted():
+            raise RuntimeError("Reflexion input context budget exhausted before execution")
         actor.run(reset=True,reflect_strategy=strategy.REFLEXION)
         state.update({"scratchpad":actor.scratchpad,"answer":actor.answer,"finished":actor.finished,"attempts":state.get("attempts",0)+1})
         state_path.write_text(json.dumps(state,ensure_ascii=False),encoding="utf-8")
