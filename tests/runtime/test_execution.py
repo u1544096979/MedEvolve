@@ -270,6 +270,31 @@ async def test_agent_without_structured_output_keeps_tool_loop_and_validates_jso
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("content", [
+    'I have reviewed the record. Let me compile the answer: {"answer":"patient found"}',
+    '```json\n{"answer":"patient found"}\n```',
+    '{"answer":"patient found\nfollow-up required"}',
+])
+async def test_unstructured_agent_accepts_json_object_after_prefix_or_fence(monkeypatch, content):
+    install_transport(monkeypatch, [TOOL_MESSAGE,
+        {"role": "assistant", "content": content}])
+
+    @function_tool
+    async def lookup() -> str:
+        """Read patient facts."""
+        return "patient found"
+
+    result = await run_agent(instructions="Read and answer", input_text="patient",
+        tools=[lookup], output_type=SolverAnswer,
+        model=MODEL.model_copy(update={"structured_agent_output": False}),
+        budget=Budget(max_model_turns=3, max_tool_calls=1))
+
+    assert result.status == "completed", result.error
+    expected = "patient found\nfollow-up required" if "follow-up" in content else "patient found"
+    assert result.output == {"answer": expected}
+
+
+@pytest.mark.asyncio
 async def test_agent_without_structured_output_rejects_invalid_final_json(monkeypatch):
     requests = install_transport(monkeypatch, [TOOL_MESSAGE,
         {"role": "assistant", "content": '{"wrong":"field"}'}])
@@ -288,6 +313,25 @@ async def test_agent_without_structured_output_rejects_invalid_final_json(monkey
     assert len(requests) == 2
     assert result.usage["total_tokens"] == 30
     assert "ValidationError" in result.error
+
+
+@pytest.mark.asyncio
+async def test_unstructured_agent_rejects_plain_text_without_json(monkeypatch):
+    install_transport(monkeypatch, [TOOL_MESSAGE,
+        {"role": "assistant", "content": "Let me check the patient record."}])
+
+    @function_tool
+    async def lookup() -> str:
+        """Read patient facts."""
+        return "patient found"
+
+    result = await run_agent(instructions="Read and answer", input_text="patient",
+        tools=[lookup], output_type=SolverAnswer,
+        model=MODEL.model_copy(update={"structured_agent_output": False}),
+        budget=Budget(max_model_turns=3, max_tool_calls=1))
+
+    assert result.status == "failed"
+    assert "未找到完整且符合结构的 JSON 对象" in result.error
 
 
 @pytest.mark.asyncio
