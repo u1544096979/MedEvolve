@@ -82,7 +82,10 @@
         "task_path": "tasks/v1",
         "case_path": "tasks/v1/<task>/tests/test_outputs.py",
         "entrypoint": "pytest tasks/v1/<task>/tests/test_outputs.py",
-        "unverified": []
+        "unverified": [],
+        "source_dir": ".benchmark_sources/physicianbench",
+        "scoring_timeout_seconds": 900,
+        "python_path": ".venv/bin/python"
       },
       "sources": {
         "medevolve": {
@@ -123,7 +126,13 @@
           "data/medagentbench/test_data_v2.json"
         ],
         "entrypoint": "src/server/tasks/medagentbench/eval.py",
-        "unverified": ["上游提交内没有 refsol.py，参考解答来源待核对"]
+        "unverified": [],
+        "source_dir": ".benchmark_sources/medagentbench",
+        "scoring_timeout_seconds": 900,
+        "python_path": ".venv/bin/python",
+        "dataset_path": "data/medagentbench/test_data_v2.json",
+        "refsol_source": "https://stanfordmedicine.box.com/s/fizv0unyjgkb1r3a83rfn5p3dc673uho",
+        "refsol_sha256": "67d19da263ac92c1b7075b3218ace3a4bd19b206a06fc7aebcc897dc39625419"
       },
       "sources": {
         "medevolve": {
