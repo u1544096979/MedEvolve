@@ -4,6 +4,7 @@
   "output_root": "outputs/harness-evolution",
   "run_dir_template": "outputs/harness-evolution/<run_id>/<environment>/<harness>/<source_method>/<seed>",
   "frozen_root": "outputs/harness-evolution/frozen",
+  "frozen_layout": "<environment>/<source_method>",
   "harnesses": ["openclaw", "hermes", "ace", "reflexion"],
   "source_methods": ["medevolve", "taskcraft", "workflow", "singleshot", "selfgen", "envexplore"],
   "tasks_per_group": 10,
