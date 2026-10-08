@@ -49,11 +49,12 @@ def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkey
     for name in ("llm","prompts","fewshots","utils","logger","reflexion_locked_agents"):
         if name in sys.modules: monkeypatch.delitem(sys.modules,name)
     prompts_seen=[]
+    transport_options=[]
     experience_json='{"condition":"diagnostic task","procedure":"Review relevant records","pitfall":"Avoid relying on one finding"}'
-    outputs=iter(["review the task " * 900,f"Tool[read_record{separator}{{}}]","use evidence " * 900,"Finish[secret-answer]",
+    outputs=iter(["review the task " * 900,f"Tool[read_record{separator}{{}}]","use evidence " * 900,"Finish[secret-answer\nEvidence reviewed]",
         "Review evidence before concluding.",
         f"```json\n{experience_json}\n```" if fenced_experience else experience_json])
-    monkeypatch.setattr(reflexion_worker,"_chat_completion",lambda model,key,prompt,tokens,stop=None:(prompts_seen.append(prompt) or {
+    monkeypatch.setattr(reflexion_worker,"_chat_completion",lambda model,key,prompt,tokens,stop=None:(prompts_seen.append(prompt) or transport_options.append((tokens,stop)) or {
         "choices":[{"message":{"content":next(outputs)}}],"usage":{"prompt_tokens":4,"completion_tokens":3}}))
     tool_schema=[{"name":"read_record","description":"read scoped record","parameters":{"type":"object","properties":{}}}]
     tool_calls=[]
@@ -61,7 +62,7 @@ def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkey
         if url.endswith("/tools"):return tool_schema
         tool_calls.append(payload);return {"status":"ok","output":"record"}
     monkeypatch.setattr(reflexion_worker,"_request",fake_request)
-    state=tmp_path/"state"; model={"model":"fake","api_key_env":"FAKE_KEY","base_url":"http://model/v1"}
+    state=tmp_path/"state"; model={"model":"fake","api_key_env":"FAKE_KEY","base_url":"http://model/v1","max_output_tokens":2000}
     monkeypatch.setenv("FAKE_KEY","fake")
     req={"action":"execute","source_dir":str(UPSTREAM),"state_dir":str(state),"bridge_url":"http://bridge",
         "tool_session":"fresh-session","client_id":"test","model":model,"instruction":"Review the medication plan " + "medical context " * 3000,
@@ -69,7 +70,9 @@ def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkey
         "metadata":{"task_type":"药物处方","tool_names":["read_record"]}}
     executed=reflexion_worker.main(req)
     assert executed["native"]=="ReactReflectAgent.run"
-    assert executed["answer"]=="secret-answer" and tool_calls
+    assert executed["answer"]=="secret-answer\nEvidence reviewed" and tool_calls
+    assert transport_options[0]==(2000,"\n")
+    assert transport_options[3]==(2000,["\nObservation", "\nThought"])
     assert any("read_record" in prompt and '"parameters"' in prompt for prompt in prompts_seen)
     assert any("Decision point: medication" in prompt for prompt in prompts_seen)
     assert tool_calls[0]=={"name":"read_record","arguments":{}}

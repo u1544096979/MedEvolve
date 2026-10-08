@@ -62,7 +62,9 @@ def build_agent(module,prompts,req,model,tools,usage):
         if len(actor.enc.encode(prompt)) > int(req.get("max_input_tokens",120000)):
             raise RuntimeError("Reflexion input context budget exhausted")
         usage["calls"] += 1
-        response=_chat_completion(model,key,prompt,800 if phase=="execution" else 600,stop="\n" if call_type=="actor" else None)
+        actor_stop=["\nObservation", "\nThought"] if re.search(r"\nAction \d+:\s*$",prompt) else "\n"
+        response=_chat_completion(model,key,prompt,model.get("max_output_tokens",800 if phase=="execution" else 600),
+            stop=actor_stop if call_type=="actor" else None)
         bucket=usage["by_call_type"].setdefault(call_type,{"calls":0,"prompt_tokens":0,"completion_tokens":0,"tokens_known":True})
         bucket["calls"]+=1
         if response.get("usage"):
@@ -76,8 +78,11 @@ def build_agent(module,prompts,req,model,tools,usage):
         return ((choices[0].get("message") or {}).get("content") or "") if choices else ""
     tool_catalog=json.dumps([{"name":t.get("name"),"description":t.get("description"),"parameters":t.get("parameters")} for t in tools],ensure_ascii=False)
     medical_prompt=PromptTemplate(input_variables=["examples","reflections","question","scratchpad"],
-        template="""Solve a medical task using Thought, Action, Observation. Return one Thought or Action line at a time; Tool arguments must be single-line JSON. Available actions are Tool[name|JSON arguments] and Finish[answer]. Use only listed tools, cite observed evidence, and do not write patient records.\nMedical tool names and JSON schemas:\n"""+tool_catalog.replace("{","{{").replace("}","}}")+"""\n{examples}\n{reflections}\nQuestion: {question}{scratchpad}""")
+        template="""Solve a medical task using Thought, Action, Observation. Return one Thought or one Action at a time; Tool arguments must be single-line JSON, while Finish answers may span multiple lines. Available actions are Tool[name|JSON arguments] and Finish[answer]. Use only listed tools, cite observed evidence, and do not write patient records.\nMedical tool names and JSON schemas:\n"""+tool_catalog.replace("{","{{").replace("}","}}")+"""\n{examples}\n{reflections}\nQuestion: {question}{scratchpad}""")
     class Adapter(agent_base):
+        def prompt_agent(self):
+            return self.llm(self._build_agent_prompt()).strip()
+
         def _build_reflection_prompt(self):
             # 官方 Wikipedia 截断器只裁剪观察行；医疗轨迹统一按模型输入预算检查。
             return self.reflect_prompt.format(examples=self.reflect_examples,
@@ -92,6 +97,9 @@ def build_agent(module,prompts,req,model,tools,usage):
             self.scratchpad += f"\nAction {self.step_n}: "
             action=self.prompt_agent(); self.scratchpad += action
             parsed=module.parse_action(action)
+            if not parsed:
+                final=re.fullmatch(r"Finish\[(.+)\]",action,re.DOTALL)
+                parsed=("Finish",final.group(1)) if final else None
             self.scratchpad += f"\nObservation {self.step_n}: "
             if not parsed:
                 self.scratchpad += "Invalid action. Use Tool[name|JSON] or Finish[answer]."; self.step_n+=1; return
