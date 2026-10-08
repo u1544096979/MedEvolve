@@ -100,8 +100,9 @@ async def test_data_exploration_reads_only_supplied_cache(method, runtime, monke
             assert payload["patient_id"] == item.patient_id
             assert payload["text"] == item.text
             assert payload["sources"] == [source.model_dump(mode="json") for source in item.sources]
-        with pytest.raises(ValueError, match="outside"):
-            await invoke("read_trajectory", json.dumps({"patient_id": held_out.patient_id}))
+        rejected = json.loads(await invoke("read_trajectory", json.dumps({"patient_id": held_out.patient_id})))
+        assert "outside" in rejected["error"]
+        assert "text" not in rejected and "sources" not in rejected
         return completed(DataExploration(guidance="关注时间变化与证据来源"))
 
     substitute = AsyncMock(side_effect=agent)

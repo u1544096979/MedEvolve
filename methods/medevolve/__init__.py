@@ -74,7 +74,7 @@ async def explore_data(
     async def read_trajectory(patient_id: str) -> str:
         """读取预算内的患者缓存轨迹与原始引用；input_truncated 标记裁剪。"""
         if patient_id not in cache:
-            raise ValueError("patient_id is outside the supplied trajectory cache")
+            return json.dumps({"error": "patient_id is outside the supplied trajectory cache; use list_patients to select an allowed ID"})
         from environments.fitting import fit_trajectory
         from runtime.context import count_tokens, input_limit
 
