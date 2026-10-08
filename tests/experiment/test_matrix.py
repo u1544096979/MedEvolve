@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from contracts import ModelConfig
+from contracts import ExperimentConfig, ModelConfig
 from experiments.matrix import (
     MatrixConfig,
     apply_matrix_overrides,
@@ -21,10 +21,10 @@ def _model(name: str) -> ModelConfig:
     return ModelConfig(model=name, api_key_env=f"{name.upper().replace('-', '_')}_KEY")
 
 
-def _matrix(tmp_path: Path, *, models=None, methods=None) -> MatrixConfig:
+def _matrix(tmp_path: Path, *, models=None, judges=None, methods=None) -> MatrixConfig:
     return MatrixConfig(
         models=models or [_model("model-a"), _model("model-b")],
-        judges=[_model("judge-a"), _model("judge-b"), _model("judge-c")],
+        judges=judges or [_model("judge-a"), _model("judge-b"), _model("judge-c")],
         slugs=["physicianbench"],
         methods=methods or ["singleshot"],
         cohort_root=tmp_path / "cohorts",
@@ -53,6 +53,32 @@ def test_model_groups_have_unique_run_ids_and_solver_tracks_generator(tmp_path):
     assert first["output_dir"] != second["output_dir"]
     assert first["evaluation"]["runtime"]["models"]["solver"] == first["runtime"]["models"]["generator"]
     assert first["evaluation"]["judges"] == [judge.model_dump(mode="json") for judge in matrix.judges]
+
+
+def test_matrix_accepts_two_judges_and_emits_valid_experiment_config(tmp_path):
+    judges = [_model("judge-a"), _model("judge-b")]
+    matrix = _matrix(tmp_path, judges=judges)
+    payload = apply_matrix_overrides(
+        _payload(), matrix.models[0], matrix.judges, tmp_path / "run", "run-two-judges",
+        matrix.manager_url, "physicianbench", None, 12, 12,
+    )
+
+    validated = ExperimentConfig.model_validate(payload)
+
+    assert validated.evaluation.judges == judges
+
+
+@pytest.mark.parametrize("count", [1, 4])
+def test_matrix_rejects_judge_counts_outside_two_or_three(tmp_path, count):
+    with pytest.raises(ValueError):
+        _matrix(tmp_path, judges=[_model(f"judge-{index}") for index in range(count)])
+
+
+def test_matrix_rejects_duplicate_judge_names_with_different_routes(tmp_path):
+    judges = [ModelConfig(model="judge", base_url=f"https://provider-{index}.test",
+                          api_key_env="UNUSED") for index in range(2)]
+    with pytest.raises(ValueError, match="distinct"):
+        _matrix(tmp_path, judges=judges)
 
 
 def test_medevolve_config_uses_only_its_group_frozen_strategy(tmp_path):

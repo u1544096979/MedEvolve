@@ -220,9 +220,9 @@ class EvaluationConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_judges(self) -> "EvaluationConfig":
-        if self.judges and len(self.judges) != 3:
-            raise ValueError("judges must contain either zero or three models")
-        if self.judges and len({judge.model for judge in self.judges}) != 3:
+        if self.judges and len(self.judges) not in {2, 3}:
+            raise ValueError("judges must contain zero, two or three models")
+        if self.judges and len({judge.model for judge in self.judges}) != len(self.judges):
             raise ValueError("judge model names must be distinct")
         return self
 

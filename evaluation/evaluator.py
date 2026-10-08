@@ -53,8 +53,8 @@ def _output(run: RunResult, schema: type[BaseModel]) -> BaseModel:
 
 
 def _judge_outputs(runs: list[RunResult], schema: type[BaseModel]) -> list[BaseModel]:
-    if len(runs) != JUDGE_COUNT:
-        raise ValueError(f"judging requires exactly {JUDGE_COUNT} runs")
+    if len(runs) not in {2, JUDGE_COUNT}:
+        raise ValueError("judging requires exactly two or three runs")
     return [_output(run, schema) for run in runs]
 
 
@@ -303,12 +303,13 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
 
         phase = "model_error"
         material["verification"] = result.verification.model_dump()
+        judge_count = len(config.judges) or JUDGE_COUNT
         quality_judges = config.judges or [config.runtime.models["quality"]] * JUDGE_COUNT
         quality_runs = await asyncio.gather(*[
             model_run(runtime.call_llm, role="quality", schema=QualityJudgment,
                       instructions=role_instructions(prompts.QUALITY), payload=material,
                       model=quality_judges[index], judge_index=index, record=False)
-            for index in range(JUDGE_COUNT)
+            for index in range(judge_count)
         ])
         result.runs.extend(quality_runs)
         result.quality = _aggregate_quality_scores(quality_runs)
@@ -322,7 +323,7 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
                       payload={"task": material["task"],
                                "complexity_metrics": complexity.model_dump()},
                       model=difficulty_judges[index], judge_index=index, record=False)
-            for index in range(JUDGE_COUNT)
+            for index in range(judge_count)
         ])
         result.runs.extend(difficulty_runs)
         result.difficulty = _aggregate_difficulty_scores(difficulty_runs, complexity)

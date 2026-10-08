@@ -14,6 +14,7 @@ from contracts import (
     Verification,
 )
 from evaluation import evaluate_task
+from evaluation.evaluator import _judge_outputs
 
 
 @pytest.fixture
@@ -397,7 +398,7 @@ def test_three_judges_take_median_and_keep_raw_scores(harness):
                 if c["output_type"] is DifficultyJudgment]) == 3
 
 
-@pytest.mark.parametrize("count", [1, 2, 4])
+@pytest.mark.parametrize("count", [1, 4])
 def test_evaluation_judges_reject_invalid_count(harness, count):
     with pytest.raises(ValueError):
         EvaluationConfig(runtime=harness.config.runtime, judges=[
@@ -406,21 +407,31 @@ def test_evaluation_judges_reject_invalid_count(harness, count):
         ])
 
 
-def test_evaluation_judges_allow_empty_or_three(harness):
+def test_evaluation_judges_allow_empty_two_or_three(harness):
     assert EvaluationConfig(runtime=harness.config.runtime).judges == []
-    judges = [ModelConfig(model=f"judge-{index}", api_key_env="UNUSED")
-              for index in range(3)]
-    assert EvaluationConfig(runtime=harness.config.runtime, judges=judges).judges == judges
+    for count in (2, 3):
+        judges = [ModelConfig(model=f"judge-{index}", api_key_env="UNUSED")
+                  for index in range(count)]
+        assert EvaluationConfig(runtime=harness.config.runtime, judges=judges).judges == judges
 
 
-def test_evaluation_judges_reject_duplicate_model_names(harness):
-    duplicate_judges = [
-        ModelConfig(model="judge-a", base_url=f"https://provider-{index}.test",
-                    api_key_env="UNUSED")
-        for index in range(3)
-    ]
+@pytest.mark.parametrize("count", [2, 3])
+def test_evaluation_judges_reject_duplicate_model_names(harness, count):
+    duplicate_judges = [ModelConfig(model="judge-a", base_url=f"https://provider-{index}.test",
+        api_key_env="UNUSED") for index in range(count)]
     with pytest.raises(ValueError, match="distinct"):
         EvaluationConfig(runtime=harness.config.runtime, judges=duplicate_judges)
+
+
+def test_judge_outputs_reject_missing_and_failed_runs():
+    with pytest.raises(ValueError, match="exactly two or three"):
+        _judge_outputs([RunResult(status="completed", output={}, trace=[], usage={})],
+                       QualityJudgment)
+    with pytest.raises(ValueError, match="provider unavailable"):
+        _judge_outputs([
+            RunResult(status="failed", error="provider unavailable", trace=[], usage={}),
+            RunResult(status="completed", output={}, trace=[], usage={}),
+        ], QualityJudgment)
 
 
 def test_configured_judges_run_for_quality_and_difficulty_only(harness):
@@ -450,6 +461,44 @@ def test_configured_judges_run_for_quality_and_difficulty_only(harness):
     assert any(item == {"role": "quality", "model": "judge-0", "judge_index": 0}
                for item in identities)
     assert all("api_key" not in item for item in identities)
+
+
+def test_two_judges_keep_raw_scores_and_solver_identity(harness):
+    h = harness
+    h.config = EvaluationConfig(runtime=h.config.runtime, judges=[
+        ModelConfig(model="judge-54-nano", api_key_env="UNUSED"),
+        ModelConfig(model="judge-4o-mini", api_key_env="UNUSED"),
+    ])
+    h.quality_scores = [5, 2]
+    h.depths = [4, 1]
+
+    result = evaluate(h)
+
+    quality_calls = [call for call in h.model_calls
+                     if call["output_type"] is QualityJudgment]
+    difficulty_calls = [call for call in h.model_calls
+                        if call["output_type"] is DifficultyJudgment]
+    assert [call["model"].model for call in quality_calls] == [
+        "judge-54-nano", "judge-4o-mini"]
+    assert [call["model"].model for call in difficulty_calls] == [
+        "judge-54-nano", "judge-4o-mini"]
+    assert len(quality_calls) == len(difficulty_calls) == 2
+    assert result.quality.factual_accuracy.scores == [5, 2]
+    assert result.quality.factual_accuracy.score == 3
+    assert result.quality.factual_accuracy.reason == "J1: supported | J2: supported"
+    assert result.difficulty.reasoning_depths == [4, 1]
+    assert result.difficulty.reasoning_depth == 2
+    assert result.difficulty.reason == "J1: 跨记录整合 | J2: 跨记录整合"
+    identities = [item["model_identity"] for run in result.runs for item in run.trace
+                  if item.get("type") == "model_identity"]
+    assert [(item["role"], item["model"], item["judge_index"])
+            for item in identities if item["role"] in {"quality", "difficulty"}] == [
+                ("quality", "judge-54-nano", 0), ("quality", "judge-4o-mini", 1),
+                ("difficulty", "judge-54-nano", 0), ("difficulty", "judge-4o-mini", 1),
+            ]
+    solver_call = next(call for call in h.model_calls
+                       if call["output_type"] is SolverAnswer)
+    assert solver_call["model"].model == "solver"
 
 
 def test_explicit_judges_do_not_require_legacy_quality_or_difficulty_roles(harness):

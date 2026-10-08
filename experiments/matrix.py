@@ -31,7 +31,7 @@ class MatrixConfig(BaseModel):
     """矩阵输入；所有模型路由均由调用方提供，不在此加载凭证。"""
 
     models: list[ModelConfig] = Field(min_length=1)
-    judges: list[ModelConfig] = Field(min_length=3, max_length=3)
+    judges: list[ModelConfig] = Field(min_length=2, max_length=3)
     slugs: list[str] = Field(min_length=1)
     methods: list[str] = Field(min_length=1)
     cohort_root: Path = Path("outputs/pool-screening")
@@ -46,11 +46,13 @@ class MatrixConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_matrix(self) -> "MatrixConfig":
-        if len(self.judges) != 3:
-            raise ValueError("judges must contain exactly three models")
+        if len(self.judges) not in {2, 3}:
+            raise ValueError("judges must contain exactly two or three models")
         judge_signatures = [json.dumps(item.model_dump(mode="json"), sort_keys=True) for item in self.judges]
         if len(set(judge_signatures)) != len(judge_signatures):
-            raise ValueError("judges must be three unique model configurations")
+            raise ValueError("judges must be unique model configurations")
+        if len({item.model for item in self.judges}) != len(self.judges):
+            raise ValueError("judge model names must be distinct")
         if len(set(self.slugs)) != len(self.slugs) or any(slug not in SLUGS for slug in self.slugs):
             raise ValueError(f"slugs must be unique members of {SLUGS}")
         if len(set(self.methods)) != len(self.methods) or any(method not in METHODS for method in self.methods):
