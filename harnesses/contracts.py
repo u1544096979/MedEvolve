@@ -5,11 +5,11 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from contracts import Budget, ModelConfig, RunResult, SolverInput, Task, TaskSplit
+from contracts import Budget, CrossTaskExperience, ModelConfig, RunResult, SolverInput, Task, TaskSplit
 
 
 __all__ = ["Budget", "GroupKey", "HarnessAdapter", "HarnessLimits", "HarnessName",
-           "HarnessStep", "ModelConfig", "RunResult", "Snapshot", "SolverInput",
+           "HarnessStep", "ModelConfig", "RunResult", "Snapshot", "SolverInput", "CrossTaskExperience",
            "Task", "TaskSplit", "TrainingFeedback"]
 
 

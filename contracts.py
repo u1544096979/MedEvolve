@@ -204,6 +204,18 @@ class SolverInput(BaseModel):
     decision_point: str | None = None
 
 
+class CrossTaskExperience(BaseModel):
+    """患者无关、可迁移的单条任务经验。"""
+
+    id: str
+    task_type: str
+    tool_names: list[str] = Field(default_factory=list)
+    condition: str
+    procedure: str
+    pitfall: str
+    source_task_id: str
+
+
 class SolverAnswer(BaseModel):
     answer: str
 

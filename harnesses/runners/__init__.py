@@ -6,6 +6,7 @@ RUNNERS = {
     "openclaw": ("harnesses.runners.openclaw", "OpenClawRunner"),
     "hermes": ("harnesses.runners.hermes", "HermesRunner"),
     "ace": ("harnesses.runners.ace", "ACERunner"),
+    "reflexion": ("harnesses.runners.reflexion", "ReflexionRunner"),
 }
 
 
