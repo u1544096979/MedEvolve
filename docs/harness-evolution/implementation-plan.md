@@ -220,12 +220,11 @@ python -m experiments.harness_test --config configs/harness-evolution.json \
   --environment PhysicianBench --harness openclaw --source medevolve
 ```
 
-- [ ] 写贯通测试，用四种替代原生组件运行10题7/3划分，断言仅7题反馈进入学习；测试分别读取初始状态与最终经验，3题测试反馈不进入学习。断言新题会话不同、题间临时目录不同、评分后释放实例、快照不变。
-- [ ] 训练入口读取或创建共同冻结清单，准备独立组目录，按轮次执行训练题。每次尝试以 `read_only=True` 创建独立医疗实例，不借用生成流程的共享实例；通过 `prepare_trajectory(context.instance, patient_id)` 保存原始患者材料。执行后收集状态和真实工具轨迹，调用 `make_training_feedback()`；评审应用公共输入预算并记录缩减信息。学习结束后关闭工具会话，故障跳过学习并记录，所有清理置于 `finally`。
-- [ ] 测试入口分别运行初始状态和最终状态；每题复制经验到独立临时目录并启动新会话，关闭学习。合成测试使用任务 4 的公共完成评审；逐题保存原始结果，关闭进程与实例后丢弃目录。经验导出与重新加载的目录布局必须一致。
-- [ ] 汇总按环境、基座、来源分别保存测试成绩、基线、绝对提升、逐题分母和失败类型；按患者配对 bootstrap 1000次，种子42，小于两组时区间为空。成本按生成、执行、学习、评审及测试分开记录，缺价格或用量标记未知，生成成本按任务来源仅计一次。
-- [ ] 运行替代测试及四基座真实接入验收，独立提交命令与汇总改动：`feat(experiment): 提供Harness训练和测试命令`、`feat(experiment): 汇总测试成绩与成本`。真实验收缺程序、数据、授权或预算时报告未验证，不产生付费请求。
-
+- [x] 四个 fake runner 贯通10题7/3划分；断言七个训练任务参与反馈、Reflexion 重试换新医疗会话，initial/final 快照各自使用三个新 runner、临时目录和只读会话；评分后释放实例，测试不学习，快照摘要不变。
+- [x] 训练命令按环境与来源读取或创建共同冻结清单，组内串行执行训练题。每次尝试通过只读工具桥创建独立医疗实例，保存原始轨迹、观察状态、评分、RunResult 与阶段 usage；评分后释放，再学习或进行 Reflexion fresh-session retry。每组保存 initial/final 快照和 `train.json`。
+- [x] 测试命令分别读取 initial 与 final 快照，每题以 `TemporaryDirectory` 启动冻结 runner 和新 session；不调用 learn/retry，写入 `test.json` 后关闭 runner/session 并清理临时目录。测试状态与训练状态保留各自摘要。
+- [x] 汇总 `summary.json` 按环境、基座、来源保存基线、initial/final 成绩、有效分母、失败类别、绝对提升与患者配对提升；按患者聚类 bootstrap 1000次、种子42，患者少于两个时区间为空。成本分生成、执行、学习、评审、测试阶段，保留 raw usage 与 known，未知价格不估算；每个环境和来源的生成成本只计一次。
+- [ ] 真实四基座接入验收：保留 `MEDEVOLVE_HARNESS_LIVE=1` 门控。当前配置 `execute:false`，且本机锁定源码、输入核验文件未齐，未运行模型或医疗服务；报告为未验证。
 正式运行前的验证命令：
 
 ```bash
