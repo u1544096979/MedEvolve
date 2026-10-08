@@ -16,5 +16,10 @@
     "medical_tool_call": {
       "sideEffecting": true
     }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
   }
 }

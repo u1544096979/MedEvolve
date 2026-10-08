@@ -80,12 +80,23 @@ class OpenClawRunner:
         if initial_dir.is_dir():
             export_experience(initial_dir, self.workspace, include=("skills", "memory", "MEMORY.md"))
         (self.state_dir / "openclaw.json").write_text(json.dumps(cfg), encoding="utf-8")
-        self._process = await self._process_factory(
-            self.config.get("openclaw_bin", "openclaw"), "gateway", "run", "--port", str(self._gateway_port),
-            cwd=str(self.group_dir), env={**os.environ, **self._env(model)},
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
-        )
-        await self._wait_gateway()
+        for attempt in range(2):
+            self._process = await self._process_factory(
+                self.config.get("openclaw_bin", "openclaw"), "gateway", "run", "--port", str(self._gateway_port),
+                cwd=str(self.group_dir), env={**os.environ, **self._env(model)},
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                await self._wait_gateway()
+                break
+            except RuntimeError:
+                if self._process.returncode is None:
+                    raise
+                _, stderr = await self._process.communicate()
+                detail = stderr.decode("utf-8", errors="replace")
+                # 锁定版本首次迁移插件清单后要求重启，沿用迁移后的配置重启一次。
+                if attempt or "plugin migration inputs changed during startup convergence" not in detail:
+                    raise RuntimeError(f"OpenClaw Gateway 提前退出：{detail[-1200:]}")
 
     async def _wait_gateway(self):
         import httpx

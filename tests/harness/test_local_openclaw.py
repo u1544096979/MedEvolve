@@ -107,3 +107,28 @@ def test_openclaw_accepts_flattened_agent_exec_final_response():
     assert create_runner("openclaw", config={}, group_dir=".", bridge_url="http://127.0.0.1")._answer(
         {"status": "ok", "result": {"final": "flattened answer", "meta": {"agentMeta": {"assistantTurns": 10}}}}
     ) == "flattened answer"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_restarts_once_after_native_plugin_migration(tmp_path):
+    created = []
+    class Process:
+        returncode = 1
+        async def communicate(self):
+            return b"", b"OpenClaw plugin migration inputs changed during startup convergence"
+    async def process_factory(*args, **kwargs):
+        proc = Process()
+        created.append(proc)
+        return proc
+    runner = create_runner("openclaw", config={
+        "execution_model": {"model": "model-x", "base_url": "https://example.invalid/v1", "api_key_env": "TEST_KEY"},
+        "process_factory": process_factory,
+    }, group_dir=tmp_path / "group", bridge_url="")
+    async def wait_gateway():
+        if len(created) == 1:
+            raise RuntimeError("OpenClaw Gateway 提前退出")
+    runner._wait_gateway = wait_gateway
+    initial = tmp_path / "initial"
+    initial.mkdir()
+    await runner.start(GroupKey(run_id="r", environment="PhysicianBench", harness="openclaw", source_method="medevolve", seed=42), Snapshot(path=initial, digest="x"))
+    assert len(created) == 2
