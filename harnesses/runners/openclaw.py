@@ -65,7 +65,11 @@ class OpenClawRunner:
             "agents": {"defaults": {"workspace": str(self.workspace)}, "entries": {"medical": {
                 "name": "Medical", "workspace": str(self.workspace),
                 "model": {"primary": f"medevolve/{model['model']}"},
-                **({"tools": {"deny": ["write", "edit", "apply_patch", "exec", "process", "skill_workshop"]}} if self._frozen else {}),
+                "tools": {
+                    "allow": ["medical_tools_list", "medical_tool_call", "read", "memory_search", "memory_get"]
+                             + ([] if self._frozen else ["write", "edit", "apply_patch", "skill_workshop"]),
+                    **({"deny": ["write", "edit", "apply_patch", "exec", "process", "skill_workshop"]} if self._frozen else {}),
+                },
             }}},
             "models": {"mode": "merge", "providers": {"medevolve": {
                 "baseUrl": model["base_url"], "api": "openai-completions",
