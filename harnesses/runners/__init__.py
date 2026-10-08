@@ -5,6 +5,7 @@ from importlib import import_module
 RUNNERS = {
     "openclaw": ("harnesses.runners.openclaw", "OpenClawRunner"),
     "hermes": ("harnesses.runners.hermes", "HermesRunner"),
+    "ace": ("harnesses.runners.ace", "ACERunner"),
 }
 
 
