@@ -100,6 +100,27 @@ def _version_ok(lock, harness, settings):
         "version": entry.get("version"), "dependency_lock": entry.get("dependency_lock")}
 
 
+def _official_import_probe(harness, source_dir, python_path):
+    # Use the same import loaders as the worker, with outbound sockets disabled and
+    # placeholder credentials. Import-time failures are reported before a paid run.
+    runner = {"ace": "from harnesses.runners.ace_worker import _load_official; _load_official(sys.argv[1])",
+              "reflexion": "from harnesses.runners.reflexion_worker import _official; _official(sys.argv[1], 'probe-only-invalid')"}[harness]
+    code = ("import json,socket,sys,urllib.request; "
+            "deny=lambda *a,**k: (_ for _ in ()).throw(RuntimeError('network disabled during import probe')); "
+            "socket.socket.connect=deny; socket.socket.connect_ex=deny; socket.create_connection=deny; "
+            "urllib.request.urlopen=deny; " + runner + "; print(json.dumps({'official_import_ok':True}))")
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHON_DOTENV_DISABLED": "1",
+           "OPENAI_API_KEY": "probe-only-invalid"}
+    try:
+        probe = subprocess.run([str(python_path), "-c", code, str(source_dir)],
+            capture_output=True, text=True, timeout=30, check=True, cwd=str(ROOT), env=env)
+        lines = [line for line in probe.stdout.splitlines() if line.strip()]
+        return json.loads(lines[-1]) if lines else {"official_import_ok": False, "error": "probe produced no result"}
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        detail = (getattr(exc, "stderr", None) or str(exc)).strip()
+        return {"official_import_ok": False, "error": detail[-1000:]}
+
+
 def _source_probe(harness, source_dir, program_path, python_path, lock_path):
     result = {"source_dir": source_dir.is_dir(), "program_path": False,
               "source_sha": None, "components": {}, "runtime": None}
@@ -129,6 +150,8 @@ def _source_probe(harness, source_dir, program_path, python_path, lock_path):
                                      "version":(probe.stdout or probe.stderr).strip()[:160]}
             except (OSError,subprocess.SubprocessError) as exc:
                 result["runtime"] = {"error":str(exc)}
+    elif harness in {"ace", "reflexion"}:
+        result["runtime"] = _official_import_probe(harness, source_dir, python_path)
     else:
         py = python_path if python_path.is_file() else Path(sys.executable)
         modules = {"hermes":["hermes_cli","openai","httpx"],

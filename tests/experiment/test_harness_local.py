@@ -176,6 +176,21 @@ def test_preflight_checks_only_selected_source_and_does_not_require_execute(rig)
     assert report[0]["data"]["status"]=="ok"
 
 
+def test_official_import_probe_uses_locked_loader_without_network_or_real_credentials(monkeypatch,tmp_path):
+    seen={}
+    def fake_run(command,**kwargs):
+        seen["command"]=command; seen.update(kwargs)
+        return SimpleNamespace(stdout='{"official_import_ok": true}',stderr="",returncode=0)
+    monkeypatch.setattr(harness_train.subprocess,"run",fake_run)
+    result=harness_train._official_import_probe("reflexion",tmp_path,Path("/fake/python"))
+    assert result=={"official_import_ok":True}
+    probe=seen["command"][2]
+    assert "_official(sys.argv[1], 'probe-only-invalid')" in probe
+    assert "socket.socket.connect=deny" in probe and "urllib.request.urlopen=deny" in probe
+    assert seen["env"]["PYTHON_DOTENV_DISABLED"]=="1"
+    assert seen["env"]["OPENAI_API_KEY"]=="probe-only-invalid"
+
+
 def test_freeze_manifest_isolated_by_environment_and_source(rig,tmp_path):
     config,_,_=rig
     med_source=tmp_path/"medagent"; med_source.mkdir()

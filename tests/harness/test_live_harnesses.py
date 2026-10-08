@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from experiments.harness_train import (ROOT, _require_execution, load_config, preflight,
-    run_training, selections)
+    group_id, run_training, selections, rooted, write_json)
 from experiments.harness_test import run_test
 
 
@@ -34,6 +34,9 @@ def test_live_train_and_frozen_test_for_configured_group(harness):
     trained=asyncio.run(run_training(config,*combo))
     assert len(trained["train_task_ids"])==7
     assert all(row.get("tool_session",{}).get("closed") for row in trained["attempts"])
+    group_path=rooted(group_id(config,*combo,config["seeds"][0]))
+    write_json(group_path/"train.json",trained,config)
     tested=asyncio.run(run_test(config,*combo))
     assert tested["planned_denominator"]==3
     assert tested["snapshots_unchanged"]
+    write_json(group_path/"test.json",tested,config)
