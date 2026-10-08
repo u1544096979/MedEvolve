@@ -35,3 +35,8 @@ OpenClaw 使用 Gateway embedded agent path。上游 `src/skills/workshop/experi
 - 测试夹具改为上游 Gateway 的 `status` + `result.payloads` + `result.meta.agentMeta` 形状，并验证 10-turn 原生 review 等待路径及 feedback usage。增加 `agent-exec-result` 扁平 final 和本机 SQLite review state 读取测试。
 - review state 源码确认：`src/skills/workshop/collection-review-state.ts` 使用 `sha256Hex(path.resolve(workspaceDir))` 写入 `skills.curatorState.lastResult.experienceReviews[workspaceKey]`；SQLite `config_machine_state.value_json` 保存整份状态。runner 的只读查询及 workspace hash 与该实现一致，且仍要求 review 时间晚于本题开始/基线。
 - 验证：`tests/harness/test_local_openclaw.py tests/harness`，125 passed；`git diff --check` 通过。
+
+
+## Hermes worker 测试隔离
+
+worker 测试将 `HERMES_HOME` 显式设为 pytest `tmp_path/hermes-home`，并断言传入 Hermes 的 home 路径等于该临时目录。单测 2 passed；harness 全量 130 passed；`git diff --check` 通过。

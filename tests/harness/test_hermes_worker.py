@@ -8,6 +8,8 @@ import pytest
 
 def _load_worker(monkeypatch, tmp_path, *, frozen):
     calls = {}
+    hermes_home = tmp_path / "hermes-home"
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
     class Entry:
         def __init__(self, handler): self.handler = handler
@@ -70,7 +72,7 @@ def _load_worker(monkeypatch, tmp_path, *, frozen):
 
 def test_hermes_worker_registers_medical_tools_and_preserves_read_access(monkeypatch, tmp_path):
     calls, result = _load_worker(monkeypatch, tmp_path, frozen=True)
-    assert calls["env_home"]
+    assert calls["env_home"] == str(tmp_path / "hermes-home")
     assert calls["agent"]["enabled_toolsets"] == ["medevolve", "memory", "skills"]
     assert calls["agent"]["skip_memory"] is False
     assert calls["agent"]["skip_context_files"] is True
