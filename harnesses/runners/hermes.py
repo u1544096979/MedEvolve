@@ -14,6 +14,7 @@ from harnesses.local import export_experience, run_command
 from harnesses.snapshots import collect_files, directory_digest
 
 WORKER = Path(__file__).with_name("hermes_worker.py")
+EXPERIENCE_PATHS = ("skills", "memories/MEMORY.md", "memories/USER.md")
 
 
 class HermesRunner:
@@ -40,9 +41,9 @@ class HermesRunner:
         (self.home / "skills").mkdir(exist_ok=True)
         initial_path = Path(initial.path)
         if initial_path.is_dir():
-            export_experience(initial_path, self.home, include=("skills", "memory", "MEMORY.md", "USER.md"))
+            export_experience(initial_path, self.home, include=EXPERIENCE_PATHS)
         (self.home / "skills").mkdir(parents=True, exist_ok=True)
-        (self.home / "memory").mkdir(parents=True, exist_ok=True)
+        (self.home / "memories").mkdir(parents=True, exist_ok=True)
 
     def _model(self, phase):
         return self.config.get(f"{phase}_model", self.config.get("execution_model", {}))
@@ -124,13 +125,13 @@ class HermesRunner:
 
     async def freeze(self, destination: Path):
         target=Path(destination)
-        export_experience(self.home,target,include=("skills","memory","MEMORY.md","USER.md"))
+        export_experience(self.home,target,include=EXPERIENCE_PATHS)
         (target / "skills").mkdir(parents=True, exist_ok=True)
-        (target / "memory").mkdir(parents=True, exist_ok=True)
+        (target / "memories").mkdir(parents=True, exist_ok=True)
         return Snapshot(path=target,digest=directory_digest(target))
 
     def _experience_digest(self):
-        files = collect_files(self.home, include=("skills", "memory", "MEMORY.md", "USER.md"))
+        files = collect_files(self.home, include=EXPERIENCE_PATHS)
         payload = json.dumps(files, ensure_ascii=False, sort_keys=True).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 

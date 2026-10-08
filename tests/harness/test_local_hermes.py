@@ -14,7 +14,7 @@ async def test_hermes_rotates_sessions_and_freeze_keeps_readable_experience(tmp_
         request = json.loads((group_dir / "hermes-request.json").read_text())
         requests.append(request)
         if request["action"] == "learn":
-            (tmp_path / "group" / "hermes-home" / "memory" / "MEMORY.md").write_text("learned")
+            (tmp_path / "group" / "hermes-home" / "memories" / "MEMORY.md").write_text("learned")
         response = {"final_response": "答复", "messages": [{"role": "assistant", "content": "答复"}],
                     "completed": True, "failed": False, "usage": None, "trace": []}
         (group_dir / "hermes-response.json").write_text(json.dumps(response))
@@ -29,8 +29,9 @@ async def test_hermes_rotates_sessions_and_freeze_keeps_readable_experience(tmp_
     await runner.start(GroupKey(run_id="run", environment="PhysicianBench", harness="hermes", source_method="medevolve", seed=42), Snapshot(path=tmp_path, digest="x"))
     await runner.execute(SolverInput(instruction="任务一", patient_id="p1"), "tool-1")
     first = runner.current_session_id
-    await runner.learn(TrainingFeedback(task_id="task-1", completed=True, failure_category=None, reason="reason", reference_answer="secret", evidence=[]))
+    learned = await runner.learn(TrainingFeedback(task_id="task-1", completed=True, failure_category=None, reason="reason", reference_answer="secret", evidence=[]))
     assert runner.current_session_id == first
+    assert learned.learning_status == "updated"
     await runner.execute(SolverInput(instruction="任务二", patient_id="p2"), "tool-2")
     assert runner.current_session_id != first
     assert requests[0]["model"]["model"] == "m"
@@ -38,6 +39,10 @@ async def test_hermes_rotates_sessions_and_freeze_keeps_readable_experience(tmp_
     assert "secret" not in json.dumps(requests[0])
     frozen = await runner.freeze(tmp_path / "frozen")
     assert (frozen.path / "skills").is_dir()
+    assert (frozen.path / "memories" / "MEMORY.md").read_text() == "learned"
+    reloaded = create_runner("hermes", config={"frozen": True}, group_dir=tmp_path / "reloaded", bridge_url="")
+    await reloaded.start(runner.group, frozen)
+    assert (reloaded.home / "memories" / "MEMORY.md").read_text() == "learned"
     await runner.close()
 
 
