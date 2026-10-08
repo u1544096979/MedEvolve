@@ -47,10 +47,10 @@ def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkey
     for name in ("llm","prompts","fewshots","utils","logger","reflexion_locked_agents"):
         if name in sys.modules: monkeypatch.delitem(sys.modules,name)
     prompts_seen=[]
-    outputs=iter(["review the task","Tool[read_record|{}]","use evidence","Finish[secret-answer]",
+    outputs=iter(["review the task " * 900,"Tool[read_record|{}]","use evidence " * 900,"Finish[secret-answer]",
         "Review evidence before concluding.",
         '{"condition":"diagnostic task","procedure":"Review relevant records","pitfall":"Avoid relying on one finding"}'])
-    monkeypatch.setattr(reflexion_worker,"_chat_completion",lambda model,key,prompt,tokens:(prompts_seen.append(prompt) or {
+    monkeypatch.setattr(reflexion_worker,"_chat_completion",lambda model,key,prompt,tokens,stop=None:(prompts_seen.append(prompt) or {
         "choices":[{"message":{"content":next(outputs)}}],"usage":{"prompt_tokens":4,"completion_tokens":3}}))
     tool_schema=[{"name":"read_record","description":"read scoped record","parameters":{"type":"object","properties":{}}}]
     tool_calls=[]

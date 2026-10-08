@@ -10,10 +10,11 @@ def _request(url, payload=None, client_id=""):
     with urllib.request.urlopen(req,timeout=60) as resp: return json.loads(resp.read())
 
 
-def _chat_completion(model, api_key, prompt, max_tokens):
+def _chat_completion(model, api_key, prompt, max_tokens, stop=None):
     base=(model.get("base_url") or "https://api.openai.com/v1").rstrip("/")
     body={"model":model["model"],"messages":[{"role":"user","content":prompt}],
           "temperature":0,"max_tokens":max_tokens}
+    if stop is not None: body["stop"]=stop
     request=urllib.request.Request(base+"/chat/completions",data=json.dumps(body).encode(),
         headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"})
     with urllib.request.urlopen(request,timeout=180) as response: return json.loads(response.read())
@@ -61,7 +62,7 @@ def build_agent(module,prompts,req,model,tools,usage):
         if len(actor.enc.encode(prompt)) > int(req.get("max_input_tokens",120000)):
             raise RuntimeError("Reflexion input context budget exhausted")
         usage["calls"] += 1
-        response=_chat_completion(model,key,prompt,800 if phase=="execution" else 600)
+        response=_chat_completion(model,key,prompt,800 if phase=="execution" else 600,stop="\n" if call_type=="actor" else None)
         bucket=usage["by_call_type"].setdefault(call_type,{"calls":0,"prompt_tokens":0,"completion_tokens":0,"tokens_known":True})
         bucket["calls"]+=1
         if response.get("usage"):
@@ -75,8 +76,13 @@ def build_agent(module,prompts,req,model,tools,usage):
         return ((choices[0].get("message") or {}).get("content") or "") if choices else ""
     tool_catalog=json.dumps([{"name":t.get("name"),"description":t.get("description"),"parameters":t.get("parameters")} for t in tools],ensure_ascii=False)
     medical_prompt=PromptTemplate(input_variables=["examples","reflections","question","scratchpad"],
-        template="""Solve a medical task using Thought, Action, Observation. Available actions are Tool[name|JSON arguments] and Finish[answer]. Use only listed tools, cite observed evidence, and do not write patient records.\nMedical tool names and JSON schemas:\n"""+tool_catalog.replace("{","{{").replace("}","}}")+"""\n{examples}\n{reflections}\nQuestion: {question}{scratchpad}""")
+        template="""Solve a medical task using Thought, Action, Observation. Return one Thought or Action line at a time; Tool arguments must be single-line JSON. Available actions are Tool[name|JSON arguments] and Finish[answer]. Use only listed tools, cite observed evidence, and do not write patient records.\nMedical tool names and JSON schemas:\n"""+tool_catalog.replace("{","{{").replace("}","}}")+"""\n{examples}\n{reflections}\nQuestion: {question}{scratchpad}""")
     class Adapter(agent_base):
+        def _build_reflection_prompt(self):
+            # 官方 Wikipedia 截断器只裁剪观察行；医疗轨迹统一按模型输入预算检查。
+            return self.reflect_prompt.format(examples=self.reflect_examples,
+                question=self.question,scratchpad=self.scratchpad)
+
         def is_halted(self):
             return ((self.step_n > self.max_steps) or
                     len(self.enc.encode(self._build_agent_prompt())) > int(req.get("max_input_tokens",120000))) and not self.finished
