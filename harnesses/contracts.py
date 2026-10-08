@@ -10,7 +10,7 @@ from contracts import Budget, CrossTaskExperience, ModelConfig, RunResult, Solve
 
 __all__ = ["Budget", "GroupKey", "HarnessAdapter", "HarnessLimits", "HarnessName",
            "HarnessStep", "ModelConfig", "RunResult", "Snapshot", "SolverInput", "CrossTaskExperience",
-           "Task", "TaskSplit", "TrainingFeedback"]
+           "Task", "TaskSplit", "TrainingFeedback", "BenchmarkCase"]
 
 
 HarnessName = Literal["openclaw", "hermes", "ace", "reflexion"]
@@ -79,3 +79,17 @@ class HarnessAdapter(Protocol):
     async def learn(self, feedback: TrainingFeedback) -> HarnessStep: ...
     async def freeze(self, destination: Path) -> Snapshot: ...
     async def close(self) -> None: ...
+
+
+class BenchmarkCase(BaseModel):
+    """官方题目与仅评分进程可读的原始记录。"""
+
+    id: str
+    environment: Literal["PhysicianBench", "MedAgentBench"]
+    instruction: str
+    patient_id: str
+    asset_path: Path
+    reference: dict = Field(default_factory=dict)
+
+    def solver_input(self) -> SolverInput:
+        return SolverInput(instruction=self.instruction, patient_id=self.patient_id)

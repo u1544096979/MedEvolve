@@ -72,6 +72,7 @@ class ReflexionRunner:
         configured_input=self.config.get("limits",{}).get("max_input_tokens",context_limit)
         request.write_text(json.dumps({**payload,
             "max_input_tokens":min(context_limit,configured_input),
+            "read_only":self.config.get("read_only",True),
             "max_model_turns":self.config.get(f"{phase}_budget",{}).get("max_model_turns",30 if phase=="execution" else 10),
             "source_dir":str(Path(self.source_dir).expanduser().resolve()),
             "state_dir":str(self.state),"bridge_url":self.bridge_url,"client_id":self._client_id},ensure_ascii=False),encoding="utf-8")

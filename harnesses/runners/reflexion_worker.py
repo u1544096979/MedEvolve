@@ -77,8 +77,9 @@ def build_agent(module,prompts,req,model,tools,usage):
         choices=response.get("choices") or []
         return ((choices[0].get("message") or {}).get("content") or "") if choices else ""
     tool_catalog=json.dumps([{"name":t.get("name"),"description":t.get("description"),"parameters":t.get("parameters")} for t in tools],ensure_ascii=False)
+    write_policy = "do not write patient records" if req.get("read_only", True) else "perform the requested operations through the listed tools"
     medical_prompt=PromptTemplate(input_variables=["examples","reflections","question","scratchpad"],
-        template="""Solve a medical task using Thought, Action, Observation. Return one Thought or one Action at a time; Tool arguments must be single-line JSON, while Finish answers may span multiple lines. Available actions are Tool[name|JSON arguments] and Finish[answer]. Use only listed tools, cite observed evidence, and do not write patient records.\nMedical tool names and JSON schemas:\n"""+tool_catalog.replace("{","{{").replace("}","}}")+"""\n{examples}\n{reflections}\nQuestion: {question}{scratchpad}""")
+        template="""Solve a medical task using Thought, Action, Observation. Return one Thought or one Action at a time; Tool arguments must be single-line JSON, while Finish answers may span multiple lines. Available actions are Tool[name|JSON arguments] and Finish[answer]. Use only listed tools, cite observed evidence, and """+write_policy+""".\nMedical tool names and JSON schemas:\n"""+tool_catalog.replace("{","{{").replace("}","}}")+"""\n{examples}\n{reflections}\nQuestion: {question}{scratchpad}""")
     class Adapter(agent_base):
         def prompt_agent(self):
             return self.llm(self._build_agent_prompt()).strip()
