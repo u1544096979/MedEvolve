@@ -8,6 +8,8 @@ PhysicianBench、MedAgentBench 分别运行 MedEvolve、TaskCraft、Workflow、S
 
 ## 模型与策略隔离
 
+评测可显式配置两个或三个不同裁判模型，质量与难度各调用每个配置模型一次。保留全部原始整数评分与理由，聚合沿用整数中位数规则；两分均值含小数时向下取整。未显式配置裁判的既有实验继续各采样三次。运行配置及模型身份记录裁判数量与名称，不同裁判协议的结果分别报告。
+
 模型、API 地址、环境变量名及上下文限制通过配置提供，凭证不进入配置、Git 或输出。API 必须验证指定模型实际可用，不得静默换模型。MedEvolve 在各模型、各环境下独立执行两轮进化，保存最终策略及指导；正式生成只使用该组冻结产物。各组配置、日志和产物独立，不覆盖旧实验。
 
 对于工具调用与 response_format 无法同时使用的 API，ModelConfig 通过 structured_agent_output=false 选择提示词约束 Agent 最终 JSON 输出；最终答案仍由原有 Pydantic schema 校验。此选项只影响工具 Agent，单次结构化调用与默认模型配置保持现有行为。
