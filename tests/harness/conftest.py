@@ -284,7 +284,8 @@ class FakeEnvironments:
         self.released.append(instance)
 
     async def get_tools(
-        self, instance, patient_ids, decision_point=None, *, tool_result_limit=10000
+        self, instance, patient_ids, decision_point=None, *, tool_result_limit=10000,
+        read_only=False,
     ):
         self.tool_sessions.append((instance, tuple(patient_ids), decision_point))
         if self.fail_get_tools:

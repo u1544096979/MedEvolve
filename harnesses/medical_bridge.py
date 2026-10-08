@@ -95,6 +95,7 @@ class ToolSession:
     instance: Any
     tools: list[Any]
     native: NativeTools | None
+    read_only: bool
     tool_budget: int | None
     timeout_seconds: float | None
     events: list[dict] = field(default_factory=list)
@@ -123,6 +124,7 @@ class ToolSessions:
         environment: EnvironmentConfig,
         *,
         client_id: str | None = None,
+        read_only: bool = False,
         tool_budget: int | None = None,
         timeout_seconds: float | None = None,
     ) -> str:
@@ -133,6 +135,7 @@ class ToolSessions:
             tools = await self.environments.get_tools(
                 instance, [task.patient_id], decision_point=task.decision_point,
                 tool_result_limit=environment.tool_result_limit,
+                read_only=read_only,
             )
         except BaseException:
             await self._release(environment, instance)
@@ -145,18 +148,28 @@ class ToolSessions:
             instance=instance,
             tools=list(tools),
             native=tools if isinstance(tools, NativeTools) else None,
+            read_only=read_only,
             tool_budget=tool_budget,
             timeout_seconds=timeout_seconds,
         )
         self._sessions[session.session_id] = session
         return session.session_id
 
+    def inspect(self, session_id: str, *, client_id: str | None = None) -> ToolSession:
+        """宿主侧读取已校验身份的会话；没有对应 HTTP 路由。"""
+        if not client_id:
+            raise SessionIdentityMismatch("inspect 必须提供会话所属的调用容器标识")
+        return self._require(session_id, client_id)
+
     async def list(self, session_id: str, *, client_id: str | None = None) -> list[dict]:
         session = self._require(session_id, client_id)
         if session.native is not None:
+            description = MEDAGENTBENCH_DESCRIPTION
+            if session.read_only:
+                description = description.split("2. 提交：")[0] + "3. 结束：" + description.split("3. 结束：", 1)[1]
             return [{
                 "name": MEDAGENTBENCH_TOOL,
-                "description": MEDAGENTBENCH_DESCRIPTION,
+                "description": description,
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -178,6 +191,7 @@ class ToolSessions:
                 "parameters": tool.params_json_schema,
             }
             for tool in session.tools
+            if not (session.read_only and _is_write_tool(tool.name))
         ]
 
     async def invoke(
@@ -307,6 +321,8 @@ class ToolSessions:
         return await asyncio.wait_for(awaitable, timeout=session.timeout_seconds)
 
     async def _tool_call(self, session: ToolSession, name: str, record: dict) -> Any:
+        if session.read_only and _is_write_tool(name):
+            raise ToolArgumentError(f"只读会话拒绝写入工具：{name}")
         tool = next((item for item in session.tools if item.name == name), None)
         if tool is None:
             raise ToolArgumentError(f"未知工具：{name}")
@@ -334,6 +350,8 @@ class ToolSessions:
         action = record["arguments"].get("action")
         if not isinstance(action, str) or not action.strip():
             raise ToolArgumentError("medical_action 需要非空的 action 文本")
+        if session.read_only and action.lstrip().upper().startswith("POST "):
+            raise ToolArgumentError("只读会话拒绝 MedAgentBench POST 动作")
         result = await self._with_timeout(session, session.native.execute(action))
         kind = result.get("kind")
         record["kind"] = kind

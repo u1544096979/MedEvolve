@@ -76,6 +76,25 @@ async def test_physicianbench_read_and_write_are_recorded_with_scope(real_physic
 
 
 @pytest.mark.asyncio
+async def test_read_only_physicianbench_hides_and_rejects_creation_tools(real_physicianbench):
+    rig = real_physicianbench
+    registry = ToolSessions(environments=rig.environments)
+    session_id = await registry.open(
+        SolverInput(instruction="查询", patient_id="p1"), rig.config,
+        client_id="runner-1", read_only=True,
+    )
+    tools = await registry.list(session_id, client_id="runner-1")
+    assert PHYSICIANBENCH_WRITE not in {item["name"] for item in tools}
+    result = await registry.invoke(session_id, PHYSICIANBENCH_WRITE,
+        {"patient_reference": "Patient/p1", "message_text": "write"}, client_id="runner-1")
+    assert result["status"] == "invalid_arguments"
+    assert not rig.fhir.methods()
+    assert registry.inspect(session_id, client_id="runner-1").instance is not None
+    with pytest.raises(SessionIdentityMismatch):
+        registry.inspect(session_id, client_id="runner-2")
+
+
+@pytest.mark.asyncio
 async def test_tool_events_keep_order_and_duration(real_physicianbench):
     rig = real_physicianbench
     registry = ToolSessions(environments=rig.environments)
@@ -169,6 +188,25 @@ async def test_medagentbench_post_is_accepted_without_a_database_write(real_meda
     summary = await registry.close(session_id)
     assert summary["calls"][0]["persisted"] is False
     assert summary["state"]["patient_id"] == "p1"
+
+
+@pytest.mark.asyncio
+async def test_read_only_medagentbench_keeps_get_finish_and_refuses_post(real_medagentbench):
+    rig = real_medagentbench
+    registry = ToolSessions(environments=rig.environments)
+    session_id = await registry.open(
+        SolverInput(instruction="查询", patient_id="p1"), rig.config,
+        client_id="runner-1", read_only=True,
+    )
+    description = (await registry.list(session_id, client_id="runner-1"))[0]["description"]
+    assert "POST <ResourceType>" not in description
+    result = await registry.invoke(session_id, MEDAGENTBENCH_TOOL,
+        {"action": "POST Observation\\n{}"}, client_id="runner-1")
+    assert result["status"] == "invalid_arguments"
+    assert not rig.fhir.methods()
+    finish = await registry.invoke(session_id, MEDAGENTBENCH_TOOL,
+        {"action": 'FINISH(["答案"])'}, client_id="runner-1")
+    assert finish["output"]["kind"] == "FINISH"
 
 
 @pytest.mark.asyncio
