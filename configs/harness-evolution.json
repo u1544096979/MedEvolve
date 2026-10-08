@@ -6,7 +6,7 @@
   "frozen_root": "outputs/harness-evolution/frozen",
   "harnesses": ["openclaw", "hermes", "ace", "reflexion"],
   "source_methods": ["medevolve", "taskcraft", "workflow", "singleshot", "selfgen", "envexplore"],
-  "tasks_per_group": 1,
+  "tasks_per_group": 10,
   "evolution_rounds": 1,
   "seeds": [42],
   "reference_answer_policy": "training_and_review_only",
@@ -147,5 +147,11 @@
       }
     }
   },
-  "upstreams_lock": "docker/harnesses/upstreams.lock.json"
+  "upstreams_lock": "docker/harnesses/upstreams.lock.json",
+  "local_harnesses": {
+    "openclaw": {"source_dir": "local_sources/openclaw", "program_path": "local_sources/openclaw/openclaw.mjs", "upstream_commit": "3928bad9badfcb6c7d140530435e806fb8092190", "python_path": null, "initial_state_template": "configs/harness-evolution/initial/openclaw", "experiment_dir": "outputs/harness-evolution/local/openclaw"},
+    "hermes": {"source_dir": "local_sources/hermes", "program_path": "local_sources/hermes/cli.py", "upstream_commit": "c32927948269daf15ddd75fd362f00b20bdbef65", "python_path": "local_sources/hermes/.venv/bin/python", "initial_state_template": "configs/harness-evolution/initial/hermes", "experiment_dir": "outputs/harness-evolution/local/hermes"},
+    "ace": {"source_dir": "local_sources/ace", "program_path": "local_sources/ace", "upstream_commit": "82709de050e1db6e6ef2f07bcb0393560b94992a", "python_path": "local_sources/ace/.venv/bin/python", "initial_state_template": "configs/harness-evolution/initial/ace", "experiment_dir": "outputs/harness-evolution/local/ace"},
+    "reflexion": {"source_dir": "local_sources/reflexion", "program_path": "local_sources/reflexion", "upstream_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0", "python_path": "local_sources/reflexion/.venv/bin/python", "initial_state_template": "configs/harness-evolution/initial/reflexion", "experiment_dir": "outputs/harness-evolution/local/reflexion"}
+  }
 }

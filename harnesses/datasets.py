@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from contracts import EvaluationResult, Task
+from contracts import EvaluationResult, Task, TaskSplit
 
 
 MANIFEST_NAME = "manifest.json"
@@ -50,6 +50,7 @@ class _Source:
     generation_cost: dict | None = None
     generation_cost_source: str | None = None
     generation_cost_reason: str = ""
+    evaluation_metadata: dict[str, dict] = field(default_factory=dict)
 
 
 def freeze_datasets(
@@ -95,7 +96,22 @@ def freeze_datasets(
         by_id = {task.id: task for task in report.tasks}
         sampling_order = _sampling_order(report.valid, seed)
         sampled_ids = sampling_order[:count]
-        frozen[report.name] = [by_id[task_id] for task_id in sampled_ids]
+        selected = [by_id[task_id] for task_id in sampled_ids]
+        frozen[report.name] = selected
+        split_metadata = None
+        if len(selected) >= 2:
+            split = split_tasks(selected, seed=seed)
+            train_ids = [task.id for task in split.train]
+            test_ids = [task.id for task in split.test]
+            train_patients = {task.patient_id for task in split.train}
+            test_patients = {task.patient_id for task in split.test}
+            split_metadata = {
+                "train_ratio": 0.7,
+                "test_ratio": 0.3,
+                "train_task_ids": train_ids,
+                "test_task_ids": test_ids,
+                "patient_overlap": sorted(train_patients & test_patients),
+            }
         details[report.name] = {
             "tasks_file": str(report.tasks_path),
             "tasks_sha256": report.tasks_sha256,
@@ -111,6 +127,8 @@ def freeze_datasets(
             "task_ids": sorted(by_id),
             "sampling_order": sampling_order,
             "sampled_task_ids": sampled_ids,
+            "split": split_metadata,
+            "evaluation_metadata": report.evaluation_metadata,
             "counts": {
                 "total": len(report.tasks),
                 "verified_valid": report.verified_valid,
@@ -151,6 +169,36 @@ def load_frozen(destination: Path) -> dict[str, list[Task]]:
             raise DatasetFreezeError(f"冻结任务顺序与 manifest 不一致：{name}")
         frozen[name] = tasks
     return frozen
+
+
+def split_tasks(tasks: list[Task], *, seed: int = 42) -> TaskSplit:
+    """按任务 ID 排序后，以稳定种子划分 70% 训练集与 30% 测试集。"""
+    ordered = sorted(tasks, key=lambda task: task.id)
+    if len({task.id for task in ordered}) != len(ordered):
+        raise DatasetFreezeError("任务 ID 重复，无法划分")
+    import random
+
+    random.Random(seed).shuffle(ordered)
+    n_train = len(ordered) * 7 // 10
+    if n_train == 0 or n_train == len(ordered):
+        raise DatasetFreezeError("训练集和测试集均须非空")
+    split = TaskSplit(train=ordered[:n_train], test=ordered[n_train:])
+    train_ids = {task.id for task in split.train}
+    test_ids = {task.id for task in split.test}
+    if train_ids & test_ids:
+        raise DatasetFreezeError("训练集与测试集任务 ID 重叠")
+    signatures: dict[tuple[str, str], list[str]] = {}
+    for task in tasks:
+        signature = (" ".join(task.instruction.split()), " ".join(task.reference_answer.split()))
+        signatures.setdefault(signature, []).append(task.id)
+    leaked = sorted(task_ids for task_ids in signatures.values()
+                    if len(task_ids) > 1
+                    and bool(set(task_ids) & train_ids)
+                    and bool(set(task_ids) & test_ids))
+    if leaked:
+        ids = sorted(task_id for group in leaked for task_id in group)
+        raise DatasetFreezeError("完全重复题目跨训练集与测试集：" + "、".join(ids))
+    return split
 
 
 def preflight_datasets(
@@ -269,7 +317,15 @@ def _read_source(name: str, path: Path) -> _Source:
         if evaluation is None or evaluation.verification is None:
             report.unverified += 1
             continue
-        if not evaluation.verification.valid:
+        if evaluation.verification.read_only_task is None:
+            report.unverified += 1
+            continue
+        report.evaluation_metadata[task.id] = {
+            "quality": evaluation.quality.model_dump(mode="json") if evaluation.quality else None,
+            "difficulty": evaluation.difficulty.model_dump(mode="json") if evaluation.difficulty else None,
+            "failure_category": evaluation.failure_category,
+        }
+        if not evaluation.verification.valid or not evaluation.verification.read_only_task:
             continue
         report.verified_valid += 1
         if not task.patient_id or (patients is not None and task.patient_id not in patients):
@@ -278,7 +334,8 @@ def _read_source(name: str, path: Path) -> _Source:
         report.valid.append(task)
     if report.unverified == len(tasks):
         report.status = "invalid"
-        report.error = f"{EVALUATIONS_NAME} 中所有任务都没有核验结果"
+        report.error = (f"{EVALUATIONS_NAME} 中所有任务都没有完整核验结果；"
+                        "历史任务缺少只读核验时需重新核验")
         return report
 
     (report.generation_cost_source, report.generation_cost,

@@ -80,6 +80,13 @@ class Task(GeneratedQuestion):
     source_method: str
 
 
+class TaskSplit(BaseModel):
+    """固定种子生成的训练与测试任务集合。"""
+
+    train: list[Task]
+    test: list[Task]
+
+
 class ModelConfig(BaseModel):
     model: str
     base_url: str | None = None

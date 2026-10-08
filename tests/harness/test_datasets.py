@@ -6,11 +6,11 @@ import re
 from pathlib import Path
 
 import pytest
-from contracts import Budget, RunResult
+from contracts import Budget, RunResult, Task
 from harnesses.contracts import (GroupKey, HarnessAdapter, HarnessLimits, HarnessStep,
                                  Snapshot, TrainingFeedback)
 from harnesses.datasets import (DatasetFreezeError, freeze_datasets, load_frozen,
-                                preflight_datasets)
+                                preflight_datasets, split_tasks)
 from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +37,8 @@ def _task(task_id, *, patient_id="P1", environment="PhysicianBench", source_meth
 def _evaluation(task_id, valid):
     return {
         "task_id": task_id,
-        "verification": None if valid is None else {"valid": valid, "reason": ""},
+        "verification": None if valid is None else {
+            "valid": valid, "reason": "", "read_only_task": True},
         "observed_state": {},
         "status": "completed",
         "runs": [],
@@ -77,6 +78,42 @@ def test_task_sampling_is_shared_across_harnesses(tmp_path, source_files):
                for tasks in first.values())
 
 
+def test_split_is_seven_three_and_input_order_independent():
+    template = Task.model_validate(json.loads((SOURCE_FIXTURE / "tasks.json").read_text())[0])
+    tasks = [template.model_copy(update={"id": f"t-{i}", "instruction": f"题面 {i}",
+                                        "reference_answer": f"答案 {i}"})
+             for i in range(10)]
+    first = split_tasks(tasks, seed=42)
+    second = split_tasks(list(reversed(tasks)), seed=42)
+    assert first == second
+    assert (len(first.train), len(first.test)) == (7, 3)
+    assert not {task.id for task in first.train} & {task.id for task in first.test}
+
+
+def test_split_rejects_single_task_and_exact_cross_split_duplicates():
+    one = Task.model_validate(_task("only"))
+    with pytest.raises(DatasetFreezeError, match="均须非空"):
+        split_tasks([one])
+    unique = [Task.model_validate(_task(f"copy-{i}", source_method="medevolve"))
+              for i in range(10)]
+    unique_split = split_tasks(unique)
+    duplicates = list(unique)
+    duplicates[0] = duplicates[0].model_copy(update={"instruction": "完全重复", "reference_answer": "答案"})
+    duplicates[1] = duplicates[1].model_copy(update={"instruction": "完全重复", "reference_answer": "答案"})
+    # 确保重复题目分别落入训练集和测试集。
+    if not ({duplicates[0].id, duplicates[1].id} & {t.id for t in unique_split.train}
+            and {duplicates[0].id, duplicates[1].id} & {t.id for t in unique_split.test}):
+        train_id, test_id = unique_split.train[0].id, unique_split.test[0].id
+        train_index = next(i for i, task in enumerate(duplicates) if task.id == train_id)
+        test_index = next(i for i, task in enumerate(duplicates) if task.id == test_id)
+        duplicates[train_index] = duplicates[train_index].model_copy(
+            update={"instruction": "完全重复", "reference_answer": "答案"})
+        duplicates[test_index] = duplicates[test_index].model_copy(
+            update={"instruction": "完全重复", "reference_answer": "答案"})
+    with pytest.raises(DatasetFreezeError, match="完全重复题目"):
+        split_tasks(duplicates)
+
+
 def test_frozen_manifest_records_digests_counts_and_order(tmp_path, source_files):
     frozen = freeze_datasets(source_files, count=1, seed=42, destination=tmp_path / "frozen")
     manifest = json.loads((tmp_path / "frozen" / "manifest.json").read_text())
@@ -111,6 +148,40 @@ def test_manifest_records_absent_patient_roster_with_reason(tmp_path):
     assert detail["medevolve"]["patients_sha256"] is None
     assert detail["medevolve"]["patient_roster"] == "absent"
     assert "patients.json" in detail["medevolve"]["patient_roster_reason"]
+
+
+def test_manifest_preserves_quality_difficulty_and_failure_category(tmp_path):
+    quality = {name: {"score": 4, "scores": [4, 4, 4], "reason": "通过"}
+               for name in ("factual_accuracy", "clinical_soundness",
+                            "evidence_sufficiency", "task_clarity")}
+    evaluation = _evaluation("scored", True)
+    evaluation.update(
+        quality=quality,
+        difficulty={"reasoning_depth": 3, "reasoning_depths": [3, 3, 3],
+                    "reason": "多步推理", "complexity_metrics": {
+                        "evidence_count": 2, "resource_type_count": 1, "time_span_days": 4.0}},
+        failure_category="unsupported_operation",
+    )
+    files = {"medevolve": _write_source(tmp_path / "medevolve", [_task("scored")], [evaluation])}
+    freeze_datasets(files, count=1, seed=42, destination=tmp_path / "frozen")
+    metadata = json.loads((tmp_path / "frozen" / "manifest.json").read_text())[
+        "sources"]["medevolve"]["evaluation_metadata"]["scored"]
+    assert set(metadata["quality"]) == set(quality)
+    assert metadata["difficulty"]["reasoning_depth"] == 3
+    assert metadata["failure_category"] == "unsupported_operation"
+
+
+def test_manifest_records_task_split_and_patient_overlap(tmp_path):
+    tasks = [_task(f"task-{index}", patient_id=f"P{index // 2}") for index in range(10)]
+    files = {"medevolve": _write_source(
+        tmp_path / "medevolve", tasks, [_evaluation(task["id"], True) for task in tasks])}
+    freeze_datasets(files, count=10, seed=42, destination=tmp_path / "frozen")
+    split = json.loads((tmp_path / "frozen" / "manifest.json").read_text())[
+        "sources"]["medevolve"]["split"]
+    assert split["train_ratio"] == 0.7 and split["test_ratio"] == 0.3
+    assert len(split["train_task_ids"]) == 7 and len(split["test_task_ids"]) == 3
+    assert set(split["train_task_ids"]).isdisjoint(split["test_task_ids"])
+    assert split["patient_overlap"]
 
 
 def test_manifest_records_generation_cost_shapes_and_absence(tmp_path):
@@ -246,6 +317,14 @@ def test_source_without_any_verification_is_rejected(tmp_path):
         freeze_datasets(files, count=1, seed=42, destination=tmp_path / "frozen")
 
 
+def test_source_without_read_only_verification_requests_reverification(tmp_path):
+    files = {"medevolve": _write_source(
+        tmp_path / "medevolve", [_task("keep")],
+        [{**_evaluation("keep", True), "verification": {"valid": True, "reason": ""}}])}
+    with pytest.raises(DatasetFreezeError, match="重新核验"):
+        freeze_datasets(files, count=1, seed=42, destination=tmp_path / "frozen")
+
+
 def test_invalid_requested_count_is_rejected(tmp_path, source_files):
     with pytest.raises(DatasetFreezeError, match="任务量"):
         freeze_datasets(source_files, count=0, seed=42, destination=tmp_path / "frozen")
@@ -358,7 +437,7 @@ def test_experiment_config_freezes_sources_harnesses_and_budgets():
     assert config["execute"] is False
     assert config["harnesses"] == list(HARNESSES)
     assert config["source_methods"] == list(SOURCE_METHODS)
-    assert config["tasks_per_group"] == 1 and config["evolution_rounds"] == 1
+    assert config["tasks_per_group"] == 10 and config["evolution_rounds"] == 1
     assert config["seeds"] == [42]
     assert config["run_dir_template"] == (
         "outputs/harness-evolution/<run_id>/<environment>/<harness>/<source_method>/<seed>")

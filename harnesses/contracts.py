@@ -5,12 +5,12 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from contracts import Budget, ModelConfig, RunResult, SolverInput, Task
+from contracts import Budget, ModelConfig, RunResult, SolverInput, Task, TaskSplit
 
 
 __all__ = ["Budget", "GroupKey", "HarnessAdapter", "HarnessLimits", "HarnessName",
            "HarnessStep", "ModelConfig", "RunResult", "Snapshot", "SolverInput",
-           "Task", "TrainingFeedback"]
+           "Task", "TaskSplit", "TrainingFeedback"]
 
 
 HarnessName = Literal["openclaw", "hermes", "ace", "reflexion"]
