@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "environment": null,
+      "generator": null,
+      "source_files": [],
+      "results": [
+        {
+          "method": "medevolve",
+          "generated_tasks": null,
+          "generated_patients": null,
+          "outcomes": null,
+          "quality": null
+        },
+        {
+          "method": "taskcraft",
+          "generated_tasks": null,
+          "generated_patients": null,
+          "outcomes": null,
+          "quality": null
+        },
+        {
+          "method": "workflow",
+          "generated_tasks": null,
+          "generated_patients": null,
+          "outcomes": null,
+          "quality": null
+        },
+        {
+          "method": "singleshot",
+          "generated_tasks": null,
+          "generated_patients": null,
+          "outcomes": null,
+          "quality": null
+        },
+        {
+          "method": "selfgen",
+          "generated_tasks": null,
+          "generated_patients": null,
+          "outcomes": null,
+          "quality": null
+        },
+        {
+          "method": "envexplore",
+          "generated_tasks": null,
+          "generated_patients": null,
+          "outcomes": null,
+          "quality": null
+        }
+      ]
+    }
+  ]
+}

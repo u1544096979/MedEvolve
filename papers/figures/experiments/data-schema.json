@@ -1,0 +1,304 @@
+{
+  "$defs": {
+    "Dimension": {
+      "additionalProperties": false,
+      "properties": {
+        "mean": {
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Mean",
+          "type": "number"
+        },
+        "ci_low": {
+          "anyOf": [
+            {
+              "maximum": 5,
+              "minimum": 1,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ci Low"
+        },
+        "ci_high": {
+          "anyOf": [
+            {
+              "maximum": 5,
+              "minimum": 1,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ci High"
+        },
+        "n_tasks": {
+          "exclusiveMinimum": 0,
+          "title": "N Tasks",
+          "type": "integer"
+        },
+        "n_patients": {
+          "exclusiveMinimum": 0,
+          "title": "N Patients",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mean",
+        "ci_low",
+        "ci_high",
+        "n_tasks",
+        "n_patients"
+      ],
+      "title": "Dimension",
+      "type": "object"
+    },
+    "Group": {
+      "additionalProperties": false,
+      "properties": {
+        "environment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Environment"
+        },
+        "generator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generator"
+        },
+        "source_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Files",
+          "type": "array"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/MethodResult"
+          },
+          "title": "Results",
+          "type": "array"
+        }
+      },
+      "required": [
+        "results"
+      ],
+      "title": "Group",
+      "type": "object"
+    },
+    "MethodResult": {
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "enum": [
+            "medevolve",
+            "taskcraft",
+            "workflow",
+            "singleshot",
+            "selfgen",
+            "envexplore"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "generated_tasks": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generated Tasks"
+        },
+        "generated_patients": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generated Patients"
+        },
+        "outcomes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Outcomes"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "quality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quality"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "title": "MethodResult",
+      "type": "object"
+    },
+    "Outcomes": {
+      "additionalProperties": false,
+      "properties": {
+        "invalid": {
+          "minimum": 0,
+          "title": "Invalid",
+          "type": "integer"
+        },
+        "evaluation_missing": {
+          "minimum": 0,
+          "title": "Evaluation Missing",
+          "type": "integer"
+        },
+        "runtime_error": {
+          "minimum": 0,
+          "title": "Runtime Error",
+          "type": "integer"
+        },
+        "level_1": {
+          "minimum": 0,
+          "title": "Level 1",
+          "type": "integer"
+        },
+        "level_2": {
+          "minimum": 0,
+          "title": "Level 2",
+          "type": "integer"
+        },
+        "level_3": {
+          "minimum": 0,
+          "title": "Level 3",
+          "type": "integer"
+        },
+        "level_4": {
+          "minimum": 0,
+          "title": "Level 4",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "invalid",
+        "evaluation_missing",
+        "runtime_error",
+        "level_1",
+        "level_2",
+        "level_3",
+        "level_4"
+      ],
+      "title": "Outcomes",
+      "type": "object"
+    },
+    "Quality": {
+      "additionalProperties": false,
+      "properties": {
+        "factual_accuracy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Dimension"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clinical_soundness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Dimension"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence_sufficiency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Dimension"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_clarity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Dimension"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "factual_accuracy",
+        "clinical_soundness",
+        "evidence_sufficiency",
+        "task_clarity"
+      ],
+      "title": "Quality",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "groups": {
+      "items": {
+        "$ref": "#/$defs/Group"
+      },
+      "minItems": 1,
+      "title": "Groups",
+      "type": "array"
+    }
+  },
+  "required": [
+    "groups"
+  ],
+  "title": "FigureData",
+  "type": "object"
+}
