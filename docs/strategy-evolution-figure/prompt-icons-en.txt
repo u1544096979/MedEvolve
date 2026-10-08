@@ -1,0 +1,32 @@
+Edit image 1 (the English strategy example inset). Image 2 is STYLE REFERENCE ONLY: the paper's main MedEvolve overview figure. Match image 2's exact visual vocabulary, not its content or large multi-panel layout.
+
+Keep image 1's compact vertical three-stage arrangement and ALL exact English wording. Restyle into the same visual family as image 2:
+- pure white background, flat pale fills, fine rounded module borders;
+- dark navy typography #193650, teal #00898E for generation/evidence, burnt orange #CF6024 for strategy evolution;
+- small outline icons with uniform 2px-equivalent strokes, like the main figure's document, evidence-document with magnifier, and strategy gear icons. No emoji, no 3D, no filled decorative cartoons;
+- same Arial-like sans-serif typography and clear modest bold labels;
+- dark navy slim straight connectors with filled triangular heads, tiny "Evaluate" and "Revise" labels, exactly two downward connectors.
+- very pale teal #EEF7F7 for initial/evidence content, very pale orange #FFF5EF for updated strategy content. Match the main figure's rounded corner size and thin borders; NO gradients/shadows.
+
+Add exactly THREE small meaningful line icons, one beside each left stage label:
+1. Initial Guidance: teal document with three short text lines, using same folded-corner document icon style as image 2.
+2. Evidence Feedback: teal document with magnifying glass, matching Evidence verification icon of image 2.
+3. Updated Guidance: burnt orange small gear, matching Strategy update icon of image 2.
+Icons should be approx height of ONE text line, placed above or left of the respective labels without clutter or overlap. They form a clean visual hierarchy, NOT dominate the figure.
+
+Keep stage labels:
+"Initial Guidance" in dark navy
+"Evidence Feedback" in dark navy
+"Updated Guidance" in burnt orange
+Keep right text VERBATIM:
+"Link events across visits"
+"Assess disease or treatment changes"
+"Follow-up results are missing"
+"Treatment response is unsupported"
+"Check baseline and follow-up"
+"Ensure data are comparable"
+"Limit conclusions when evidence is insufficient"
+Allow final sentence to wrap with hanging indent. Updated rules use small orange dash bullets matching strategy color.
+
+Render three lightweight right-side rounded modules with fine colored borders and subtle flat fill, aligned to same grid. Initial/evidence borders teal; updated border orange. Do not add huge headers or complex new components. Left labels and icons are outside the modules, same compact label rail as image 1. Connector paths should terminate immediately above the next left label group without crossing icons. Leave comfortable padding.
+Single-column academic inset, 8.5cm wide in a paper, ratio approx 1.35:1. Text legible, consistent body size. Match image 2 closely in colors, line icons, border styling and font; keep the small figure's concise scope. No new content, metrics, timeline data, captions or title.

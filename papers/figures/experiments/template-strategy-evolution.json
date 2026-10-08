@@ -1,0 +1,79 @@
+{
+  "environment": null,
+  "generator": null,
+  "requested_tasks": null,
+  "source_files": [],
+  "interval": "patient-cluster 95% bootstrap CI",
+  "checkpoints": [
+    {
+      "round": 0,
+      "quality": {
+        "factual_accuracy": null,
+        "clinical_soundness": null,
+        "evidence_sufficiency": null,
+        "task_clarity": null
+      },
+      "verification_rate": null,
+      "high_order_valid_tasks": null,
+      "verified_tasks": null,
+      "scored_tasks": null,
+      "patients": null
+    },
+    {
+      "round": 1,
+      "quality": {
+        "factual_accuracy": null,
+        "clinical_soundness": null,
+        "evidence_sufficiency": null,
+        "task_clarity": null
+      },
+      "verification_rate": null,
+      "high_order_valid_tasks": null,
+      "verified_tasks": null,
+      "scored_tasks": null,
+      "patients": null
+    },
+    {
+      "round": 2,
+      "quality": {
+        "factual_accuracy": null,
+        "clinical_soundness": null,
+        "evidence_sufficiency": null,
+        "task_clarity": null
+      },
+      "verification_rate": null,
+      "high_order_valid_tasks": null,
+      "verified_tasks": null,
+      "scored_tasks": null,
+      "patients": null
+    },
+    {
+      "round": 3,
+      "quality": {
+        "factual_accuracy": null,
+        "clinical_soundness": null,
+        "evidence_sufficiency": null,
+        "task_clarity": null
+      },
+      "verification_rate": null,
+      "high_order_valid_tasks": null,
+      "verified_tasks": null,
+      "scored_tasks": null,
+      "patients": null
+    },
+    {
+      "round": 4,
+      "quality": {
+        "factual_accuracy": null,
+        "clinical_soundness": null,
+        "evidence_sufficiency": null,
+        "task_clarity": null
+      },
+      "verification_rate": null,
+      "high_order_valid_tasks": null,
+      "verified_tasks": null,
+      "scored_tasks": null,
+      "patients": null
+    }
+  ]
+}
