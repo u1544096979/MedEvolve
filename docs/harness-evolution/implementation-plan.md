@@ -112,7 +112,7 @@ except (asyncio.TimeoutError, asyncio.CancelledError):
 - [ ] 写 OpenClaw 测试：两道训练题会话不同，同题反馈沿用本题会话；输出技能保存重载后可读；个人配置路径和服务未被使用。写 Hermes 测试：两题新会话、组内记忆共享、测试关闭写入但保留读取。运行两份新增测试确认失败。
 - [ ] OpenClaw 直接启动固定版本 Gateway，显式传入本组配置、状态和工作目录，选择与个人服务无冲突的实验端口；保留子进程句柄。复用医疗插件，把本题工具会话写入本组状态目录，使用 `openclaw agent --agent medical --session-id ... --message-file ... --json` 执行。provider 的 base URL 直接取模型配置。
 - [ ] OpenClaw 每题生成新会话ID，保存该ID供反馈回合使用。解析原生响应中的答案文本、模型用量、工具信息和错误，转换成 `RunResult`；CLI 标准输出的日志不冒充答案。学习按锁定版本实际触发条件等待对应任务结束，历史 Workshop 记录不作为当前任务结束证据。
-- [ ] Hermes 在指定 Python 环境的独立子进程中、导入前设置 `HERMES_HOME`。按锁定源码使用 `AIAgent`、`run_conversation()` 与工具注册接口，将医疗调用转发到工具桥；同题反馈送回本题会话，下一题新建 Agent。冻结状态保留技能与记忆读取，关闭管理写入与后台整理，导出技能及允许迁移的记忆文件。
+- [ ] Hermes 在指定 Python 环境的独立子进程中、导入前设置 `HERMES_HOME`。按锁定源码使用 `AIAgent`、`run_conversation()` 与工具注册接口，将医疗调用转发到工具桥；同题反馈送回本题会话，下一题新建 Agent。冻结状态保留技能与记忆读取，关闭管理写入与后台整理，导出 `skills/`、`memories/MEMORY.md` 和 `memories/USER.md`，重载后供后续任务读取。
 - [ ] 运行上述测试及 `tests/harness/test_medical_bridge.py`，各自提交：`feat(harness): 接入OpenClaw本地训练与冻结测试`、`feat(harness): 接入Hermes本地训练与冻结测试`。
 
 OpenClaw、Hermes runner 提供只读属性 `current_session_id`，会话选择必须满足：
@@ -135,7 +135,7 @@ assert runner.current_session_id != first
 
 - [ ] 写 ACE 测试：两条真实反馈调用官方反思、策展和合并逻辑，最终手册重载有效；冻结执行不调用学习组件。写 Reflexion 测试：临床失败后反思重试，每次新医疗实例；下一位患者仅获得可迁移经验；冻结执行不反思或按评分重试。运行新增测试确认失败。
 - [ ] ACE 复用官方 Generator 的上下文与策略手册结构接入医疗工具循环；将真实轨迹、答案、参考答案和完成反馈传给官方 `Reflector.reflect()`，再调用 `Curator.curate()` 与官方手册合并逻辑。按锁定源码的参数名调用，使用固定轮次最终手册。
-- [ ] Reflexion 复用官方 Actor 和文字反思提示。失败后先完成本次评审，再释放实例；在固定重试次数内反思并重新创建实例。原始参考答案不传入 Actor 重试输入；跨任务经验提炼的调用单独记录为学习成本。
+- [ ] Reflexion 复用官方 Actor 和文字反思提示，使用公共预算函数计算模型输入上限；实际请求计入模型调用上限，每个 Thought/Action 步骤计两次调用，初始输入超限直接失败。失败后先完成本次评审，再释放实例；在固定重试次数内反思并重新创建实例。原始参考答案不传入 Actor 重试输入；跨任务经验提炼的调用单独记录为学习成本。
 - [ ] 跨任务经验固定字段为 `task_type/tool_names/condition/procedure/pitfall/source_task_id`，不存患者标识、个体临床值或逐题答案。选择顺序固定为任务类型相同优先、工具名称交集数量降序、经验ID升序，最多三条并受配置的上下文上限限制。训练元数据从任务清单读取，测试元数据从公开题目元数据和工具目录读取；无任务类型时按空类型处理，不从答案推断。runner 构造配置中的 `task_metadata` 保存按题目与患者生成的稳定键到类型和工具名的映射，`execute()` 仍只接收 `SolverInput`。
 - [ ] 运行两份新增测试，提交：`feat(harness): 接入ACE官方策略更新组件`、`feat(harness): 接入Reflexion反思与跨任务经验`。
 
