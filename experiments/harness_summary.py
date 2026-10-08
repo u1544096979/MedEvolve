@@ -67,9 +67,12 @@ def _model_for(item, stage, config):
     for entry in run.get("trace",[]):
         identity=entry.get("model_identity",{}) if isinstance(entry,dict) else {}
         model_name=model_name or identity.get("model")
-    for name, model in config.get("models",{}).items():
-        if model.get("model")==model_name:
-            return model
+    if model_name:
+        for model in config.get("models",{}).values():
+            if model.get("model")==model_name:
+                return model
+        # An observed model identity must not silently inherit another role's price.
+        return {"model": model_name, "price_per_million_tokens": None}
     role=item.get("role")
     if role in config.get("models",{}):
         return config["models"][role]
@@ -81,7 +84,11 @@ def _cost(run_rows, config, generation=None):
     for stage in ("generation","execution","learning","review","testing"):
         records=[]
         if stage=="generation":
-            records=[{"role":"generation","usage":generation,"known":None}]
+            usage=generation or {}
+            input_value=_metric(usage,USAGE_ALIASES["input_tokens"])
+            output_value=_metric(usage,USAGE_ALIASES["output_tokens"])
+            known=usage.get("known") is not False and input_value is not None and output_value is not None
+            records=[{"role":"generation","usage":usage,"known":known}]
         else:
             for row in run_rows:
                 normalized = "review" if row.get("stage") in {"review","testing_review"} else row.get("stage")
@@ -92,8 +99,10 @@ def _cost(run_rows, config, generation=None):
                 input_value=_metric(usage,USAGE_ALIASES["input_tokens"])
                 output_value=_metric(usage,USAGE_ALIASES["output_tokens"])
                 known=(explicit is not False and input_value is not None and output_value is not None)
+                resolved_model=_model_for(row,stage,config)
                 records.append({"task_id":row.get("task_id"),"role":row.get("role"),"usage":usage,
-                    "known":known,"status":run.get("status"),"model":_model_for(row,stage,config).get("model")})
+                    "known":known,"status":run.get("status"),"model":resolved_model.get("model"),
+                    "resolved_model":resolved_model})
         totals={key:0 for key in USAGE_ALIASES}
         observed={key:False for key in USAGE_ALIASES}
         known=bool(records)
@@ -109,7 +118,7 @@ def _cost(run_rows, config, generation=None):
         normalized_usage={key:(totals[key] if observed[key] else None) for key in totals}
         cost_values=[]
         for item in raw:
-            model=_model_for(item,stage,config)
+            model=item.get("resolved_model") or _model_for(item,stage,config)
             price=model.get("price_per_million_tokens") if isinstance(model,dict) else None
             usage=item.get("usage") or {}
             incoming=_metric(usage,USAGE_ALIASES["input_tokens"])

@@ -45,3 +45,29 @@ def test_generation_cost_is_counted_once_per_environment_and_source():
     output=summarize([result,second],config,manifest)["results"]
     assert output[0]["costs"]["generation"]["deduplicated"] is False
     assert output[1]["costs"]["generation"]["deduplicated"] is True
+
+
+def test_generation_usage_prices_when_complete_and_deduplicates_across_four_harnesses():
+    results=[{"environment":"PhysicianBench","harness":h,"source":"s","planned_denominator":0,
+        "records":[],"runs":[]} for h in ("openclaw","hermes","ace","reflexion")]
+    manifest={"sources":{"s":{"generation_cost":{"input_tokens":1_000_000,"output_tokens":500_000},
+        "split":{"test_task_ids":[]},"evaluation_metadata":{}}}}
+    config={"seeds":[42],"run_id":"x","run_dir_template":"/absent/<run_id>/<environment>/<harness>/<source_method>/<seed>",
+        "models":{"generation":{"model":"generator","price_per_million_tokens":2}}}
+    output=summarize(results,config,manifest)["results"]
+    first=output[0]["costs"]["generation"]
+    assert first["known"] is True and first["cost_usd"]==3
+    assert sum(not row["costs"]["generation"]["deduplicated"] for row in output)==1
+
+
+def test_openclaw_learning_uses_observed_execution_model_price():
+    result={"environment":"PhysicianBench","harness":"openclaw","source":"s","planned_denominator":0,
+        "records":[],"runs":[{"task_id":"a","stage":"learning","role":"learning","run":{
+            "status":"completed","usage":{"model":"execution-model","input_tokens":1_000_000,"output_tokens":0}}}]}
+    manifest={"sources":{"s":{"generation_cost":None,"split":{"test_task_ids":[]},"evaluation_metadata":{}}}}
+    config={"seeds":[42],"run_id":"x","run_dir_template":"/absent/<run_id>/<environment>/<harness>/<source_method>/<seed>",
+        "models":{"execution":{"model":"execution-model","price_per_million_tokens":4},
+                 "learning":{"model":"learning-model","price_per_million_tokens":99}}}
+    costs=summarize([result],config,manifest)["results"][0]["costs"]["learning"]
+    assert costs["cost_usd"]==4
+    assert costs["raw_usage"][0]["resolved_model"]["model"]=="execution-model"
