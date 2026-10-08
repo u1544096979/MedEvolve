@@ -9,7 +9,6 @@
 
 import { readFileSync } from "node:fs";
 
-import { Type } from "typebox";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 const SESSION_FILE = "tool-session.json";
@@ -69,7 +68,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "medical_tools_list",
       description: "列出本次尝试可用的医疗工具名称、说明与参数模式。",
-      parameters: Type.Object({}),
+      parameters: { type: "object", properties: {}, additionalProperties: false },
       async execute() {
         const session = readSession();
         return textResult(
@@ -82,12 +81,15 @@ export default definePluginEntry({
       name: "medical_tool_call",
       description:
         "调用本次尝试的一个医疗工具。name 必须是 medical_tools_list 返回的工具名，arguments 必须是符合该工具参数模式的对象。",
-      parameters: Type.Object({
-        name: Type.String({ description: "medical_tools_list 返回的工具名" }),
-        arguments: Type.Record(Type.String(), Type.Unknown(), {
-          description: "该工具的参数对象",
-        }),
-      }),
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "medical_tools_list 返回的工具名" },
+          arguments: { type: "object", additionalProperties: true, description: "该工具的参数对象" },
+        },
+        required: ["name", "arguments"],
+        additionalProperties: false,
+      },
       async execute(_id, params) {
         const session = readSession();
         return textResult(

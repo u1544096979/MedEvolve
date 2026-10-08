@@ -120,9 +120,11 @@ async def test_openclaw_restarts_once_after_native_plugin_migration(tmp_path):
         proc = Process()
         created.append(proc)
         return proc
+    async def command_runner(*args, **kwargs):
+        return 0, "", ""
     runner = create_runner("openclaw", config={
         "execution_model": {"model": "model-x", "base_url": "https://example.invalid/v1", "api_key_env": "TEST_KEY"},
-        "process_factory": process_factory,
+        "process_factory": process_factory, "command_runner": command_runner,
     }, group_dir=tmp_path / "group", bridge_url="")
     async def wait_gateway():
         if len(created) == 1:
@@ -132,3 +134,19 @@ async def test_openclaw_restarts_once_after_native_plugin_migration(tmp_path):
     initial.mkdir()
     await runner.start(GroupKey(run_id="r", environment="PhysicianBench", harness="openclaw", source_method="medevolve", seed=42), Snapshot(path=initial, digest="x"))
     assert len(created) == 2
+
+
+@pytest.mark.asyncio
+async def test_openclaw_plugin_install_failure_blocks_gateway(tmp_path):
+    async def rejected_install(*args, **kwargs):
+        return 1, "", "plugin installation rejected"
+    async def forbidden_gateway(*args, **kwargs):
+        pytest.fail("安装失败后不应启动 Gateway")
+    runner = create_runner("openclaw", config={
+        "execution_model": {"model": "m", "base_url": "https://example.invalid/v1", "api_key_env": "TEST_KEY"},
+        "command_runner": rejected_install, "process_factory": forbidden_gateway,
+    }, group_dir=tmp_path / "group", bridge_url="")
+    initial=tmp_path / "initial"
+    initial.mkdir()
+    with pytest.raises(RuntimeError, match="医疗插件安装失败"):
+        await runner.start(GroupKey(run_id="r", environment="PhysicianBench", harness="openclaw", source_method="medevolve", seed=42), Snapshot(path=initial, digest="x"))

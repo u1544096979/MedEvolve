@@ -84,6 +84,13 @@ class OpenClawRunner:
         if initial_dir.is_dir():
             export_experience(initial_dir, self.workspace, include=("skills", "memory", "MEMORY.md"))
         (self.state_dir / "openclaw.json").write_text(json.dumps(cfg), encoding="utf-8")
+        # 原生工具发现要求安装索引记录，单独设置插件加载路径不足以暴露工具。
+        code, stdout, stderr = await self._command_runner(
+            [self.config.get("openclaw_bin", "openclaw"), "plugins", "install", "--link", "--force", "--accept-capabilities", str(self._plugin_dir)],
+            group_dir=self.group_dir, group_env=self._env(model),
+            timeout=float(self.config.get("timeout_seconds",900)))
+        if code:
+            raise RuntimeError(f"OpenClaw 医疗插件安装失败：{(stderr or stdout)[-1200:]}")
         for attempt in range(2):
             self._process = await self._process_factory(
                 self.config.get("openclaw_bin", "openclaw"), "gateway", "run", "--port", str(self._gateway_port),
