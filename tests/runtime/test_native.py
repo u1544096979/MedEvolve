@@ -453,3 +453,30 @@ async def test_environment_failure_survives_later_successful_get(monkeypatch):
     assert result.trace[-1]["failure_category"] == "environment_error"
     outputs = [item["output"] for item in result.trace if item["type"] == "tool_output"]
     assert outputs[1]["data"] == {"entry": []}
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('rejected', ['FINISH(["guidance"]', 'POST Observation\n{}'])
+async def test_exploration_corrects_rejected_action_without_writing(monkeypatch, rejected):
+    from environments.medagentbench import ReadOnlyNativeTools
+    requests = install_transport(monkeypatch, [
+        {'role': 'assistant', 'content': rejected},
+        {'role': 'assistant', 'content': 'GET Patient?gender=female'},
+        {'role': 'assistant', 'content': 'FINISH(["Patient search verified"])'},
+    ])
+    source = native_tools()
+    executed = []
+    async def execute(action):
+        executed.append(action)
+        if action.startswith('FINISH('):
+            return {'kind': 'FINISH', 'reply': 'FINISH', 'answers': ['Patient search verified']}
+        return {'kind': 'GET', 'reply': 'Patient Bundle', 'request': {'action': action}}
+    monkeypatch.setattr(source, 'execute', execute)
+    result = await run_agent(instructions='只读环境探索', input_text='explore',
+        tools=ReadOnlyNativeTools(source), output_type=EnvironmentExploration, model=MODEL,
+        budget=Budget(max_model_turns=4, max_tool_calls=4))
+    assert result.status == 'completed'
+    assert result.output['guidance'] == 'Patient search verified'
+    assert executed == ['GET Patient?gender=female', 'FINISH(["Patient search verified"])']
+    assert len(requests) == 3
+    assert result.usage['total_tokens'] == 45
+    assert any(e['type'] == 'native_action_rejected' for e in result.trace)

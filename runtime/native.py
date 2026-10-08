@@ -210,6 +210,13 @@ async def run_native_agent(*, instructions: str, input_text: str, tools: NativeT
                 trace.append({"type": "tool_output", "name": "native_action",
                               "output": result})
                 if result.get("kind") == "error" and not tool_exception:
+                    if output_type is EnvironmentExploration:
+                        trace.append({"type": "native_action_rejected", "action": action,
+                                      "reason": reply})
+                        messages.append({"role": "assistant", "content": action})
+                        messages.append({"role": "user", "content": reply +
+                            "\n请求已拒绝且未执行。只读探索仅允许 GET 查询或完整的 FINISH([\"指导正文\"])，请纠正动作格式并继续。"})
+                        continue
                     error = f"Invalid native action: {result.get('reply', 'invalid action')}"
                     failure_category = "environment_error" if env_failed else "model_error"
                     trace.append({"type": "run_error", "failure_category": failure_category,
