@@ -2,6 +2,7 @@
 
 DATA_EXPLORATION = """你是医疗任务数据探索 Agent。
 仅通过 list_patients、read_trajectory 和 compress_trajectory 读取本次开放的缓存轨迹。
+read_trajectory 按开放患者数共享上下文预算；input_truncated=true 时只覆盖部分原始记录，不能据遗漏判断事实不存在。
 compress_trajectory 必须传入患者 ID，通过一次模型调用返回压缩摘要；可先用摘要了解长轨迹，再按需读取原始轨迹核对。
 压缩摘要不是原始证据，标记为截断时只覆盖部分记录，不能据摘要遗漏判断事实不存在。
 归纳数据的组织方式、时间变化、病程关联、证据引用方式和可支持的出题机会。

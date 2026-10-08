@@ -72,10 +72,22 @@ async def explore_data(
 
     @function_tool(failure_error_function=None)
     async def read_trajectory(patient_id: str) -> str:
-        """读取本次开放患者的完整缓存轨迹与原始证据引用。"""
+        """读取预算内的患者缓存轨迹与原始引用；input_truncated 标记裁剪。"""
         if patient_id not in cache:
             raise ValueError("patient_id is outside the supplied trajectory cache")
-        return json.dumps(_trajectory_input(cache[patient_id]), ensure_ascii=False)
+        from environments.fitting import fit_trajectory
+        from runtime.context import count_tokens, input_limit
+
+        model = runtime.models["data_explorer"]
+        # 并行读取全部开放患者时，工具结果共占半个输入窗口，留下推理与历史空间。
+        share = input_limit(model) // (2 * max(len(cache), 1))
+        measure = lambda value: count_tokens(json.dumps(_trajectory_input(value), ensure_ascii=False), model)
+        try:
+            fitted = fit_trajectory(cache[patient_id], share, measure=measure)
+        except ValueError as exc:
+            return json.dumps({"patient_id": patient_id, "error": str(exc),
+                               "input_truncated": True}, ensure_ascii=False)
+        return json.dumps(_trajectory_input(fitted), ensure_ascii=False)
 
     @function_tool
     async def compress_trajectory(patient_id: str) -> str:

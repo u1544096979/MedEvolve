@@ -328,3 +328,31 @@ async def test_generation_accepts_only_requested_task_types_and_allows_short_bat
     )
     assert result.status == "failed"
     assert "exceed requested directions" in result.error
+
+@pytest.mark.asyncio
+async def test_data_exploration_parallel_patient_reads_share_context_budget(runtime, monkeypatch):
+    from methods import medevolve
+    from contracts import Evidence, DataExploration
+    from runtime.context import count_tokens, input_limit
+    model = runtime.models['data_explorer'].model_copy(update={'context_window': 8192, 'max_output_tokens': 1024})
+    runtime = runtime.model_copy(update={'models': {**runtime.models, 'data_explorer': model}})
+    patients = [PatientTrajectory(patient_id=f'p{i}', environment='PhysicianBench',
+        text='\n\n'.join('clinical diagnosis symptom dose ' * 5 for _ in range(20)),
+        sources=[Evidence(source_id=f'Observation/{i}-{j}', statement='clinical diagnosis symptom dose ' * 5) for j in range(20)]) for i in range(4)]
+    async def agent(**kwargs):
+        tool = next(t for t in kwargs['tools'] if t.name == 'read_trajectory')
+        outputs = []
+        for patient in patients:
+            args = json.dumps({'patient_id': patient.patient_id})
+            ctx = ToolContext(context=None, tool_name='read_trajectory', tool_call_id='test', tool_arguments=args)
+            raw = await tool.on_invoke_tool(ctx, args)
+            value = json.loads(raw)
+            assert value['input_truncated'] is True
+            assert value['sources']
+            outputs.append(raw)
+        assert sum(count_tokens(raw, model) for raw in outputs) <= input_limit(model) // 2
+        return completed(DataExploration(guidance='data'))
+    monkeypatch.setattr(medevolve, 'run_agent', agent)
+    result = await medevolve.explore_data(patients, runtime)
+    assert result.status == 'completed'
+    assert all(not p.input_truncated and len(p.sources) == 20 for p in patients)
