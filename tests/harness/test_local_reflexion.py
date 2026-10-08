@@ -68,6 +68,7 @@ def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkey
     assert executed["native"]=="ReactReflectAgent.run"
     assert executed["answer"]=="secret-answer" and tool_calls
     assert any("read_record" in prompt and '"parameters"' in prompt for prompt in prompts_seen)
+    assert any("Decision point: medication" in prompt for prompt in prompts_seen)
     assert tool_calls[0]=={"name":"read_record","arguments":{}}
     assert not any("gold-answer" in prompt for prompt in prompts_seen)
 
@@ -88,7 +89,7 @@ def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkey
 
 @pytest.mark.asyncio
 async def test_reflexion_retry_uses_host_new_session_and_cross_task_selection(tmp_path):
-    task=SolverInput(instruction="review medication",patient_id="p1")
+    task=SolverInput(instruction="review medication",patient_id="p1",decision_point="dose adjustment")
     runner=ReflexionRunner(config={"reflexion_max_retries":2,"experience_limit":{"max_entries":3,"max_context_tokens":1000}},
         group_dir=tmp_path/"group",bridge_url="http://bridge")
     runner.config["task_metadata"]={runner.stable_task_key(task):{"task_type":"药物处方","tool_names":["a"]}}
@@ -106,6 +107,7 @@ async def test_reflexion_retry_uses_host_new_session_and_cross_task_selection(tm
         return {"learning_status":"updated","reflection":"reflect","usage":{"calls":1},"experience":{"id":"e"},"native":"ReactReflectAgent.reflect"},None
     runner._call=fake_call
     await runner.execute(task,"instance-1")
+    assert calls[-1][0]["decision_point"]=="dose adjustment"
     first=await runner.learn(TrainingFeedback(task_id="t",completed=False,failure_category="clinical",reason="why",reference_answer="gold",evidence=[]))
     assert first.learning_status=="updated" and runner.retry_state["ready"]
     await runner.execute_retry(task,"instance-2")

@@ -28,11 +28,13 @@ def _get(url, client_id):
 
 class ACEClientShim:
     """将 ACE completion 请求接到有界的原生医疗工具循环。"""
-    def __init__(self, model, key, base_url, bridge_url, session, client_id, max_calls):
+    def __init__(self, model, key, base_url, bridge_url, session, client_id,
+                 max_model_turns, max_tool_calls, max_output_tokens):
         from openai import OpenAI
         self.client = OpenAI(api_key=key, base_url=base_url, max_retries=0)
         self.model, self.bridge_url, self.session = model, bridge_url, session
-        self.client_id, self.max_calls = client_id, max_calls
+        self.client_id, self.max_tool_calls = client_id, max_tool_calls
+        self.max_model_turns, self.max_output_tokens = max_model_turns, max_output_tokens
         self.calls = 0
         self.native_tool_calls = 0
         self.tool_trace = []
@@ -48,10 +50,18 @@ class ACEClientShim:
         prompt = messages[0]["content"] if messages else ""
         # 保留 ACE 官方 Generator 提示词，并在系统消息中提供医疗动作约束。
         messages.insert(0, {"role":"system", "content":"使用可用医疗工具查询任务所需证据。每轮最多执行有限工具动作，最终严格按要求输出 JSON。不得尝试写入患者记录。"})
-        for _ in range(self.max_calls + 1):
-            response = self.client.chat.completions.create(model=self.model, messages=messages,
-                tools=definitions or None, tool_choice="auto" if definitions else None,
-                max_tokens=kwargs.get("max_tokens", 2048), temperature=0)
+        while self.calls < self.max_model_turns:
+            request_kwargs=dict(kwargs)
+            request_kwargs["model"]=self.model
+            request_kwargs["messages"]=messages
+            request_kwargs["tools"]=definitions or None
+            request_kwargs["tool_choice"]="auto" if definitions else None
+            request_kwargs["temperature"]=0
+            token_key="max_completion_tokens" if "max_completion_tokens" in request_kwargs else "max_tokens"
+            configured=request_kwargs.get(token_key)
+            if configured is None: configured=self.max_output_tokens or 2048
+            request_kwargs[token_key]=int(configured if self.max_output_tokens is None else min(int(configured),self.max_output_tokens))
+            response = self.client.chat.completions.create(**request_kwargs)
             self.calls += 1
             if getattr(response,"usage",None) is None:
                 self.usage_known=False
@@ -64,9 +74,11 @@ class ACEClientShim:
             if not calls:
                 return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=SimpleNamespace(
                     prompt_tokens=self.prompt_tokens, completion_tokens=self.completion_tokens))
+            if self.calls >= self.max_model_turns:
+                raise RuntimeError(f"ACE_MODEL_TURN_BUDGET_EXHAUSTED: calls={self.calls}")
             messages.append(message.model_dump(exclude_none=True))
             for call in calls:
-                if self.native_tool_calls >= self.max_calls:
+                if self.native_tool_calls >= self.max_tool_calls:
                     raise RuntimeError("ACE 医疗工具调用超过配置上限")
                 self.native_tool_calls += 1
                 function = call.function
@@ -74,7 +86,7 @@ class ACEClientShim:
                     "name": function.name, "arguments": json.loads(function.arguments or "{}")}, self.client_id)
                 self.tool_trace.append({"name":function.name,"arguments":json.loads(function.arguments or "{}"),"result":result})
                 messages.append({"role":"tool", "tool_call_id":call.id, "content":json.dumps(result, ensure_ascii=False)})
-        raise RuntimeError("ACE 医疗工具调用超过配置上限")
+        raise RuntimeError(f"ACE_MODEL_TURN_BUDGET_EXHAUSTED: calls={self.calls}")
 
 
 def _load_official(source_dir):
@@ -112,13 +124,15 @@ def main(req):
     if not key:
         raise RuntimeError(f"缺少模型 API key 环境变量：{model.get('api_key_env')}")
     shim = ACEClientShim(model["model"], key, model.get("base_url"), req["bridge_url"],
-                         req.get("tool_session", ""), req["client_id"], req.get("max_tool_calls", 20))
+                         req.get("tool_session", ""), req["client_id"],
+                         req.get("max_model_turns", 30),req.get("max_tool_calls",20),req.get("max_output_tokens",2048))
     generator = core.Generator(shim, "openai", model["model"], max_tokens=req.get("max_output_tokens", 2048))
     if req["action"] == "execute":
         metadata = req.get("metadata", {})
         experiences = json.loads((state / "experiences.json").read_text()) if (state / "experiences.json").exists() else []
         context = "\n".join(f"- {entry['procedure']}（注意：{entry['pitfall']}）" for entry in experiences[:3])
-        raw, bullet_ids, info = generator.generate(req["instruction"], current, context=context,
+        question=req["instruction"]+f"\n患者标识：{req.get('patient_id','')}\n决策点：{req.get('decision_point') or '无'}"
+        raw, bullet_ids, info = generator.generate(question, current, context=context,
             reflection=req.get("reflection", "(empty)"), use_json_mode=True, call_id="medical-generator")
         return {"raw":raw, "bullet_ids":bullet_ids, "call_info":info, "tool_calls":shim.native_tool_calls,
                 "tool_trace":shim.tool_trace,
@@ -129,7 +143,7 @@ def main(req):
             return {"learning_status":"not_triggered", "learning_runs":[]}
         reflector = core.Reflector(shim, "openai", model["model"], max_tokens=req.get("max_output_tokens", 2048))
         reflection, tags, reflect_info = reflector.reflect(
-            req["instruction"], req.get("trajectory", ""), req.get("answer", ""),
+            req["instruction"]+f"\n患者标识：{req.get('patient_id','')}\n决策点：{req.get('decision_point') or '无'}", req.get("trajectory", ""), req.get("answer", ""),
             feedback.get("reference_answer"), feedback.get("reason", ""),
             "\n".join(req.get("bullets_used", [])), use_ground_truth=True,
             use_json_mode=True, call_id="medical-reflector")

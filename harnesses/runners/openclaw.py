@@ -107,7 +107,7 @@ class OpenClawRunner:
         self._session_id = f"medevolve-{self._client_id}-{secrets.token_hex(8)}"
         self._pending[self._session_id] = {"iterations": None,
             "review_before": self._review_reader(), "review_started_ms": int(time.time() * 1000)}
-        message = f"请完成以下医疗任务：\n{task.instruction}\n患者标识：{task.patient_id}\n使用 medical_tools_list 查看工具，再调用 medical_tool_call 查询。给出最终答案。"
+        message = f"请完成以下医疗任务：\n{task.instruction}\n患者标识：{task.patient_id}\n决策点：{task.decision_point or '无'}\n使用 medical_tools_list 查看工具，再调用 medical_tool_call 查询。给出最终答案。"
         msg_path = self.state_dir / f"{self._session_id}.md"
         msg_path.write_text(message, encoding="utf-8")
         (self.state_dir / "tool-session.json").write_text(json.dumps({"bridge": self.bridge_url, "session": tool_session, "client": self._client_id}), encoding="utf-8")

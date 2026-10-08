@@ -48,13 +48,18 @@ def test_locked_ace_generator_reflector_curator_and_tool_client(monkeypatch,tmp_
     monkeypatch.setenv("FAKE_KEY","not-a-secret")
     req={"source_dir":str(UPSTREAM),"state_dir":str(tmp_path),"model":{"model":"fake","api_key_env":"FAKE_KEY"},
         "bridge_url":"http://bridge","client_id":"test","tool_session":"session","max_tool_calls":3,
-        "max_output_tokens":100,"instruction":"read record and answer"}
+        "max_model_turns":10,"max_output_tokens":100,"instruction":"read record and answer",
+        "patient_id":"p1","decision_point":"medication review"}
     executed=ace_worker.main({**req,"action":"execute"})
     assert executed["tool_calls"] == 1 and calls
     assert json.loads(executed["raw"])["final_answer"] == "answer-one"
     assert "GENERATOR_PROMPT" not in completions.requests[0]["messages"][1]["content"]
     assert "playbook" in completions.requests[0]["messages"][1]["content"].lower()
     assert completions.requests[0]["tools"][0]["function"]["parameters"]["additionalProperties"] is False
+    assert completions.requests[0]["response_format"]=={"type":"json_object"}
+    assert completions.requests[0]["max_completion_tokens"]==100
+    assert "p1" in completions.requests[0]["messages"][1]["content"]
+    assert "medication review" in completions.requests[0]["messages"][1]["content"]
 
     learned=ace_worker.main({**req,"action":"learn","tool_session":"","answer":"answer-one",
         "trajectory":"task-local trajectory","bullets_used":[],"feedback":{"completed":False,
@@ -69,6 +74,47 @@ def test_locked_ace_generator_reflector_curator_and_tool_client(monkeypatch,tmp_
     assert "[misc-00001] helpful=0 harmful=0 :: Cross-check evidence before concluding." in playbook
     assert "[misc-00002] helpful=0 harmful=0 :: Confirm the requested scope before finalizing." in playbook
     assert len(completions.requests) == 6
+    assert all(item["response_format"]=={"type":"json_object"} and item["max_completion_tokens"]==100 for item in completions.requests)
+
+
+@pytest.mark.asyncio
+async def test_ace_runner_passes_full_solver_context_and_separate_budgets(tmp_path):
+    runner=ACERunner(config={"execution_model":{"model":"m","max_output_tokens":37},
+        "execution_budget":{"max_model_turns":7,"max_tool_calls":23}},group_dir=tmp_path,bridge_url="http://bridge")
+    captured={}
+    async def call(payload,phase):
+        captured.update(payload)
+        return {"raw":json.dumps({"final_answer":"ok","reasoning":""}),"bullet_ids":[],"tool_calls":0,
+            "tool_trace":[],"usage":{"known":True,"calls":1}},None
+    runner._call=call
+    await runner.execute(SolverInput(instruction="task",patient_id="patient-a",decision_point="dose adjustment"),"session")
+    assert captured["patient_id"]=="patient-a" and captured["decision_point"]=="dose adjustment"
+    assert captured["max_model_turns"]==7 and captured["max_tool_calls"]==23 and captured["max_output_tokens"]==37
+
+
+def test_ace_client_shim_preserves_json_mode_and_clamps_official_token_parameter(monkeypatch):
+    import openai
+    completions=FakeCompletions([FakeResponse('{"final_answer":"ok"}')])
+    monkeypatch.setattr(openai,"OpenAI",lambda **kwargs:SimpleNamespace(chat=SimpleNamespace(completions=completions)))
+    monkeypatch.setattr(ace_worker,"_get",lambda *a:[])
+    shim=ace_worker.ACEClientShim("fake","key",None,"http://bridge","","client",2,100,23)
+    shim.create(model="fake",messages=[{"role":"user","content":"prompt"}],max_completion_tokens=700,
+        response_format={"type":"json_object"},temperature=0)
+    assert completions.requests[0]["response_format"]=={"type":"json_object"}
+    assert completions.requests[0]["max_completion_tokens"]==23
+
+
+def test_ace_client_shim_model_turn_limit_is_separate_from_tool_limit(monkeypatch):
+    import openai
+    tool=SimpleNamespace(id="call",function=SimpleNamespace(name="read_record",arguments="{}"))
+    completions=FakeCompletions([FakeResponse(tool_calls=[tool]),FakeResponse(tool_calls=[tool])])
+    monkeypatch.setattr(openai,"OpenAI",lambda **kwargs:SimpleNamespace(chat=SimpleNamespace(completions=completions)))
+    monkeypatch.setattr(ace_worker,"_get",lambda *a:[{"name":"read_record","description":"read","parameters":{}}])
+    calls=[];monkeypatch.setattr(ace_worker,"_post",lambda *a:(calls.append(a) or {"ok":True}))
+    shim=ace_worker.ACEClientShim("fake","key",None,"http://bridge","session","client",2,50,100)
+    with pytest.raises(RuntimeError,match="ACE_MODEL_TURN_BUDGET_EXHAUSTED"):
+        shim.create(model="fake",messages=[{"role":"user","content":"prompt"}],max_completion_tokens=100)
+    assert len(completions.requests)==2 and len(calls)==1
 
 
 @pytest.mark.asyncio

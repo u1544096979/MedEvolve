@@ -93,6 +93,7 @@ class ReflexionRunner:
     async def _execute(self,task,tool_session,*,reset_reflections):
         model=self.config.get("execution_model",{})
         result,error=await self._call({"action":"execute","instruction":task.instruction,"patient_id":task.patient_id,
+            "decision_point":task.decision_point,
             "tool_session":tool_session,"model":model,"max_steps":self.config.get("execution_budget",{}).get("max_model_turns",30),
             "reset_reflections":reset_reflections,"metadata":self._metadata(task),"experiences":self._select_experiences(task)},"execution")
         if error:return RunResult(status="failed",output=None,error=error,trace=[],usage={"known":False})
@@ -114,6 +115,7 @@ class ReflexionRunner:
             return HarnessStep(run=run,learning_runs=[run],learning_status="failed")
         model=self.config.get("learning_model",self.config.get("execution_model",{}))
         result,error=await self._call({"action":"learn","instruction":self._task.instruction,"patient_id":self._task.patient_id,
+            "decision_point":self._task.decision_point,
             "tool_session":"","model":model,"feedback":feedback.model_dump(mode="json"),"scratchpad":self._last_scratchpad,
             "metadata":self._metadata(self._task)},"learning")
         if error:

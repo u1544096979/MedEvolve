@@ -55,11 +55,18 @@ class ACERunner:
 
     async def execute(self, task: SolverInput, tool_session: str) -> RunResult:
         self._session, self._task = tool_session, task
-        result,error=await self._call({"action":"execute","instruction":task.instruction,"tool_session":tool_session,
-            "model":self.config.get("execution_model",{}),"metadata":self._metadata(task),
+        model=self.config.get("execution_model",{})
+        token_limit=model.get("max_output_tokens") or self.config.get("max_output_tokens") or 2048
+        result,error=await self._call({"action":"execute","instruction":task.instruction,
+            "patient_id":task.patient_id,"decision_point":task.decision_point,"tool_session":tool_session,
+            "model":model,"metadata":self._metadata(task),
+            "max_model_turns":self.config.get("execution_budget",{}).get("max_model_turns",30),
             "max_tool_calls":self.config.get("execution_budget",{}).get("max_tool_calls",30),
-            "max_output_tokens":self.config.get("execution_model",{}).get("max_output_tokens",2048)},"execution")
-        if error: return RunResult(status="failed",output=None,error=error,trace=[],usage={"known":False})
+            "max_output_tokens":token_limit},"execution")
+        if error:
+            exhausted="ACE_MODEL_TURN_BUDGET_EXHAUSTED" in error
+            return RunResult(status="budget_exhausted" if exhausted else "failed",output=None,error=error,trace=[{"type":"model_budget","calls":self.config.get("execution_budget",{}).get("max_model_turns",30)}] if exhausted else [],
+                usage={"known":False,"calls":self.config.get("execution_budget",{}).get("max_model_turns",30) if exhausted else 0})
         try: parsed=json.loads(result["raw"])
         except (ValueError,TypeError): parsed={"final_answer":result.get("raw", ""),"reasoning":""}
         answer=str(parsed.get("final_answer", ""))
@@ -76,17 +83,24 @@ class ACERunner:
             run=RunResult(status="failed",output=None,error=message,trace=[],usage={"known":False})
             return HarnessStep(run=run,learning_runs=[],learning_status="failed")
         task=self._last["task"]
+        model=self.config.get("learning_model",self.config.get("execution_model",{}))
+        token_limit=model.get("max_output_tokens") or self.config.get("max_output_tokens") or 2048
         result,error=await self._call({"action":"learn","instruction":task.instruction,"tool_session":"",
-            "model":self.config.get("learning_model",self.config.get("execution_model",{})),
+            "patient_id":task.patient_id,"decision_point":task.decision_point,"model":model,
             "feedback":feedback.model_dump(mode="json"),"answer":self._last["answer"],
             "trajectory":json.dumps(self._last,ensure_ascii=False,default=str),"bullets_used":self._last["bullets"],
             "metadata":self._metadata(task),"question_context":json.dumps(self._metadata(task),ensure_ascii=False),
+            "max_model_turns":self.config.get("learning_budget",{}).get("max_model_turns",10),
+            "max_tool_calls":0,"max_output_tokens":token_limit,
             "current_step":self._step+1,"total_samples":self.config.get("total_samples",1),
             "playbook_token_budget":self.config.get("playbook_token_budget",2000)},"learning")
         self._step+=1
         if error:
-            run=RunResult(status="failed",output=None,error=error,trace=[],usage={"known":False})
-            return HarnessStep(run=run,learning_runs=[run],learning_status="failed")
+            exhausted="ACE_MODEL_TURN_BUDGET_EXHAUSTED" in error
+            run=RunResult(status="budget_exhausted" if exhausted else "failed",output=None,error=error,
+                trace=[{"type":"model_budget","calls":self.config.get("learning_budget",{}).get("max_model_turns",10)}] if exhausted else [],
+                usage={"known":False,"calls":self.config.get("learning_budget",{}).get("max_model_turns",10) if exhausted else 0})
+            return HarnessStep(run=run,learning_runs=[run],learning_status="budget_exhausted" if exhausted else "failed")
         state=result.get("learning_status","unchanged")
         details=[]
         for item in result.get("learning_runs",[]):

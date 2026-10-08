@@ -117,8 +117,7 @@ def main(req):
         req["instruction"] += "\n\nTransferable workflow experience:\n" + "\n".join(
             f"- {item.get('condition')}: {item.get('procedure')} Pitfall: {item.get('pitfall')}"
             for item in experiences)
-    if req["action"]=="execute":
-        req["instruction"] += f"\nPatient identifier for scoped tool access: {req.get('patient_id','')}\nDecision point: {req.get('decision_point') or 'none'}"
+    req["instruction"] += f"\nPatient identifier for scoped tool access: {req.get('patient_id','')}\nDecision point: {req.get('decision_point') or 'none'}"
     actor,strategy,extract_experience=build_agent(module,prompts,req,model,tools,usage)
     actor.reflections=list(state.get("reflections",[])); actor.reflections_str="\n".join(actor.reflections)
     if req["action"]=="execute":
