@@ -8,7 +8,7 @@ from harnesses.contracts import GroupKey, Snapshot, TrainingFeedback
 from harnesses.runners import reflexion_worker
 from harnesses.runners.reflexion import ReflexionRunner
 
-UPSTREAM=Path(__file__).parents[2]/".superpowers/sdd/implementation-plan/upstreams/reflexion"
+UPSTREAM=Path(__file__).parent/"fixtures/upstreams/reflexion"
 
 class PromptTemplate:
     def __init__(self,input_variables,template):self.input_variables=input_variables;self.template=template

@@ -9,7 +9,7 @@ from harnesses.contracts import GroupKey, Snapshot, TrainingFeedback
 from harnesses.runners import ace_worker
 from harnesses.runners.ace import ACERunner
 
-UPSTREAM = Path(__file__).parents[2] / ".superpowers/sdd/implementation-plan/upstreams/ace"
+UPSTREAM = Path(__file__).parent / "fixtures/upstreams/ace"
 
 
 class FakeResponse:

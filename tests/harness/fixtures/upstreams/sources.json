@@ -1,0 +1,29 @@
+{
+  "ace": {
+    "commit": "82709de050e1db6e6ef2f07bcb0393560b94992a",
+    "files": [
+      "ace/core/generator.py",
+      "ace/core/reflector.py",
+      "ace/core/curator.py",
+      "ace/prompts/generator.py",
+      "ace/prompts/reflector.py",
+      "ace/prompts/curator.py",
+      "ace/prompts/__init__.py",
+      "playbook_utils.py",
+      "utils.py",
+      "llm.py",
+      "logger.py",
+      "LICENSE.txt"
+    ]
+  },
+  "reflexion": {
+    "commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+    "files": [
+      "hotpotqa_runs/agents.py",
+      "hotpotqa_runs/prompts.py",
+      "hotpotqa_runs/fewshots.py",
+      "hotpotqa_runs/llm.py",
+      "LICENSE"
+    ]
+  }
+}
