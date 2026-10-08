@@ -1,6 +1,6 @@
 """在锁定 Reflexion checkout 中执行官方 ReactReflectAgent。"""
 from __future__ import annotations
-import importlib, json, os, re, sys, urllib.request
+import importlib, importlib.util, json, os, re, sys, urllib.request
 from pathlib import Path
 
 
