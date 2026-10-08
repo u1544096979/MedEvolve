@@ -29,6 +29,7 @@ _QUOTA_PATTERNS = (
     r"(?:out\s+of\s+credits|no\s+credits\s+remaining|monthly\s+spend\s+limit\s+exceeded)",
 )
 _TRANSIENT_PATTERNS = (
+    r"\bapiconnectionerror\b",
     r"\bapi(?:connection)?timeouterror\b",
     r"defenderforai.{0,160}(?:exceeded|timeout)",
     r"you have used invalid tokens multiple times",

@@ -129,6 +129,105 @@ async def test_upstream_rate_limit_retries_and_costs_each_attempt_once(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_api_connection_error_retries_and_preserves_failed_attempt_cost(monkeypatch,
+                                                                            tmp_path):
+    model = ModelConfig(model="gpt-5.4-nano", base_url="https://api.openlux.ai/v1",
+                        api_key_env="TEST_OPENLUX_KEY")
+    calls, delays = [], []
+
+    async def fake_sleep(delay):
+        delays.append(delay)
+
+    async def fake_call(**kwargs):
+        calls.append(kwargs["model"])
+        if len(calls) == 1:
+            return result("failed", error="APIConnectionError: Connection error.",
+                usage={"input_tokens": 2, "output_tokens": 1, "total_tokens": 3},
+                trace=[{"type": "model_request", "request": 1}])
+        return result(output={"answer": "recovered"}, usage={
+            "input_tokens": 4, "output_tokens": 2, "total_tokens": 6,
+        }, trace=[{"type": "model_response", "request": 2}])
+
+    monkeypatch.setattr(execution, "call_llm", fake_call)
+    monkeypatch.setattr(providers.asyncio, "sleep", fake_sleep)
+    actual = await call_llm(instructions="", input_text="", output_type=SolverAnswer,
+                            model=model)
+
+    assert actual.status == "completed"
+    assert actual.output == {"answer": "recovered"}
+    assert calls == [model, model]
+    assert delays == [1]
+    assert actual.usage["total_tokens"] == 9
+    assert actual.trace[0]["type"] == "provider_identity"
+    attempts = [event for event in actual.trace if event["type"] == "provider_attempt"]
+    assert len(attempts) == 2
+    assert attempts[0]["result"]["error"] == "APIConnectionError: Connection error."
+    assert attempts[0]["result"]["usage"]["total_tokens"] == 3
+    assert all(event["provider_identity"]["model"] == model.model for event in attempts)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "config.json").write_text(json.dumps({
+        "method": "singleshot", "environment": {"name": "PhysicianBench"},
+        "runtime": {"models": {"generator": {"model": model.model}}},
+        "evaluation": {"runtime": {"models": {}}},
+    }))
+    (run_dir / "runs.json").write_text(json.dumps([{
+        "stage": "evaluation/generate/0", "result": actual.model_dump(mode="json"),
+    }]))
+    costs = summarize_costs([run_dir])
+    assert costs["totals"]["total_tokens"] == 9
+    assert [(item["model"], item["base_url"], item["total_tokens"])
+            for item in costs["records"]] == [
+                (model.model, model.base_url, 3), (model.model, model.base_url, 6),
+            ]
+
+
+@pytest.mark.asyncio
+async def test_api_connection_error_stops_after_three_failed_calls(monkeypatch, tmp_path):
+    model = ModelConfig(model="gpt-4o-mini", base_url="https://api.openlux.ai/v1",
+                        api_key_env="TEST_OPENLUX_KEY")
+    calls, delays = [], []
+
+    async def fake_sleep(delay):
+        delays.append(delay)
+
+    async def fake_call(**kwargs):
+        calls.append(kwargs["model"])
+        return result("failed", error="APIConnectionError: Connection error.",
+            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            trace=[{"type": "model_request", "request": len(calls)}])
+
+    monkeypatch.setattr(execution, "call_llm", fake_call)
+    monkeypatch.setattr(providers.asyncio, "sleep", fake_sleep)
+    actual = await call_llm(instructions="", input_text="", output_type=SolverAnswer,
+                            model=model)
+
+    assert actual.status == "failed"
+    assert "failed after 3 attempts" in actual.error
+    assert len(calls) == 3
+    assert delays == [1, 2]
+    assert actual.usage["total_tokens"] == 6
+    attempts = [event for event in actual.trace if event["type"] == "provider_attempt"]
+    assert len(attempts) == 3
+    assert attempts[0]["result"]["error"] == "APIConnectionError: Connection error."
+    assert actual.trace[0]["model"] == model.model
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "config.json").write_text(json.dumps({
+        "method": "singleshot", "environment": {"name": "PhysicianBench"},
+        "runtime": {"models": {"generator": {"model": model.model}}},
+        "evaluation": {"runtime": {"models": {}}},
+    }))
+    (run_dir / "runs.json").write_text(json.dumps([{
+        "stage": "evaluation/generate/0", "result": actual.model_dump(mode="json"),
+    }]))
+    costs = summarize_costs([run_dir])
+    assert costs["totals"]["total_tokens"] == 6
+    assert len(costs["records"]) == 3
+    assert all(item["base_url"] == model.base_url for item in costs["records"])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("error", "expected_delays"), [
     ("APITimeoutError: timed out", [1, 2]),
     ("Error code 408: DefenderForAI request exceeded 300ms timeout", [1, 2]),
