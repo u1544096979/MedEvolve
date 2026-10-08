@@ -199,21 +199,65 @@ async def analyze_feedback(
     evaluations: list[EvaluationResult],
     runtime: RuntimeConfig,
 ) -> RunResult:
-    return await call_llm(
-        instructions=FEEDBACK + ("\n\n" + capability_instructions(
-            tasks[0].environment if tasks else trajectories[0].environment)
-                                 if tasks or trajectories else ""),
-        input_text=json.dumps(
-            {
-                "tasks": [task.model_dump(mode="json") for task in tasks],
-                "trajectories": [_trajectory_input(trajectory) for trajectory in trajectories],
-                "evaluations": [_evaluation_input(evaluation) for evaluation in evaluations],
-            },
-            ensure_ascii=False,
-        ),
-        output_type=Feedback,
-        model=runtime.models["feedback"],
+    from collections import defaultdict
+
+    tasks_by_patient = defaultdict(list)
+    evaluations_by_task = {evaluation.task_id: evaluation for evaluation in evaluations}
+    for task in tasks:
+        tasks_by_patient[task.patient_id].append(task)
+    runs = []
+    for trajectory in trajectories:
+        patient_tasks = tasks_by_patient.get(trajectory.patient_id, [])
+        patient_evaluations = [evaluations_by_task[task.id] for task in patient_tasks
+                               if task.id in evaluations_by_task]
+        instructions = FEEDBACK + "\n\n" + capability_instructions(trajectory.environment)
+        payload = {
+            "tasks": [task.model_dump(mode="json") for task in patient_tasks],
+            "trajectories": [_trajectory_input(trajectory)],
+            "evaluations": [_evaluation_input(evaluation) for evaluation in patient_evaluations],
+        }
+        try:
+            result = await call_llm(
+                instructions=instructions,
+                input_text=json.dumps(payload, ensure_ascii=False),
+                output_type=Feedback,
+                model=runtime.models["feedback"],
+            )
+        except Exception as exc:
+            result = RunResult(
+                trace=[{"type": "run_error", "error": f"{type(exc).__name__}: {exc}"}],
+                usage={"model_turns": 0, "tool_calls": 0}, status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        runs.append({"patient_id": trajectory.patient_id, "result": result.model_dump(mode="json")})
+
+    successful = []
+    for run in runs:
+        result = RunResult.model_validate(run["result"])
+        if result.status == "completed" and result.output is not None:
+            try:
+                successful.append((run["patient_id"], Feedback.model_validate(result.output)))
+            except Exception as exc:
+                run["result"]["status"] = "failed"
+                run["result"]["output"] = None
+                run["result"]["error"] = f"invalid Feedback: {type(exc).__name__}: {exc}"
+
+    usages = [normalize_usage(run["result"].get("usage", {})) for run in runs]
+    usage = {field: (sum(item[field] or 0 for item in usages)
+                     if any(item[field] is not None for item in usages) else None)
+             for field in USAGE_FIELDS}
+    usage["runs_without_known_tokens"] = sum(
+        item.get("runs_without_known_tokens", int(item["total_tokens"] is None)) for item in usages
     )
+    trace = [{"type": "patient_feedback", **run} for run in runs]
+    if not successful:
+        return RunResult(trace=trace, usage=usage, status="failed",
+                         error="feedback analysis produced no successful patient results")
+    merged = {field: [f"[{patient_id}] {finding}" for patient_id, feedback in successful
+                      for finding in getattr(feedback, field)]
+              for field in ("quality_findings", "difficulty_findings", "failure_findings", "suggestions")}
+    return RunResult(output=Feedback(**merged).model_dump(mode="json"), trace=trace,
+                     usage=usage, status="completed")
 
 
 async def update_strategy(

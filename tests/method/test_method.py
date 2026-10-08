@@ -192,6 +192,7 @@ async def test_generation_feedback_update_and_next_generation(method, runtime, m
     assert TaskBatch.model_validate(second.output).questions == []
 
     assert call.await_count == 4
+
     calls = [entry.kwargs for entry in call.await_args_list]
     assert [entry["output_type"] for entry in calls] == [TaskBatch, Feedback, Strategy, TaskBatch]
     payloads = [json.loads(entry["input_text"]) for entry in calls]
@@ -214,6 +215,88 @@ async def test_generation_feedback_update_and_next_generation(method, runtime, m
     with pytest.raises(ValueError, match="exactly two"):
         await method.generate_tasks(patient, guidance, strategy, [direction], runtime)
     assert call.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_feedback_isolated_by_patient_and_keeps_partial_usage(method, runtime, monkeypatch):
+    patients = [trajectory("p1"), trajectory("p2")]
+    tasks = []
+    evaluations = []
+    for index, patient in enumerate(patients, start=1):
+        question = GeneratedQuestion(instruction=f"任务{index}", task_type="诊断与解释",
+            reference_answer="参考", evidence=patient.sources, execution_requirement="read_only")
+        task = Task(**question.model_dump(), id=f"t{index}", patient_id=patient.patient_id,
+            environment=patient.environment, round_index=0, source_method="medevolve")
+        tasks.append(task)
+        evaluations.append(EvaluationResult(task_id=task.id, status="failed",
+            failure_category="tool_error", observed_state={}, runs=[]))
+    first = completed(Feedback(quality_findings=["质量"], difficulty_findings=[],
+        failure_findings=[], suggestions=[]))
+    failed = RunResult(output=None, trace=[{"type": "model_request"}],
+        usage={"model_turns": 1, "tool_calls": 0, "input_tokens": 50, "output_tokens": 2,
+               "total_tokens": 52}, status="failed", error="provider failed")
+    call = AsyncMock(side_effect=[first, failed])
+    monkeypatch.setattr(method, "call_llm", call)
+
+    result = await method.analyze_feedback(tasks, patients, evaluations, runtime)
+
+    assert result.status == "completed"
+    assert Feedback.model_validate(result.output).quality_findings == ["[p1] 质量"]
+    assert result.usage["model_turns"] == 1
+    assert result.usage["total_tokens"] == 52
+    assert [run["patient_id"] for run in result.trace] == ["p1", "p2"]
+    inputs = [json.loads(item.kwargs["input_text"]) for item in call.await_args_list]
+    assert [[item["patient_id"] for item in payload["trajectories"]] for payload in inputs] == [["p1"], ["p2"]]
+    assert [[item["id"] for item in payload["tasks"]] for payload in inputs] == [["t1"], ["t2"]]
+    assert all(payload["tasks"][0]["evidence"][0]["source_id"] ==
+               payload["trajectories"][0]["sources"][0]["source_id"] for payload in inputs)
+
+
+@pytest.mark.asyncio
+async def test_feedback_without_success_fails_and_retains_failed_run(method, runtime, monkeypatch):
+    failed = RunResult(trace=[{"type": "run_error"}], usage={"model_turns": 1},
+                       status="failed", error="offline")
+    monkeypatch.setattr(method, "call_llm", AsyncMock(return_value=failed))
+    result = await method.analyze_feedback([], [trajectory("p1")], [], runtime)
+    assert result.status == "failed"
+    assert "no successful" in result.error
+    assert result.usage["model_turns"] == 1
+    assert result.trace[0]["result"]["error"] == "offline"
+
+
+@pytest.mark.asyncio
+async def test_long_feedback_uses_context_fitting_and_protects_task_evidence(
+    method, runtime, monkeypatch
+):
+    from runtime.context import prepare_input
+
+    patient = trajectory("long-patient").model_copy(update={
+        "text": "\n\n".join(f"Observation/o{index}: 检验记录 {index}" for index in range(300)),
+        "sources": [Evidence(source_id=f"Observation/o{index}", statement=f"检验记录 {index}")
+                    for index in range(300)],
+    })
+    task = Task(instruction="解释病程", task_type="诊断与解释", reference_answer="答案",
+        evidence=[patient.sources[-1]], execution_requirement="read_only", id="long-task",
+        patient_id=patient.patient_id, environment=patient.environment,
+        round_index=0, source_method="medevolve")
+    runtime.models["feedback"] = ModelConfig(model="unknown-model", api_key_env="unused",
+        context_window=8000, max_output_tokens=512)
+    prepared = []
+
+    async def bounded_call(**kwargs):
+        body, entry = prepare_input(kwargs["input_text"], kwargs["model"],
+            instructions=kwargs["instructions"], schema=kwargs["output_type"].model_json_schema())
+        prepared.append((json.loads(body), entry))
+        return completed(Feedback(quality_findings=[], difficulty_findings=[],
+            failure_findings=[], suggestions=[]))
+
+    monkeypatch.setattr(method, "call_llm", bounded_call)
+    result = await method.analyze_feedback([task], [patient], [], runtime)
+    assert result.status == "completed"
+    body, budget = prepared[0]
+    assert len(body["trajectories"][0]["text"]) < len(patient.text)
+    assert body["tasks"][0]["evidence"][0]["source_id"] == "Observation/o299"
+    assert budget["trajectories_fitted"] == 1
 
 
 @pytest.mark.asyncio

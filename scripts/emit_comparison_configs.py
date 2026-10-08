@@ -102,6 +102,21 @@ def _payload(template: dict, spec: dict, *, run_id: str, output_dir: Path, slug:
     return payload
 
 
+def _round_patients(cohort: dict, evolution_patients: list[str]) -> list[list[str]]:
+    """读取显式两轮划分；旧 cohort 沿用每轮完整进化集的行为。"""
+    rounds = cohort.get("round_patients")
+    if rounds is None:
+        return [list(evolution_patients), list(evolution_patients)]
+    if len(rounds) != 2:
+        raise ValueError("cohort.round_patients must contain exactly two rounds")
+    flattened = [patient for batch in rounds for patient in batch]
+    if len(flattened) != len(set(flattened)):
+        raise ValueError("cohort.round_patients must not repeat patients")
+    if set(flattened) != set(evolution_patients) or len(flattened) != len(evolution_patients):
+        raise ValueError("cohort.round_patients must cover evolution_patients exactly")
+    return [list(batch) for batch in rounds]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--slug", required=True, choices=sorted(ENVIRONMENT_BASE))
@@ -124,6 +139,7 @@ def main() -> None:
     batch_size = args.batch_size or (EXPLORATION_BATCH_SIZE if args.method == "envexplore"
                                      else BATCH_SIZE)
     evolution_patients = list(cohort["evolution_patients"])
+    round_patients = _round_patients(cohort, evolution_patients)
     remainder = [patient for batch in cohort["batches"] for patient in batch]
     batches = [remainder[index:index + batch_size]
                for index in range(0, len(remainder), batch_size)]
@@ -133,7 +149,7 @@ def main() -> None:
         payload = _payload(template, spec, run_id=f"full-{args.slug}-medevolve-evolution",
                            output_dir=root / "evolution", slug=args.slug, method=args.method,
                            evolution=evolution_patients, evaluation=[],
-                           rounds=[list(evolution_patients), list(evolution_patients)],
+                           rounds=round_patients,
                            manager_url=args.manager_url)
         ExperimentConfig.model_validate(payload)
         path = args.configs_dir / f"full-{args.slug}-medevolve-evolution.json"

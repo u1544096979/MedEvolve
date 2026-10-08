@@ -156,7 +156,8 @@ async def test_actual_modules_two_rounds(tmp_path, monkeypatch, instructions_rol
     assert generated_strategies == [('e1', initial), ('e2', initial), ('e1', 'strategy-1'),
                                     ('e2', 'strategy-1'), ('h1', 'strategy-2')]
     assert model_calls['generator'] == 5
-    assert model_calls['feedback'] == model_calls['updater'] == 2
+    assert model_calls['feedback'] == 4
+    assert model_calls['updater'] == 2
     assert queries['trajectory:e1'] == queries['trajectory:e2'] == queries['trajectory:h1'] == 1
     # 轨迹准备、环境探索、核验和解题共享同一个固定种子实例。
     assert len(created) == 1 and not active
