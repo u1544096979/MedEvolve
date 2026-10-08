@@ -51,6 +51,8 @@ async def make_training_feedback(
     run: RunResult,
     observed_state: dict,
     config: EvaluationConfig,
+    *,
+    record=None,
 ) -> TrainingFeedback:
     """Build the learning feedback for one executed run.
 
@@ -64,7 +66,9 @@ async def make_training_feedback(
             run,
         )
     try:
-        review, _ = await review_completion(task, trajectory, run, observed_state, config)
+        review, _ = await review_completion(
+            task, trajectory, run, observed_state, config, record=record,
+        )
     except Exception as exc:
         return _infrastructure_feedback(
             task,
