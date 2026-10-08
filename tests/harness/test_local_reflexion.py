@@ -41,13 +41,14 @@ def install_legacy_langchain(monkeypatch):
     monkeypatch.setattr("tiktoken.encoding_for_model",lambda name:types.SimpleNamespace(encode=lambda text:text.split()))
 
 
-def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkeypatch,tmp_path):
+@pytest.mark.parametrize("separator", ["|", ","])
+def test_locked_reflexion_actor_runs_medical_tool_and_official_reflection(monkeypatch,tmp_path,separator):
     install_legacy_langchain(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY","fake")
     for name in ("llm","prompts","fewshots","utils","logger","reflexion_locked_agents"):
         if name in sys.modules: monkeypatch.delitem(sys.modules,name)
     prompts_seen=[]
-    outputs=iter(["review the task " * 900,"Tool[read_record|{}]","use evidence " * 900,"Finish[secret-answer]",
+    outputs=iter(["review the task " * 900,f"Tool[read_record{separator}{{}}]","use evidence " * 900,"Finish[secret-answer]",
         "Review evidence before concluding.",
         '{"condition":"diagnostic task","procedure":"Review relevant records","pitfall":"Avoid relying on one finding"}'])
     monkeypatch.setattr(reflexion_worker,"_chat_completion",lambda model,key,prompt,tokens,stop=None:(prompts_seen.append(prompt) or {

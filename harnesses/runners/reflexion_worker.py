@@ -97,9 +97,10 @@ def build_agent(module,prompts,req,model,tools,usage):
                 self.scratchpad += "Invalid action. Use Tool[name|JSON] or Finish[answer]."; self.step_n+=1; return
             kind,arg=parsed
             if kind=="Finish": self.answer=arg; self.finished=True; self.scratchpad+="Final answer submitted."; self.step_n+=1; return
-            if kind!="Tool" or "|" not in arg:
+            tool_action=re.fullmatch(r"\s*([A-Za-z0-9_-]+)\s*[|,]\s*(\{.*\})\s*",arg) if kind=="Tool" else None
+            if not tool_action:
                 self.scratchpad += "Invalid action. Use Tool[name|JSON arguments]."; self.step_n+=1; return
-            name,raw=arg.split("|",1)
+            name,raw=tool_action.groups()
             try:
                 arguments=json.loads(raw.strip()); tool=functions.get(name.strip())
                 if not tool: raise ValueError("tool name is not available")
