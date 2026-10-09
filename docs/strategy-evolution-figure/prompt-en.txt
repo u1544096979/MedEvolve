@@ -1,0 +1,23 @@
+Edit this small NAACL academic figure into ENGLISH. Preserve the restrained white background, fine slate-blue rules, pale ivory feedback block, pale teal updated-guidance block, and overall three-row single-column layout. Use crisp Helvetica/Arial-style English typography, modest semibold stage labels and REGULAR body text. Improve spacing as needed for English labels, while keeping intended 8.5 cm single-column print readability.
+
+Replace ALL Chinese text with ONLY these exact English texts:
+Top left label, wrapped on two lines: "Initial" / "Guidance".
+Top right body, two lines:
+"Link events across visits"
+"Assess disease or treatment changes"
+
+Middle left label, wrapped on two lines: "Evidence" / "Feedback".
+Middle right body, two lines:
+"Follow-up results are missing"
+"Treatment response is unsupported"
+
+Bottom left label, wrapped on two lines: "Updated" / "Guidance".
+Bottom right body, three teal dash bullet lines:
+"Check baseline and follow-up"
+"Ensure data are comparable"
+"Limit conclusions when evidence is insufficient"
+For the last bullet, allow a SECOND line for "when evidence is insufficient", with a hanging indent aligned to the text above.
+
+Correct left-rail arrows: exactly TWO downward connectors. One from Initial Guidance to Evidence Feedback; another from Evidence Feedback to Updated Guidance. Each connector is ONE continuous thin charcoal vertical line with exactly ONE arrowhead at its BOTTOM end adjacent to the TARGET label. Put the connector text beside the shaft, NOT interrupting the line: first connector "Evaluate", second "Revise". NO extra arrowheads pointing at connector labels. Place the small connector labels on the RIGHT side of the vertical line in the clear gutter between label rail and content region. Keep connectors away from any words.
+
+English body text clear and comfortably readable, left aligned on identical inset grid. No Chinese characters anywhere. No additional wording, caption, title, numerical metrics or decorative elements. Academic case-study inset, visually refined typesetting, not a slide.

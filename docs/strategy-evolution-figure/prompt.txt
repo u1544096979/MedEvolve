@@ -1,0 +1,17 @@
+Use case: infographic-diagram.
+Create a compact publication-quality academic figure for the Chinese draft of an NLP research paper. This is a small single-column example, not a large architecture overview. Wide rectangle, aspect ratio about 2.4:1, tight balanced composition, white background, substantial readable Chinese text. Three equally sized cards arranged left to right, with exactly two short thick dark gray right-pointing arrows between them. No diagram title, no caption inside the image, no panel letters, no decorative icons, no subtitle, no footer, no extra modules, no loop arrows, no numbers, no patient facts, no scores. Flat graphic appearance, subtle round corners, thin coordinated borders, no drop shadows or gradients. Match a restrained academic teal/orange palette: left pale teal, middle pale neutral cream, right pale warm orange; all body text dark navy. Large clean Chinese sans-serif typography with uniform stroke weight and exact correct characters. All content must fit within the cards without truncation or overlap. Keep text size large enough for printing at 8.5 cm wide, with very little unused padding.
+Left card header exactly: 初始指导
+Left card body on two lines exactly:
+关联病程节点
+判断治疗变化
+Middle card header exactly: 核验反馈
+Middle card body on two lines exactly:
+缺少随访结果
+疗效判断证据不足
+Right card header exactly: 更新后指导
+Right card body on two lines exactly:
+先核对基线与随访
+证据不足时限定结论
+First arrow points FROM left card TO middle card, label above it exactly: 任务评价
+Second arrow points FROM middle card TO right card, label above it exactly: 策略修订
+Use only those specified Chinese labels. This illustrates a change in a generation rule prompted by feedback, not an improvement in measured outcomes. No marks suggesting a proven successful result. Render with crisp print-friendly edges and generous text contrast. The visual emphasis is the more explicit rule in the right card.
