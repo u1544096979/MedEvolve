@@ -151,7 +151,9 @@ async def run_experiment(config: ExperimentConfig) -> None:
         "evaluation_concurrency": resolve_concurrency(config.evaluation_concurrency),
     })
     _save(root / "config.json", saved_config.model_dump(mode="json"))
-    manifest = {"status": "running", "errors": []}
+    manifest = {"status": "running", "errors": [],
+                "generation": {"status": "running", "failed": 0, "incomplete": 0},
+                "evaluation": {"status": "running", "failed": 0, "incomplete": 0}}
     runs = []
     artifact_lock = asyncio.Lock()
     generation_concurrency = saved_config.generation_concurrency
@@ -335,6 +337,14 @@ async def run_experiment(config: ExperimentConfig) -> None:
                            **selection_record,
                            "produced": len(batch.questions) if batch else 0,
                            "status": run.status, "error": run.error, "usage": run.usage}
+                async with artifact_lock:
+                    if batch is None:
+                        if run.status == "budget_exhausted":
+                            manifest["generation"]["incomplete"] += 1
+                        else:
+                            manifest["generation"]["failed"] += 1
+                    elif run.status == "failed":
+                        manifest["generation"]["failed"] += 1
                 batch_tasks = [
                     Task(**question.model_dump(),
                          id=f"{config.run_id}:{folder.name}:{patient_index}:{question_index}",
@@ -363,6 +373,9 @@ async def run_experiment(config: ExperimentConfig) -> None:
                     await error(f"{folder.name}/evaluate/{task.id}", exc)
                     evaluation = EvaluationResult(task_id=task.id, observed_state={},
                                                   status="failed", runs=[])
+                async with artifact_lock:
+                    if evaluation.status == "failed":
+                        manifest["evaluation"]["failed"] += 1
                 evaluation_runs = list(evaluation.runs)
                 if evaluation.solver_run is not None and evaluation.solver_run not in evaluation_runs:
                     evaluation_runs.append(evaluation.solver_run)
@@ -385,6 +398,10 @@ async def run_experiment(config: ExperimentConfig) -> None:
             tasks = [task for outcome in outcomes for task in outcome.tasks]
             evaluations = [outcome.evaluations[index] for outcome in outcomes
                            for index in sorted(outcome.evaluations)]
+            expected_evaluations = len(tasks)
+            missing_evaluations = expected_evaluations - len(evaluations)
+            if missing_evaluations > 0:
+                manifest["evaluation"]["incomplete"] += missing_evaluations
             attempts = [results[index]["attempt"] for index in sorted(results)]
             _save(folder / "tasks.json", [t.model_dump(mode="json") for t in tasks])
             _save(folder / "evaluations.json", [e.model_dump(mode="json") for e in evaluations])
@@ -425,7 +442,15 @@ async def run_experiment(config: ExperimentConfig) -> None:
     finally:
         try:
             await environments.close()
-        finally:
-            checkpoint()
-            from .summary import summarize_run
-            _save(root / "summary.json", summarize_run(str(root)))
+        except Exception as exc:
+            manifest["status"] = "failed"
+            await error("environment_release", exc)
+        stage_failed = any(stage["failed"] or stage["incomplete"]
+                           for stage in (manifest["generation"], manifest["evaluation"]))
+        if stage_failed or manifest["errors"]:
+            manifest["status"] = "failed"
+        for name in ("generation", "evaluation"):
+            manifest[name]["status"] = "failed" if (manifest[name]["failed"] or manifest[name]["incomplete"]) else "completed"
+        checkpoint()
+        from .summary import summarize_run
+        _save(root / "summary.json", summarize_run(str(root)))

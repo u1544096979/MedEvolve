@@ -122,6 +122,7 @@ def test_two_rounds_and_read_only_summary(tmp_path, monkeypatch, capsys, failure
     config_path.write_text(config.model_dump_json())
     monkeypatch.setattr(sys, "argv", ["run", "--config", str(config_path)])
     main()
+    manifest = json.loads((Path(config.output_dir) / "manifest.json").read_text())
     assert calls["data"] == calls["environment"] == calls["create"] == calls["release"] == 1
     assert [calls[f"prepare:{p}"] for p in ["e1", "e2", "h1"]] == [1, 1, 1]
     assert calls["feedback"] == calls["update"] == 2
@@ -150,10 +151,16 @@ def test_two_rounds_and_read_only_summary(tmp_path, monkeypatch, capsys, failure
     assert summary["model_runs"]["known_token_totals"]["input_tokens"] > 0
     assert summary["model_runs"]["count"] == (17 if failure else 21)
     if failure:
+        assert manifest["status"] == "failed"
+        assert manifest["generation"]["failed"] == 1
+        assert manifest["evaluation"]["failed"] == 1
         assert summary["evolution"]["completion_among_generated"]["numerator"] == 4
         assert summary["model_runs"]["statuses"]["budget_exhausted"] == 2
         assert len(summary["errors"]) == 4
     else:
+        assert manifest["status"] == "completed"
+        assert manifest["generation"] == {"status": "completed", "failed": 0, "incomplete": 0}
+        assert manifest["evaluation"] == {"status": "completed", "failed": 0, "incomplete": 0}
         other_calls, other_generated = install_dependencies(monkeypatch)
         asyncio.run(runner.run_experiment(config_for(tmp_path / "repeat")))
         assert generated == other_generated

@@ -65,7 +65,31 @@ def status_of(config_path: Path) -> str | None:
     manifest = Path(payload["output_dir"]) / "manifest.json"
     if not manifest.exists():
         return None
-    return json.loads(manifest.read_text(encoding="utf-8")).get("status")
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    status = data.get("status")
+    if status != "completed":
+        return status
+    if "generation" in data and "evaluation" in data:
+        return status
+    # 老 manifest 缺少阶段账本时，检查现存结果，避免重复信任历史误报。
+    folders = [Path(payload["output_dir"]) / "evaluation",
+               Path(payload["output_dir"]) / "initial_evaluation",
+               *sorted((Path(payload["output_dir"]) / "rounds").glob("*"))]
+    for folder in folders:
+        attempts_path = folder / "attempts.json"
+        evaluations_path = folder / "evaluations.json"
+        tasks_path = folder / "tasks.json"
+        attempts = json.loads(attempts_path.read_text(encoding="utf-8")) if attempts_path.exists() else []
+        evaluations = json.loads(evaluations_path.read_text(encoding="utf-8")) if evaluations_path.exists() else []
+        tasks = json.loads(tasks_path.read_text(encoding="utf-8")) if tasks_path.exists() else []
+        if any(a.get("status") == "failed" or
+               (a.get("status") == "budget_exhausted" and not a.get("produced")) for a in attempts):
+            return "failed"
+        if any(e.get("status") == "failed" for e in evaluations):
+            return "failed"
+        if len(evaluations) < len(tasks):
+            return "failed"
+    return status
 
 
 def run(config_path: Path, settings: dict, log_dir: Path) -> int:

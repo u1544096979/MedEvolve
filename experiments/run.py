@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import json
 from pathlib import Path
 
 from contracts import ExperimentConfig
@@ -20,7 +21,9 @@ def main():
                                                "output_dir": args.output_dir}.items() if value is not None}
     config = config.model_copy(update=overrides)
     asyncio.run(run_experiment(config))
+    manifest = Path(config.output_dir) / "manifest.json"
+    return 1 if manifest.exists() and json.loads(manifest.read_text(encoding="utf-8")).get("status") == "failed" else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
