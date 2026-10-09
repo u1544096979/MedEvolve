@@ -1,0 +1,458 @@
+{
+  "environment": "PhysicianBench",
+  "seed": 42,
+  "patient_pool": 108,
+  "evolution_patients": [
+    "MRN4904783602",
+    "MRN9219046621"
+  ],
+  "batches": [
+    [
+      "MRN2867302554",
+      "MRN2354044933",
+      "MRN1762742104",
+      "MRN9963334018",
+      "MRN2752561474",
+      "MRN7165315965",
+      "MRN5902928806",
+      "MRN8934927891",
+      "MRN2299051392",
+      "MRN4460967357",
+      "MRN1189536311",
+      "MRN9554686211",
+      "MRN8121374291",
+      "MRN2970753705",
+      "MRN8166025032",
+      "MRN6756332150"
+    ],
+    [
+      "MRN9639245200",
+      "MRN7497220934",
+      "MRN8038596016",
+      "MRN9904716087",
+      "MRN9194525015",
+      "MRN2181241943",
+      "MRN6279072140",
+      "MRN1470939445",
+      "MRN1300119278",
+      "MRN4404414916",
+      "MRN5774080233",
+      "MRN1667779376",
+      "MRN8737368931",
+      "MRN4163119785",
+      "MRN5873617945",
+      "MRN5386175109"
+    ],
+    [
+      "MRN3069355264",
+      "MRN9697354961",
+      "MRN5892645682",
+      "MRN9838448928",
+      "MRN1724700145",
+      "MRN3392080953",
+      "MRN9758908152",
+      "MRN7757736272",
+      "MRN1127978094",
+      "MRN9742590886",
+      "MRN2264896698",
+      "MRN4856660563",
+      "MRN4522690020",
+      "MRN7010379415",
+      "MRN6025656705",
+      "MRN7665963761"
+    ],
+    [
+      "MRN2145119841",
+      "MRN3783290795",
+      "MRN8235634313",
+      "MRN6488854841",
+      "MRN4095476665",
+      "MRN5567816720",
+      "MRN9786748825",
+      "MRN7635473142",
+      "MRN7256766936",
+      "MRN2333457725",
+      "MRN7567496105",
+      "MRN5978766063",
+      "MRN5996775663",
+      "MRN9646496750",
+      "MRN3938315787",
+      "MRN5556203098"
+    ],
+    [
+      "MRN1733507928",
+      "MRN7887950851",
+      "MRN2445662585",
+      "MRN9208329109",
+      "MRN1685744792",
+      "MRN5398432401",
+      "MRN5622794358",
+      "MRN1502275749",
+      "MRN6649827836",
+      "MRN8534669743",
+      "MRN4888657619",
+      "MRN3479708607",
+      "MRN7825844140",
+      "MRN6754656076",
+      "MRN1939042955",
+      "MRN8995970241"
+    ],
+    [
+      "MRN2812140441",
+      "MRN6241752544",
+      "MRN2137651678",
+      "MRN9509487523",
+      "MRN8243295640",
+      "MRN2946625742",
+      "MRN1542059002",
+      "MRN7805745017",
+      "MRN1610637279",
+      "MRN9703905715",
+      "MRN2566942273",
+      "MRN3746317213",
+      "MRN3857828509",
+      "MRN8523280142",
+      "MRN1351111723",
+      "MRN5951406973"
+    ],
+    [
+      "MRN5710360983",
+      "MRN6884882440",
+      "MRN4274958945",
+      "MRN1958682846",
+      "MRN3420779307",
+      "MRN9988355352",
+      "MRN7483366056",
+      "MRN3615507143",
+      "MRN3694860228",
+      "MRN8429141456"
+    ]
+  ],
+  "fitted": [
+    {
+      "patient_id": "MRN1127978094",
+      "tokens": 164656
+    },
+    {
+      "patient_id": "MRN1351111723",
+      "tokens": 1812547
+    },
+    {
+      "patient_id": "MRN1502275749",
+      "tokens": 598167
+    },
+    {
+      "patient_id": "MRN1542059002",
+      "tokens": 1290261
+    },
+    {
+      "patient_id": "MRN1610637279",
+      "tokens": 1530944
+    },
+    {
+      "patient_id": "MRN1667779376",
+      "tokens": 113424
+    },
+    {
+      "patient_id": "MRN1685744792",
+      "tokens": 507867
+    },
+    {
+      "patient_id": "MRN1724700145",
+      "tokens": 138539
+    },
+    {
+      "patient_id": "MRN1733507928",
+      "tokens": 439742
+    },
+    {
+      "patient_id": "MRN1939042955",
+      "tokens": 681449
+    },
+    {
+      "patient_id": "MRN1958682846",
+      "tokens": 3055782
+    },
+    {
+      "patient_id": "MRN2137651678",
+      "tokens": 768994
+    },
+    {
+      "patient_id": "MRN2145119841",
+      "tokens": 268215
+    },
+    {
+      "patient_id": "MRN2264896698",
+      "tokens": 202133
+    },
+    {
+      "patient_id": "MRN2333457725",
+      "tokens": 353533
+    },
+    {
+      "patient_id": "MRN2445662585",
+      "tokens": 470734
+    },
+    {
+      "patient_id": "MRN2566942273",
+      "tokens": 1636059
+    },
+    {
+      "patient_id": "MRN2812140441",
+      "tokens": 732085
+    },
+    {
+      "patient_id": "MRN2946625742",
+      "tokens": 1129652
+    },
+    {
+      "patient_id": "MRN3069355264",
+      "tokens": 118743
+    },
+    {
+      "patient_id": "MRN3392080953",
+      "tokens": 149561
+    },
+    {
+      "patient_id": "MRN3420779307",
+      "tokens": 3623869
+    },
+    {
+      "patient_id": "MRN3479708607",
+      "tokens": 654780
+    },
+    {
+      "patient_id": "MRN3615507143",
+      "tokens": 5431062
+    },
+    {
+      "patient_id": "MRN3694860228",
+      "tokens": 6052574
+    },
+    {
+      "patient_id": "MRN3746317213",
+      "tokens": 1677545
+    },
+    {
+      "patient_id": "MRN3783290795",
+      "tokens": 275360
+    },
+    {
+      "patient_id": "MRN3857828509",
+      "tokens": 1699406
+    },
+    {
+      "patient_id": "MRN3938315787",
+      "tokens": 411496
+    },
+    {
+      "patient_id": "MRN4095476665",
+      "tokens": 294488
+    },
+    {
+      "patient_id": "MRN4163119785",
+      "tokens": 115406
+    },
+    {
+      "patient_id": "MRN4274958945",
+      "tokens": 3036724
+    },
+    {
+      "patient_id": "MRN4404414916",
+      "tokens": 107381
+    },
+    {
+      "patient_id": "MRN4522690020",
+      "tokens": 240131
+    },
+    {
+      "patient_id": "MRN4856660563",
+      "tokens": 207505
+    },
+    {
+      "patient_id": "MRN4888657619",
+      "tokens": 629437
+    },
+    {
+      "patient_id": "MRN5386175109",
+      "tokens": 117145
+    },
+    {
+      "patient_id": "MRN5398432401",
+      "tokens": 532722
+    },
+    {
+      "patient_id": "MRN5556203098",
+      "tokens": 424989
+    },
+    {
+      "patient_id": "MRN5567816720",
+      "tokens": 299612
+    },
+    {
+      "patient_id": "MRN5622794358",
+      "tokens": 586809
+    },
+    {
+      "patient_id": "MRN5710360983",
+      "tokens": 2705791
+    },
+    {
+      "patient_id": "MRN5774080233",
+      "tokens": 112684
+    },
+    {
+      "patient_id": "MRN5873617945",
+      "tokens": 116594
+    },
+    {
+      "patient_id": "MRN5892645682",
+      "tokens": 122911
+    },
+    {
+      "patient_id": "MRN5951406973",
+      "tokens": 2324169
+    },
+    {
+      "patient_id": "MRN5978766063",
+      "tokens": 383400
+    },
+    {
+      "patient_id": "MRN5996775663",
+      "tokens": 395669
+    },
+    {
+      "patient_id": "MRN6025656705",
+      "tokens": 254024
+    },
+    {
+      "patient_id": "MRN6241752544",
+      "tokens": 759120
+    },
+    {
+      "patient_id": "MRN6488854841",
+      "tokens": 293696
+    },
+    {
+      "patient_id": "MRN6649827836",
+      "tokens": 598974
+    },
+    {
+      "patient_id": "MRN6754656076",
+      "tokens": 661967
+    },
+    {
+      "patient_id": "MRN6884882440",
+      "tokens": 3017139
+    },
+    {
+      "patient_id": "MRN7010379415",
+      "tokens": 251054
+    },
+    {
+      "patient_id": "MRN7256766936",
+      "tokens": 322474
+    },
+    {
+      "patient_id": "MRN7483366056",
+      "tokens": 4929181
+    },
+    {
+      "patient_id": "MRN7567496105",
+      "tokens": 369265
+    },
+    {
+      "patient_id": "MRN7635473142",
+      "tokens": 302104
+    },
+    {
+      "patient_id": "MRN7665963761",
+      "tokens": 263654
+    },
+    {
+      "patient_id": "MRN7757736272",
+      "tokens": 157722
+    },
+    {
+      "patient_id": "MRN7805745017",
+      "tokens": 1321471
+    },
+    {
+      "patient_id": "MRN7825844140",
+      "tokens": 656246
+    },
+    {
+      "patient_id": "MRN7887950851",
+      "tokens": 451312
+    },
+    {
+      "patient_id": "MRN8235634313",
+      "tokens": 280435
+    },
+    {
+      "patient_id": "MRN8243295640",
+      "tokens": 970034
+    },
+    {
+      "patient_id": "MRN8429141456",
+      "tokens": 12450698
+    },
+    {
+      "patient_id": "MRN8523280142",
+      "tokens": 1712652
+    },
+    {
+      "patient_id": "MRN8534669743",
+      "tokens": 620773
+    },
+    {
+      "patient_id": "MRN8737368931",
+      "tokens": 114530
+    },
+    {
+      "patient_id": "MRN8995970241",
+      "tokens": 726492
+    },
+    {
+      "patient_id": "MRN9208329109",
+      "tokens": 485186
+    },
+    {
+      "patient_id": "MRN9509487523",
+      "tokens": 858467
+    },
+    {
+      "patient_id": "MRN9646496750",
+      "tokens": 396772
+    },
+    {
+      "patient_id": "MRN9697354961",
+      "tokens": 121479
+    },
+    {
+      "patient_id": "MRN9703905715",
+      "tokens": 1534614
+    },
+    {
+      "patient_id": "MRN9742590886",
+      "tokens": 165717
+    },
+    {
+      "patient_id": "MRN9758908152",
+      "tokens": 155085
+    },
+    {
+      "patient_id": "MRN9786748825",
+      "tokens": 301776
+    },
+    {
+      "patient_id": "MRN9838448928",
+      "tokens": 134086
+    },
+    {
+      "patient_id": "MRN9988355352",
+      "tokens": 4587176
+    }
+  ],
+  "skipped": []
+}

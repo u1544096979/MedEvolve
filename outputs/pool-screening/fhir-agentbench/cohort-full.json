@@ -1,0 +1,526 @@
+{
+  "environment": "FHIR-AgentBench",
+  "seed": 42,
+  "patient_pool": 100,
+  "evolution_patients": [
+    "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0",
+    "e232ee4d-3042-51c6-b730-a79eb8579d42"
+  ],
+  "batches": [
+    [
+      "740b7686-fa6d-5574-9779-f17ed7661cbe",
+      "42f0ed8f-d744-5edb-a05d-8e011c1fbd64",
+      "88fcbf73-7d80-52ae-8f11-ee73c71df69b",
+      "63bce7d4-9224-5d5d-ab3c-2967424deb0d",
+      "22a3e422-663a-561c-b305-a0c04bf42235",
+      "de33a447-3c7f-541d-be72-a744dadcbbac",
+      "53b0f2d8-24dc-5c82-903c-1bf98e510e96",
+      "d378a59b-aa80-5bc5-812a-7d59b26e7df4",
+      "28776290-4349-56d3-8c13-adc554feabb8",
+      "13df78e7-150e-5eb7-be5f-5f62b2baee87",
+      "cd462e42-c070-5235-ae76-c37733a451be",
+      "735c5ea5-a995-5613-9c30-5421bcc2cf25",
+      "2edf1f64-2919-50e3-b98c-7a55dcfda00d",
+      "5d0fc1da-e9bb-5b52-8e17-5930295afd2c",
+      "0a8eebfd-a352-522e-89f0-1d4a13abdebc",
+      "c3412a5f-f8b9-57d2-9c70-53e3e40c91f0"
+    ],
+    [
+      "5ddeb201-5de6-5177-a116-fa82ce8ad2f2",
+      "4c9069e4-486b-53a6-8a49-b8520d49ef7e",
+      "5f74c4bf-681e-5123-ab4d-225c72be4f9f",
+      "94abdf17-f13a-5eae-aac0-eca407bbfadd",
+      "a977f4b6-1eb6-5639-80da-3e025744c4ac",
+      "dc332fb6-61f8-552e-8743-765d626f0a4e",
+      "23069939-0c4c-517b-a3ec-baae0d4e3988",
+      "72d56b49-a7ee-5b9a-a679-25d1c836d3c3",
+      "b9a9ae7b-2455-59fe-938d-ce19ef360dd1",
+      "e7e213ac-81c0-5c7f-8d57-81519132353e",
+      "752d15e2-bd27-52ed-b055-ed79edb86aba",
+      "c4c29979-f2f5-56db-af5b-1715887727b8",
+      "bbad4581-d089-54a7-b7a0-8d986c5fb5ec",
+      "b7b92f05-c913-5a94-9a06-7b015e838f14",
+      "7d61fb4e-dc5e-5b1b-a7a6-1d96a3818546",
+      "af0e5009-d87d-52a8-ac8a-676e471c41f1"
+    ],
+    [
+      "9111ccb1-fc93-5599-ab7d-35f1e61d4214",
+      "52462b6a-9b39-5460-9ee6-1a2d7a20394e",
+      "74a2fd87-885b-5eca-9f8b-9141915dba51",
+      "28dcf33b-0c52-587f-83ad-2a3270976719",
+      "a6e7e991-6801-5425-b435-4ca6b7decfcc",
+      "a7bbf9a2-f7fe-5815-a637-fa59bd70b374",
+      "b410dd44-7d65-56f9-974f-2751e8aa80e2",
+      "e635f2dd-aaec-5fef-a100-b9dfb523cbb6",
+      "e5408569-9931-5afe-b62d-4175e6b44784",
+      "a3a12d01-dc21-565b-89e2-da60e7fc80dc",
+      "c0d83ad6-0b65-5fd6-b241-f50cf552232c",
+      "86bce885-4646-59f1-8f95-d92545376ce6",
+      "8c3ba37b-ba80-576a-8028-5a58eccb6156",
+      "51d2190c-cc46-56c5-b2ea-363895cbea75",
+      "8326334a-d5e4-5339-8c54-8463f95786a7",
+      "807d2a03-9c57-55e3-a443-09fc8f1de866"
+    ],
+    [
+      "158f3a39-e3d7-5e7a-93aa-57af894aadd9",
+      "3886cafb-65f4-5789-9213-64678a202f82",
+      "76202c51-1b9d-5cc2-a7bc-3dfb2ac3ab32",
+      "1bb918ba-e04e-5e7a-87ca-dbcbbb4c72c3",
+      "a5d4cb17-db8d-574b-bd88-71473088fd9a",
+      "df756e08-6ea8-5d69-b918-67911945f827",
+      "f3fc719c-f6e0-5c27-a18f-b4e5afaf279b",
+      "f572075b-186b-5565-b2d4-1567fe4f925c",
+      "a0bcbbc0-b432-5f7d-ac63-28212f20dead",
+      "91e0e410-0782-5478-90e0-1bedc3aa1525",
+      "bc2a74ce-4069-5983-9423-1c175f7854d9",
+      "f77a5b72-65fd-5b20-8cef-6b6be4791265",
+      "3bbb6aec-41a3-5825-b6cf-422832002f96",
+      "f5efdf3f-5b53-5c9f-95a6-047275107c46",
+      "dd773280-4157-5168-9481-3d29a5ff82d8",
+      "837b0984-f3bf-5076-baf5-b727decb4bea"
+    ],
+    [
+      "fa5fbf9c-23e3-5ef3-9cfb-24d20a950314",
+      "1ab119a5-aac8-5002-9d2f-b8ff69623387",
+      "4c48ec6f-716c-5bfd-8cee-b9a6b7c6c765",
+      "27980ad8-77b7-5360-b211-bf4fac9c468c",
+      "aeda7084-be35-510e-b171-f00596aed99f",
+      "73eac996-32e6-5b25-96fb-7d7414180af9",
+      "8659a6be-db5c-5f66-b629-1a3b858a487a",
+      "71a27b6b-5e41-509f-83a8-8f47e8fb8d78",
+      "0c2243d2-987b-5cbd-8eb1-170a80647693",
+      "1cf9e585-806c-513b-80af-4ca565a28231",
+      "23f959c1-6ac2-562b-9cbe-c111f338e27b",
+      "8d7b633e-0f92-5448-a56d-36c69210e860",
+      "568cb149-804c-59e8-bdf5-816e8151cd22",
+      "5f3dcdb5-bd27-58f5-b990-859b6bcc2d73",
+      "a87c1099-8c87-5548-8fc0-56972a82cebf",
+      "f5a99b42-365c-5f7e-bcab-4fa33b3cc88e"
+    ],
+    [
+      "2955c958-192a-50eb-b59d-23a29d7d374e",
+      "7ec7078a-0593-5a99-9862-ebbff47fd1c5",
+      "842680b3-e421-58cc-8050-3b29668b438c",
+      "adde1635-3110-5e92-b9f0-7a6d845a1784",
+      "24450f28-a039-57d8-95c9-d7ba5508ecd4",
+      "91f25704-6153-5259-bdd7-2ca6478de14a",
+      "9c3ebb7e-d087-519e-bea4-31c3d4aac7ff",
+      "e2beb281-c44f-579b-8211-a3749c549e92",
+      "dd2bf984-33c3-5874-8f68-84113327877e",
+      "8adbf3e4-47ff-561e-b1b6-746ee32e056d",
+      "a2605b15-4f1b-5839-b4ce-fb7a6bc1005f",
+      "cb70e6ae-90b1-562b-8ab0-467c65d18d5e",
+      "e1de99bc-3bc5-565e-9ee6-69675b9cc267",
+      "4365e125-c049-525a-9459-16d5e6947ad2",
+      "4f773083-7f4d-5378-b839-c24ca1e15434",
+      "73fb53d8-f1fa-53cd-a25c-2314caccbb99"
+    ],
+    [
+      "8e77dd0b-932d-5790-9ba6-5c6df8434457",
+      "77e10fd0-6a1c-5547-a130-fae1341acf36"
+    ]
+  ],
+  "fitted": [
+    {
+      "patient_id": "0a8eebfd-a352-522e-89f0-1d4a13abdebc",
+      "tokens": 797209
+    },
+    {
+      "patient_id": "0c2243d2-987b-5cbd-8eb1-170a80647693",
+      "tokens": 3941621
+    },
+    {
+      "patient_id": "13df78e7-150e-5eb7-be5f-5f62b2baee87",
+      "tokens": 581630
+    },
+    {
+      "patient_id": "158f3a39-e3d7-5e7a-93aa-57af894aadd9",
+      "tokens": 1558889
+    },
+    {
+      "patient_id": "1ab119a5-aac8-5002-9d2f-b8ff69623387",
+      "tokens": 3135555
+    },
+    {
+      "patient_id": "1bb918ba-e04e-5e7a-87ca-dbcbbb4c72c3",
+      "tokens": 1847319
+    },
+    {
+      "patient_id": "1cf9e585-806c-513b-80af-4ca565a28231",
+      "tokens": 4029523
+    },
+    {
+      "patient_id": "22a3e422-663a-561c-b305-a0c04bf42235",
+      "tokens": 494773
+    },
+    {
+      "patient_id": "23069939-0c4c-517b-a3ec-baae0d4e3988",
+      "tokens": 898600
+    },
+    {
+      "patient_id": "23f959c1-6ac2-562b-9cbe-c111f338e27b",
+      "tokens": 4120046
+    },
+    {
+      "patient_id": "24450f28-a039-57d8-95c9-d7ba5508ecd4",
+      "tokens": 7694996
+    },
+    {
+      "patient_id": "27980ad8-77b7-5360-b211-bf4fac9c468c",
+      "tokens": 3319906
+    },
+    {
+      "patient_id": "28776290-4349-56d3-8c13-adc554feabb8",
+      "tokens": 573002
+    },
+    {
+      "patient_id": "28dcf33b-0c52-587f-83ad-2a3270976719",
+      "tokens": 1156071
+    },
+    {
+      "patient_id": "2955c958-192a-50eb-b59d-23a29d7d374e",
+      "tokens": 5486374
+    },
+    {
+      "patient_id": "2edf1f64-2919-50e3-b98c-7a55dcfda00d",
+      "tokens": 710262
+    },
+    {
+      "patient_id": "3886cafb-65f4-5789-9213-64678a202f82",
+      "tokens": 1585524
+    },
+    {
+      "patient_id": "3bbb6aec-41a3-5825-b6cf-422832002f96",
+      "tokens": 2515307
+    },
+    {
+      "patient_id": "42f0ed8f-d744-5edb-a05d-8e011c1fbd64",
+      "tokens": 418002
+    },
+    {
+      "patient_id": "4365e125-c049-525a-9459-16d5e6947ad2",
+      "tokens": 12984930
+    },
+    {
+      "patient_id": "4c48ec6f-716c-5bfd-8cee-b9a6b7c6c765",
+      "tokens": 3151434
+    },
+    {
+      "patient_id": "4c9069e4-486b-53a6-8a49-b8520d49ef7e",
+      "tokens": 810473
+    },
+    {
+      "patient_id": "4f773083-7f4d-5378-b839-c24ca1e15434",
+      "tokens": 14661152
+    },
+    {
+      "patient_id": "51d2190c-cc46-56c5-b2ea-363895cbea75",
+      "tokens": 1487213
+    },
+    {
+      "patient_id": "52462b6a-9b39-5460-9ee6-1a2d7a20394e",
+      "tokens": 1145529
+    },
+    {
+      "patient_id": "53b0f2d8-24dc-5c82-903c-1bf98e510e96",
+      "tokens": 532095
+    },
+    {
+      "patient_id": "568cb149-804c-59e8-bdf5-816e8151cd22",
+      "tokens": 4310729
+    },
+    {
+      "patient_id": "5d0fc1da-e9bb-5b52-8e17-5930295afd2c",
+      "tokens": 792778
+    },
+    {
+      "patient_id": "5ddeb201-5de6-5177-a116-fa82ce8ad2f2",
+      "tokens": 806527
+    },
+    {
+      "patient_id": "5f3dcdb5-bd27-58f5-b990-859b6bcc2d73",
+      "tokens": 4476216
+    },
+    {
+      "patient_id": "5f74c4bf-681e-5123-ab4d-225c72be4f9f",
+      "tokens": 819295
+    },
+    {
+      "patient_id": "63bce7d4-9224-5d5d-ab3c-2967424deb0d",
+      "tokens": 478782
+    },
+    {
+      "patient_id": "71a27b6b-5e41-509f-83a8-8f47e8fb8d78",
+      "tokens": 3663421
+    },
+    {
+      "patient_id": "72d56b49-a7ee-5b9a-a679-25d1c836d3c3",
+      "tokens": 911701
+    },
+    {
+      "patient_id": "735c5ea5-a995-5613-9c30-5421bcc2cf25",
+      "tokens": 688449
+    },
+    {
+      "patient_id": "73eac996-32e6-5b25-96fb-7d7414180af9",
+      "tokens": 3355876
+    },
+    {
+      "patient_id": "73fb53d8-f1fa-53cd-a25c-2314caccbb99",
+      "tokens": 15603808
+    },
+    {
+      "patient_id": "740b7686-fa6d-5574-9779-f17ed7661cbe",
+      "tokens": 402368
+    },
+    {
+      "patient_id": "74a2fd87-885b-5eca-9f8b-9141915dba51",
+      "tokens": 1148250
+    },
+    {
+      "patient_id": "752d15e2-bd27-52ed-b055-ed79edb86aba",
+      "tokens": 940432
+    },
+    {
+      "patient_id": "76202c51-1b9d-5cc2-a7bc-3dfb2ac3ab32",
+      "tokens": 1836577
+    },
+    {
+      "patient_id": "77e10fd0-6a1c-5547-a130-fae1341acf36",
+      "tokens": 18740329
+    },
+    {
+      "patient_id": "7d61fb4e-dc5e-5b1b-a7a6-1d96a3818546",
+      "tokens": 1076085
+    },
+    {
+      "patient_id": "7ec7078a-0593-5a99-9862-ebbff47fd1c5",
+      "tokens": 6958326
+    },
+    {
+      "patient_id": "807d2a03-9c57-55e3-a443-09fc8f1de866",
+      "tokens": 1547784
+    },
+    {
+      "patient_id": "8326334a-d5e4-5339-8c54-8463f95786a7",
+      "tokens": 1498023
+    },
+    {
+      "patient_id": "837b0984-f3bf-5076-baf5-b727decb4bea",
+      "tokens": 3053341
+    },
+    {
+      "patient_id": "842680b3-e421-58cc-8050-3b29668b438c",
+      "tokens": 7029135
+    },
+    {
+      "patient_id": "8659a6be-db5c-5f66-b629-1a3b858a487a",
+      "tokens": 3563050
+    },
+    {
+      "patient_id": "86bce885-4646-59f1-8f95-d92545376ce6",
+      "tokens": 1328605
+    },
+    {
+      "patient_id": "88fcbf73-7d80-52ae-8f11-ee73c71df69b",
+      "tokens": 465745
+    },
+    {
+      "patient_id": "8adbf3e4-47ff-561e-b1b6-746ee32e056d",
+      "tokens": 10807817
+    },
+    {
+      "patient_id": "8c3ba37b-ba80-576a-8028-5a58eccb6156",
+      "tokens": 1333725
+    },
+    {
+      "patient_id": "8d7b633e-0f92-5448-a56d-36c69210e860",
+      "tokens": 4264118
+    },
+    {
+      "patient_id": "8e77dd0b-932d-5790-9ba6-5c6df8434457",
+      "tokens": 16555560
+    },
+    {
+      "patient_id": "9111ccb1-fc93-5599-ab7d-35f1e61d4214",
+      "tokens": 1117637
+    },
+    {
+      "patient_id": "91e0e410-0782-5478-90e0-1bedc3aa1525",
+      "tokens": 2333401
+    },
+    {
+      "patient_id": "91f25704-6153-5259-bdd7-2ca6478de14a",
+      "tokens": 9667410
+    },
+    {
+      "patient_id": "94abdf17-f13a-5eae-aac0-eca407bbfadd",
+      "tokens": 820192
+    },
+    {
+      "patient_id": "9c3ebb7e-d087-519e-bea4-31c3d4aac7ff",
+      "tokens": 9973991
+    },
+    {
+      "patient_id": "a0bcbbc0-b432-5f7d-ac63-28212f20dead",
+      "tokens": 2308453
+    },
+    {
+      "patient_id": "a2605b15-4f1b-5839-b4ce-fb7a6bc1005f",
+      "tokens": 11038522
+    },
+    {
+      "patient_id": "a3a12d01-dc21-565b-89e2-da60e7fc80dc",
+      "tokens": 1297316
+    },
+    {
+      "patient_id": "a5d4cb17-db8d-574b-bd88-71473088fd9a",
+      "tokens": 1863112
+    },
+    {
+      "patient_id": "a6e7e991-6801-5425-b435-4ca6b7decfcc",
+      "tokens": 1221879
+    },
+    {
+      "patient_id": "a7bbf9a2-f7fe-5815-a637-fa59bd70b374",
+      "tokens": 1236574
+    },
+    {
+      "patient_id": "a87c1099-8c87-5548-8fc0-56972a82cebf",
+      "tokens": 5363924
+    },
+    {
+      "patient_id": "a977f4b6-1eb6-5639-80da-3e025744c4ac",
+      "tokens": 840553
+    },
+    {
+      "patient_id": "adde1635-3110-5e92-b9f0-7a6d845a1784",
+      "tokens": 7046921
+    },
+    {
+      "patient_id": "aeda7084-be35-510e-b171-f00596aed99f",
+      "tokens": 3341662
+    },
+    {
+      "patient_id": "af0e5009-d87d-52a8-ac8a-676e471c41f1",
+      "tokens": 1089758
+    },
+    {
+      "patient_id": "afa7c67f-82b9-5f51-bd04-8b7d7c4456c0",
+      "tokens": 273653
+    },
+    {
+      "patient_id": "b410dd44-7d65-56f9-974f-2751e8aa80e2",
+      "tokens": 1240226
+    },
+    {
+      "patient_id": "b7b92f05-c913-5a94-9a06-7b015e838f14",
+      "tokens": 1064324
+    },
+    {
+      "patient_id": "b9a9ae7b-2455-59fe-938d-ce19ef360dd1",
+      "tokens": 930407
+    },
+    {
+      "patient_id": "bbad4581-d089-54a7-b7a0-8d986c5fb5ec",
+      "tokens": 1052070
+    },
+    {
+      "patient_id": "bc2a74ce-4069-5983-9423-1c175f7854d9",
+      "tokens": 2425180
+    },
+    {
+      "patient_id": "c0d83ad6-0b65-5fd6-b241-f50cf552232c",
+      "tokens": 1303172
+    },
+    {
+      "patient_id": "c3412a5f-f8b9-57d2-9c70-53e3e40c91f0",
+      "tokens": 801248
+    },
+    {
+      "patient_id": "c4c29979-f2f5-56db-af5b-1715887727b8",
+      "tokens": 1023779
+    },
+    {
+      "patient_id": "cb70e6ae-90b1-562b-8ab0-467c65d18d5e",
+      "tokens": 11550851
+    },
+    {
+      "patient_id": "cd462e42-c070-5235-ae76-c37733a451be",
+      "tokens": 624502
+    },
+    {
+      "patient_id": "d378a59b-aa80-5bc5-812a-7d59b26e7df4",
+      "tokens": 562088
+    },
+    {
+      "patient_id": "dc332fb6-61f8-552e-8743-765d626f0a4e",
+      "tokens": 872230
+    },
+    {
+      "patient_id": "dd2bf984-33c3-5874-8f68-84113327877e",
+      "tokens": 10221391
+    },
+    {
+      "patient_id": "dd773280-4157-5168-9481-3d29a5ff82d8",
+      "tokens": 2649502
+    },
+    {
+      "patient_id": "de33a447-3c7f-541d-be72-a744dadcbbac",
+      "tokens": 501799
+    },
+    {
+      "patient_id": "df756e08-6ea8-5d69-b918-67911945f827",
+      "tokens": 1893200
+    },
+    {
+      "patient_id": "e1de99bc-3bc5-565e-9ee6-69675b9cc267",
+      "tokens": 12960784
+    },
+    {
+      "patient_id": "e232ee4d-3042-51c6-b730-a79eb8579d42",
+      "tokens": 393550
+    },
+    {
+      "patient_id": "e2beb281-c44f-579b-8211-a3749c549e92",
+      "tokens": 10036221
+    },
+    {
+      "patient_id": "e5408569-9931-5afe-b62d-4175e6b44784",
+      "tokens": 1258639
+    },
+    {
+      "patient_id": "e635f2dd-aaec-5fef-a100-b9dfb523cbb6",
+      "tokens": 1248283
+    },
+    {
+      "patient_id": "e7e213ac-81c0-5c7f-8d57-81519132353e",
+      "tokens": 932211
+    },
+    {
+      "patient_id": "f3fc719c-f6e0-5c27-a18f-b4e5afaf279b",
+      "tokens": 1930841
+    },
+    {
+      "patient_id": "f572075b-186b-5565-b2d4-1567fe4f925c",
+      "tokens": 2295236
+    },
+    {
+      "patient_id": "f5a99b42-365c-5f7e-bcab-4fa33b3cc88e",
+      "tokens": 5412133
+    },
+    {
+      "patient_id": "f5efdf3f-5b53-5c9f-95a6-047275107c46",
+      "tokens": 2521758
+    },
+    {
+      "patient_id": "f77a5b72-65fd-5b20-8cef-6b6be4791265",
+      "tokens": 2493977
+    },
+    {
+      "patient_id": "fa5fbf9c-23e3-5ef3-9cfb-24d20a950314",
+      "tokens": 3068189
+    }
+  ],
+  "skipped": []
+}
