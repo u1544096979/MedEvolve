@@ -59,14 +59,17 @@ def test_model_groups_have_unique_run_ids_and_solver_tracks_generator(tmp_path):
 def test_matrix_accepts_two_judges_and_emits_valid_experiment_config(tmp_path):
     judges = [_model("judge-a"), _model("judge-b")]
     matrix = _matrix(tmp_path, judges=judges)
+    payload = _payload()
+    payload["evaluation"]["scoring_mode"] = "separate"
     payload = apply_matrix_overrides(
-        _payload(), matrix.models[0], matrix.judges, tmp_path / "run", "run-two-judges",
+        payload, matrix.models[0], matrix.judges, tmp_path / "run", "run-two-judges",
         matrix.manager_url, "physicianbench", None, 12, 12,
     )
 
     validated = ExperimentConfig.model_validate(payload)
 
     assert validated.evaluation.judges == judges
+    assert validated.evaluation.scoring_mode == "separate"
 
 
 @pytest.mark.parametrize("count", [1, 4])
