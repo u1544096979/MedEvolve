@@ -500,6 +500,45 @@ def test_joint_scoring_uses_three_calls_and_keeps_distinct_medians(harness):
     assert sum(run.usage["output_tokens"] for run in score_runs) == 6
 
 
+def test_joint_difficulty_uses_computed_complexity_metrics(harness, monkeypatch):
+    h = harness
+    h.config = h.config.model_copy(update={"scoring_mode": "joint"})
+    h.task = h.task.model_copy(update={"evidence": [
+        Evidence(source_id="Observation/1", statement="检验结果"),
+        Evidence(source_id="Condition/2", statement="诊断记录"),
+    ]})
+    h.trajectory = h.trajectory.model_copy(update={"sources": [
+        Evidence(source_id="Observation/1", statement=json.dumps(
+            {"effectiveDateTime": "2026-01-01T00:00:00Z"})),
+        Evidence(source_id="Condition/2", statement=json.dumps(
+            {"onsetDateTime": "2026-01-10T00:00:00Z"})),
+    ]})
+    original = sys.modules["runtime"].call_llm
+
+    async def complexity_aware_judge(**kwargs):
+        if kwargs["output_type"] is not JointJudgment:
+            return await original(**kwargs)
+        payload = json.loads(kwargs["input_text"])
+        metrics = payload["complexity_metrics"]
+        assert metrics["evidence_count"] == 2
+        assert metrics["resource_type_count"] == 2
+        result = await original(**kwargs)
+        output = dict(result.output)
+        output["difficulty"] = {
+            "reasoning_depth": metrics["evidence_count"] + metrics["resource_type_count"],
+            "reason": "根据输入复杂度指标评定",
+        }
+        return result.model_copy(update={"output": output})
+
+    monkeypatch.setattr(sys.modules["runtime"], "call_llm", complexity_aware_judge)
+    result = evaluate(h)
+    assert result.status == "completed"
+    assert result.difficulty.complexity_metrics == ComplexityMetrics(
+        evidence_count=2, resource_type_count=2, time_span_days=9.0)
+    assert result.difficulty.reasoning_depths == [4, 4, 4]
+    assert result.difficulty.reasoning_depth == 4
+
+
 @pytest.mark.parametrize("failure", ["quality", "joint_missing", "joint_invalid", "joint_blank"])
 def test_joint_scoring_failure_keeps_all_joint_runs(harness, monkeypatch, failure):
     h = harness

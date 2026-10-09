@@ -19,3 +19,10 @@
 ## 未执行
 
 未调用任何真实模型或外部服务；Openlux gpt-4o-mini pilot 按委派要求留待后续执行。
+
+## Review 4 修正
+
+联合评分请求现在包含从任务与原始轨迹计算的 `complexity_metrics`。新增假裁判回归：无该字段时先失败；字段补齐后裁判根据证据数和资源类型数导出推理深度，并核对聚合结果及 9 天时间跨度。
+
+- Red：`PYTHONPATH="$PWD" /Users/guagua/code/MedEvolve/.venv/bin/python -m pytest tests/evaluation/test_evaluator.py::test_joint_difficulty_uses_computed_complexity_metrics -q`：1 failed（联合 payload 缺少复杂度指标）。
+- Green：同一测试命令：1 passed。

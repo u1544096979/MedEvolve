@@ -232,7 +232,8 @@ async def review_scores(
         if joint:
             runs = await asyncio.gather(*[
                 request(index, "quality", JointJudgment, prompts.JOINT_SCORING,
-                        {**material, "judge_index": index}, judges[index])
+                        {**material, "complexity_metrics": complexity.model_dump(),
+                         "judge_index": index}, judges[index])
                 for index in range(JUDGE_COUNT)
             ])
             if record is not None:
