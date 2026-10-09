@@ -7,6 +7,9 @@ __pycache__/
 outputs/
 .env
 
+# 由 scripts/emit_comparison_configs.py 生成的全量对比批量配置，每次运行前重算
+configs/full-*-batch-*.json
+
 .latex-build/
 
 .benchmark_sources/
