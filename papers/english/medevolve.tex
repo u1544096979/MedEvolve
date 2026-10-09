@@ -1,0 +1,210 @@
+\documentclass[11pt]{article}
+\usepackage[preprint]{acl}
+\usepackage{times,latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype,inconsolata}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx,booktabs,tabularx,array}
+\usepackage{placeins,xurl}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\pending}{\textemdash}
+\title{MedEvolve: Longitudinal Medical Task Generation and Strategy\newline Self-Evolution through Dual Exploration}
+\author{}
+\hypersetup{pdftitle={MedEvolve: Longitudinal Medical Task Generation and Strategy Self-Evolution through Dual Exploration},pdfauthor={}}
+\begin{document}
+\maketitle
+\begin{abstract}
+Generating medical agent tasks from longitudinal patient records requires selecting clinical relationships that the current case can support and that the available tools can retrieve. We introduce MedEvolve, which combines data exploration of clinical event patterns with environment exploration of evidence retrieval. These two guides condition the generation of questions, reference answers, and source-level evidence. Verification against original records and feedback from an independent solver then drive strategy self-evolution: generation guidance is revised across patient batches, and weights over task directions are updated. Our evaluation protocol covers PhysicianBench and MedAgentBench, comparing valid yield, task quality, reasoning requirements, and downstream experience learning on common official tasks. Four-round strategy comparisons and component ablations examine the contribution of feedback and dual exploration.
+\end{abstract}
+
+\section{Introduction and Related Work}
+MedAgentBench and PhysicianBench evaluate medical agents in interactive EHR environments, where agents retrieve records and integrate information to complete clinical tasks \citep{jiang2025medagentbench,liu2026physicianbench}. Constructing such tasks requires more than selecting facts that can be queried. As questions extend across encounters, their answers depend on relationships among treatments, tests, and changes in health over time.
+
+Which relationships are supportable varies by patient. Serial measurements and treatment adjustments may support questions about response to treatment; an isolated encounter or missing follow-up may support only a local judgment. Even within one task category, the relevant context, time window, and evidence differ. The generator must identify a suitable question direction from the current case before deciding how to formulate the task.
+
+Tool execution traces offer a different view: they describe how an agent accesses information, rather than the clinical course represented by that information. Retrieving medication and test records does not establish that the measurements are comparable around a treatment change. Likewise, a recorded subsequent treatment is not necessarily the unique correct answer to a planning question. Longer tool trajectories therefore do not by themselves establish deeper reasoning, and solver failures can originate in unsupported or ambiguous tasks.
+
+TaskCraft constructs atomic tasks around extracted answers and expands their retrieval and composition dependencies \citep{shi2025taskcraft}. Longitudinal EHRs require a prior judgment: whether the available facts form a coherent clinical question and what reasoning the case permits. CuES and AgentEvolver discover tasks through environment interaction and assess feasibility through execution guidance or reference solutions \citep{mai2025cues,zhai2025agentevolver}. Such exploration identifies executable operations, but the same tools expose different evidence relationships for different patients. Successful retrieval or replay does not alone validate the clinical interpretation.
+
+MedEvolve combines reusable clinical patterns with their evidence conditions and retrieval procedures. Data exploration identifies what relationships may support questions; environment exploration identifies how to obtain their evidence. Patient-level verification and solver feedback then revise the generation strategy across cases while the solver remains fixed. Our evaluation protocol examines task construction in two medical environments, isolates guidance updates on held-out patients, and tests whether the generated tasks support experience learning on common official benchmarks.
+
+\section{Problem Formulation and Method}
+\subsection{Tasks and Generation Strategies}
+Let $X_p$ be the longitudinal trajectory of patient $p$. A task is $\tau=(p,q,a,E)$, comprising a question $q$, candidate reference answer $a$, and evidence $E$ represented by source identifiers and factual claims. The solver receives the question, patient identifier, and necessary context, and accesses records through environment tools. Reference answers and evidence claims remain on the evaluation side.
+
+Data and environment exploration produce guidance $K_D$ and $K_E$. At round $r$, the strategy is $\theta_r=(g_r,W_r)$: $g_r$ is natural-language generation guidance, and $W_r=\{(c_j,d_j,w_j)\}_j$ contains clinical categories, difficulty descriptions, and nonnegative weights. Categories cover diagnosis and interpretation, testing and risk stratification, treatment planning, medication prescribing, and treatment replanning. Each generation slot samples a direction with
+\[
+\Pr(z=j\mid W_r)=\frac{w_j}{\sum_k w_k},\quad \sum_k w_k>0.
+\]
+The sampled category and reasoning requirement guide selection; the current patient's evidence determines whether a specific task can be supported.
+
+\subsection{Dual Exploration}
+Data exploration reads trajectories from the evolution patient set and summarizes event roles, temporal relationships, and evidence conditions as $K_D$. A pattern for assessing change around treatment, for example, uses an adjustment as an event anchor and requires comparable measurements from relevant periods. The pattern applies only to cases containing those records. Guidance retains these applicability conditions, while each target record determines the concrete question.
+
+Environment exploration interacts with read-only tools to identify accessible record types and procedures for locating, linking, and reading evidence, producing $K_E$. Together, the guides connect clinical evidence requirements with retrieval capabilities (Figure~\ref{fig:overview}). Both remain fixed after initial exploration; subsequent feedback updates $g_r$ and $W_r$.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/medevolve-overview-v4.pdf}
+\caption{Overview of MedEvolve. (a) Dual exploration derives data guidance $K_D$ from longitudinal records of evolution patients and environment guidance $K_E$ from read-only tool interactions; both remain fixed across subsequent rounds. (b) The generator combines the current patient trajectory $X_p$, exploration guidance, generation guidance $g_r$, and direction weights $w_r$ to construct questions, reference answers, and source evidence. Verification rereads original records. Verified tasks proceed to quality assessment, reasoning-depth assessment, independent solving, and completion evaluation; the solver receives neither the reference answer nor evidence claims. (c) Verification defects, evaluation results, and solver traces form feedback $F_r$, which revises guidance and direction weights for the next round. After evolution, the strategy is frozen and generation guidance is evaluated on held-out patients with the initial direction allocation and sampling seed fixed.}
+\label{fig:overview}
+\end{figure*}
+
+\subsection{Generation and Evidence Verification}
+For patient $p$, a single model call receives the trajectory within budget, both exploration guides, current generation guidance, and two sampled directions $Z_{p,r}$:
+\[
+\begin{gathered}
+\mathcal{T}_{p,r}=G(X_p,K_D,K_E,g_r,Z_{p,r}),\\
+|\mathcal{T}_{p,r}|\leq 2.
+\end{gathered}
+\]
+The generator selects an event relationship, then constructs the question, candidate answer, and source-level claims. Change analysis must align evidence with the event anchor and comparison periods. Planning answers must distinguish recorded facts from inference and accommodate equivalent options supported by the evidence.
+
+Shared verification rereads cited original records. It checks each source--claim pair and then whether the claims jointly support the question and answer. Verified tasks proceed to quality and reasoning-depth assessment, independent solving, and completion judgment. Rejected tasks retain their defect reasons for feedback.
+
+\subsection{Feedback-Driven Self-Evolution}
+A feedback model reads each patient's trajectory, generated tasks, verification and scoring results, and solver traces. It identifies task defects, reasoning demands, and revision suggestions, which are aggregated across patients. Evidence gaps, factual errors, and ambiguity motivate revised questioning conditions; verified but uncompleted tasks are examined using tool traces and quality judgments to distinguish retrieval or reasoning difficulties from task defects.
+
+The update model reads this feedback and the current strategy and returns revised guidance and directions:
+\[
+\begin{aligned}
+F_r&=\operatorname{Merge}\bigl(\{\operatorname{Feedback}(X_p,\mathcal{T}_{p,r},V_{p,r})\}_{p\in P_r}\bigr),\\
+\theta_{r+1}&=U_{\mathrm{LLM}}(\theta_r,F_r),
+\end{aligned}
+\]
+where $V_{p,r}$ contains evaluation and execution records, and $P_r$ is the round's patient batch. Guidance accumulates revisions to event selection, evidence organization, and answer formulation; weights adjust subsequent direction sampling. Patient batches are disjoint across rounds, and the solver model stays fixed. After evolution, the strategy is frozen for held-out evaluation. Figure~\ref{fig:strategy-example} illustrates a recorded guidance revision.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[width=\columnwidth]{figures/medevolve-strategy-example-en.png}
+\caption{Guidance revision in one strategy evolution step. Verification feedback identifies insufficient follow-up evidence. Updated guidance adds checks for baseline and follow-up records and data comparability, and limits conclusions when evidence is insufficient. Figure text summarizes an actual evolution record.}
+\label{fig:strategy-example}
+\end{figure}
+
+\section{Experimental Setup}
+\subsection{Environments and Comparisons}
+The study covers PhysicianBench and MedAgentBench, with generation pools of 108 and 100 patients. Existing configurations allocate 27 and 25 patients to evolution and 81 and 75 to held-out evaluation, respectively. The split uses seed 42 and keeps previously explored patients in the evolution set. Patients do not cross these sets, and held-out results do not enter updates. Existing runs use two rounds; the four-round analysis below requires a separately frozen partition.
+
+Comparisons use GPT-5.4-nano and GPT-4o-mini separately, with the corresponding model as independent solver. All methods generate at most two read-only tasks per patient under retrospective access to the full record time range. They share held-out patients and external evaluation. TaskCraft uses atomic generation and depth/width expansion; Workflow uses localization, generation, and filtering; SingleShot generates in one call; SelfRefine revises within a patient batch \citep{madaan2023selfrefine}; EnvExplore uses environment guidance with an initial fixed strategy; MedEvolve uses dual exploration and cross-patient updates. Their internal task selection rules and calls remain method-specific.
+
+Held-out evaluation fixes the initial direction list and sampling seed and reads the current strategy's generation guidance. This controls direction composition and tests guidance updates, rather than the combined effect of updated guidance and weights. Equal task caps do not imply equal compute: generation costs include exploration, internal checking, feedback, and updates; shared evaluation costs are separate.
+
+\subsection{Evaluation Protocol}
+Verification and completion judgments use GPT-5.4-nano. GPT-5.4-nano and GPT-4o-mini independently assess quality and difficulty; the median of two valid outputs is rounded down, retaining raw scores and rationales. Quality covers factual accuracy, clinical validity, evidence sufficiency, and question clarity on a 1--5 scale. Reasoning levels are factual retrieval, single-step reasoning, integrative reasoning, and clinical decision-making; levels 3--4 are higher-order. Clinical category alone does not determine depth.
+
+We report requested and generated tasks, verification coverage and yield, scoring coverage, quality means, and higher-order counts. Verification pass rate uses tasks with verification results. Quality uses verified tasks with valid scores. Completion rates use both generated tasks and tasks with completion judgments. Source counts, resource types, and temporal spans describe evidence structure. Missing evaluations and execution faults are reported separately.
+
+The statistical plan uses 1,000 patient-cluster bootstrap samples with seed 42 and percentile 95\% intervals. All tasks from one patient are resampled together; method and checkpoint comparisons preserve patient pairing. Coverage and valid bootstrap counts accompany estimates. Input/output tokens and calls are reported by stage, with generation cost also normalized by verified yield. Unknown usage remains missing.
+
+\section{Results and Analysis}
+\subsection{Valid Yield, Quality, and Reasoning}
+Table~\ref{tab:main} jointly reports yield, quality, and higher-order tasks by environment and generation model. Figure~\ref{fig:task-validity} separates verification outcomes and reasoning levels. Final results remain pending; dashes indicate unfilled values, not zero or failure.
+
+\begin{table*}[!t]
+\centering\small
+\caption{Main generation comparison, reported separately by environment and generation model. $N_G$: generated tasks; $N_V$: tasks passing verification; $V\%$: pass rate among tasks with verification results; $N_Q$: tasks with quality scores. FA, CV, ES, and QC denote factual accuracy, clinical validity, evidence sufficiency, and question clarity (1--5). HO gives level 3--4 tasks / tasks with difficulty scores. Coverage and patient-cluster 95\% intervals accompany final results.}
+\label{tab:main}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrrrrrrc@{}}
+\toprule
+Method & $N_G$ & $N_V$ & $V\%$ & $N_Q$ & FA & CV & ES & QC & HO\\
+\midrule
+MedEvolve & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending / \pending\\
+TaskCraft & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending / \pending\\
+Workflow & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending / \pending\\
+SingleShot & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending / \pending\\
+SelfRefine & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending / \pending\\
+EnvExplore & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending & \pending / \pending\\
+\bottomrule
+\end{tabular*}
+\end{table*}
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.96\textwidth]{figures/experiments/template-task-validity.pdf}
+\caption{Verification outcomes and reasoning-depth distribution. The horizontal axis gives each category as a proportion of all generated tasks, with generated task counts on the right. Verification failures, missing evaluations, and upstream faults are distinguished from the four reasoning levels of verified tasks. This is a layout template awaiting final data.}
+\label{fig:task-validity}
+\end{figure*}
+
+Comparisons must consider these measures together. High mean quality after filtering can accompany low yield, and a high higher-order share can arise from few tasks. Solver completion describes performance under a particular model and budget; verification and quality are needed to interpret whether noncompletion reflects a difficult task or an unreliable one.
+
+\subsection{Strategy Self-Evolution}
+The planned experiment compares the initial strategy with four successive updates, yielding five checkpoints. Each checkpoint generates tasks on the same held-out patients, with exploration guidance, models, initial direction allocation, seed, task cap, and evaluation fixed. Held-out scores are excluded from updates. The four evolution rounds use distinct patient batches with equal per-round generation and evaluation budgets; final results require the separately frozen four-round configuration and evaluation at all five checkpoints.
+
+Figure~\ref{fig:strategy-evolution} reports the four quality dimensions separately, verification pass rate, and verified higher-order task count. The pass-rate denominator is tasks with verification results; valid higher-order tasks must pass verification and receive level 3 or 4. Patient-cluster intervals and scoring and verification coverage accompany the curves. Scores on changing training batches do not substitute for this fixed-patient comparison.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/experiments/template-strategy-evolution.pdf}
+\caption{Strategy self-evolution on a fixed held-out patient set. Round 0 denotes the initial strategy; rounds 1--4 denote strategies after each update. (a) Mean scores for four quality dimensions among verified tasks. (b) Shared verification pass rate. (c) Verified task count at reasoning levels 3--4. Final estimates will be shown as points and lines with patient-cluster bootstrap 95\% intervals; missing checkpoints will not be connected. This is a layout template awaiting final data.}
+\label{fig:strategy-evolution}
+\end{figure*}
+
+\subsection{Component Ablations}
+Table~\ref{tab:ablation} compares full MedEvolve with removal of data exploration, removal of environment exploration, and disabling feedback updates. Each removal retains the other components. The no-update condition retains dual exploration and initial guidance and generates and evaluates tasks on the same evolution batches without revising its strategy. Held-out patients, models, initial direction allocation, seed, task cap, and shared evaluation are fixed across groups.
+
+\begin{table*}[!t]
+\centering\small
+\caption{Four component ablation conditions. Quality dimensions are factual accuracy, clinical validity, evidence sufficiency, and question clarity, in that order, each scored from 1 to 5. Final results will include patient-cluster intervals and coverage, separately by environment and generation model.}
+\label{tab:ablation}
+\begin{tabularx}{\textwidth}{lYYYY}
+\toprule
+Configuration & Verified tasks & Four quality scores & Valid higher-order tasks & Generation tokens\\
+\midrule
+Full MedEvolve & \pending & \pending / \pending / \pending / \pending & \pending & \pending\\
+w/o data exploration & \pending & \pending / \pending / \pending / \pending & \pending & \pending\\
+w/o environment exploration & \pending & \pending / \pending / \pending / \pending & \pending & \pending\\
+w/o feedback updates & \pending & \pending / \pending / \pending / \pending & \pending & \pending\\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+The comparison follows four rounds and reports verified yield, separate quality scores, valid higher-order yield, and actual generation tokens. Quality is conditioned on verification and valid scoring. Saved feedback and update calls in the no-update condition contribute to cost differences. EnvExplore remains a combined baseline in the main experiment, rather than a control isolating one component. Final ablation results remain pending.
+
+\subsection{Downstream Experience Learning}
+Synthetic tasks from the six sources are supplied to OpenClaw, Hermes Agent, ACE, and Reflexion \citep{shinn2023reflexion}, giving 24 source--harness combinations per environment. Model weights remain fixed, and sources are compared within each harness against its common initial state. Each source contributes an equal number of verified read-only tasks, capped by the smallest valid yield. A task-level split with seed 42 allocates 70\% to training, rounding down, and 30\% to auxiliary testing. The frozen PhysicianBench configuration uses 25 tasks per source (17 training, 8 test), GPT-4o-mini, and one epoch; other environments follow their frozen manifests.
+
+Training uses a fresh session and medical instance per task. Answers and evidence become available only after execution for review and learning; skills, memories, or playbooks persist across tasks. Experience is frozen after training without test-based selection. Testing disables experience writes and background learning, and each task starts from a frozen snapshot in an independent session and instance.
+
+\begin{table*}[!t]
+\centering\small
+\caption{Downstream effects on common official tasks, reported separately for each environment. Cells will contain final success rates and percentage-point changes from each harness's own initial state. Intervals and scoring coverage will accompany the results.}
+\label{tab:downstream}
+\begin{tabularx}{\textwidth}{lYYYY}
+\toprule
+Task source / state & OpenClaw & Hermes Agent & ACE & Reflexion\\
+\midrule
+Initial state & \pending & \pending & \pending & \pending\\
+MedEvolve & \pending & \pending & \pending & \pending\\
+TaskCraft & \pending & \pending & \pending & \pending\\
+Workflow & \pending & \pending & \pending & \pending\\
+SingleShot & \pending & \pending & \pending & \pending\\
+SelfRefine & \pending & \pending & \pending & \pending\\
+EnvExplore & \pending & \pending & \pending & \pending\\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+Primary evaluation uses common official tasks and native benchmark scoring. For official task set $B$ and experience state $h$, define
+\[
+\begin{gathered}
+A(h)=\frac{N_{\mathrm{confirmed\ success}}(h)}{|B|},\\
+\Delta_m=100\bigl(A(h_m)-A(h_0)\bigr),
+\end{gathered}
+\]
+where $h_0$ and $h_m$ are the initial and source-trained states. The numerator counts confirmed successes with valid scores; the denominator includes all planned tasks. Execution and scoring faults are reported separately. Table~\ref{tab:downstream} reports final rates and percentage-point changes, including paired changes on tasks validly scored in both states. Auxiliary synthetic tests assess each source's own distribution rather than rank sources. Patient overlap and near-duplicate questions are recorded.
+
+\section{Conclusion}
+MedEvolve combines data and environment exploration to select questions supported by individual patient records, then uses verification and solver feedback to evolve generation guidance and direction weights across patients. The evaluation protocol connects valid task construction to downstream experience learning and isolates guidance updates through fixed-patient comparisons and component ablations. Final experimental results remain to be incorporated.
+
+\section*{Limitations}
+Record completeness, temporal information, and model input budgets limit the questioning patterns that can be discovered; trajectory truncation may omit essential evidence. Patient-disjoint splits within an environment assess transfer only within that environment. Generalization across institutions or data sources requires separate evaluation. Generation currently uses retrospective information access without temporal-view isolation, and does not represent the information available at a historical clinical decision point.
+
+These data constraints also affect automated evaluation. Aggregating two model judgments does not eliminate shared bias, and existing records may not suffice to assess every clinical plan. Quality scores cover only verified tasks with valid scoring outputs, and a complex task may be rejected because a single citation fails verification. Mean scores must therefore be interpreted together with evaluation coverage and valid yield.
+
+Interpretation of self-evolution is constrained by the comparison conditions. Held-out evaluation fixes direction allocation and primarily tests updated generation guidance, rather than the overall effect of the evolved direction distribution. Feedback diagnoses and recommendations may also be incorrect, and strategy updates do not guarantee monotonic improvements.
+
+Downstream synthetic training and auxiliary testing use task-level splits and may share patients. Official testing may also share underlying records with experience training. The current single-seed, single-training-run configuration cannot characterize variability across runs; patient-cluster resampling reflects only test-sample uncertainty. Harnesses differ in native learning triggers and call limits, so task sources are compared within the same harness.
+
+\bibliography{references}
+\end{document}
