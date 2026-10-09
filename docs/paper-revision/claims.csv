@@ -1,170 +1,146 @@
 claim_id,section,claim_kind,claim_text_sha256,evidence_ids,verification_status,uncertainty,analysis_intent,manuscript_line
-C001,摘要 / ,interpretive,20bfaea5dd1ca4e949e7964c5db60ffc0035f3ba82daead4a31a721ad751df88,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,7
-C002,1 引言与相关工作 / 1.1 纵向病历中的任务生成,interpretive,8a175f0b38384b1d8c35355003a16c2d38a76eccbe4e9361b35a949a16dd019b,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,13
-C003,1 引言与相关工作 / 1.1 纵向病历中的任务生成,interpretive,976a4d9a8f3636e60a52deddca64123718379c822834106f6f694c2236a880d2,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,15
-C004,1 引言与相关工作 / 1.1 纵向病历中的任务生成,interpretive,35484e2ae410096c64568d533c96722259d7c95fcad2e15fa3464c38eaa9e7c7,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,17
-C005,1 引言与相关工作 / 1.1 纵向病历中的任务生成,interpretive,f0e224750eb3d1742da9495a9fffdcd038941a48665fd9ae39e660045f162a3b,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,19
-C006,1 引言与相关工作 / 1.2 与已有工作的关系,interpretive,2cb0db13706158198d202b093e5471f2af1544d6c538498b5fd085c219863da7,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,23
-C007,1 引言与相关工作 / 1.2 与已有工作的关系,interpretive,6ea966b22b62d5f336fd713090b425758a735ed84f7bd98f2c29a1fbb13616f4,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,25
-C008,1 引言与相关工作 / 1.2 与已有工作的关系,interpretive,f4ea9edc9e1522f948ac3ec88dbc30276fe4b0b02f520cf5b84906515792833e,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,27
-C009,1 引言与相关工作 / 1.3 本文贡献,interpretive,50b469b1438396ad461464b4c27afa8dfcc2a21defd2be00dcfe2e7a154bcb3f,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,31
-C010,1 引言与相关工作 / 1.3 本文贡献,interpretive,c006acda1308b2c01d20c3777ecd6569c460a7efc4d36b2a89dc31fbd9a35c81,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,33
-C011,2 问题定义与方法 / 2.1 任务、指导与策略,method,075a9bc8209e47837e6e48e0c26eedf32372c9a99acf403572b8625e951f10e0,E009;E010;E011;E012,unverified,not_estimated,not_applicable,39
-C012,2 问题定义与方法 / 2.1 任务、指导与策略,method,07867cca2d777c9647e9d23718850a5421ff09894b3e9b98d331f3bfb92e30ae,E009;E010;E011;E012,unverified,not_estimated,not_applicable,41
-C013,2 问题定义与方法 / 2.1 任务、指导与策略,method,78e8c9179eb5783d4c39fa9c802ea8f99f6f708a1127b469b4ded8f55955a165,E009;E010;E011;E012,unverified,not_estimated,not_applicable,43
-C014,2 问题定义与方法 / 2.1 任务、指导与策略,method,b169290866adf1014b444a7aad7aca163123f918d7c564470bdca8737f1817f0,E009;E010;E011;E012,unverified,not_estimated,not_applicable,46
-C015,2 问题定义与方法 / 2.1 任务、指导与策略,method,7d92e17481d5cb62692d63cb6c48255ea61daf3dd9022832716d09fcd4cfab13,E009;E010;E011;E012,unverified,not_estimated,not_applicable,49
-C016,2 问题定义与方法 / 2.2 数据与环境双探索,method,314bdd13e50ba4fb12f57ce5b5076ebf1f10d178e7b64bb536dba9bca9eca8eb,E009;E010;E011;E012,unverified,not_estimated,not_applicable,53
-C017,2 问题定义与方法 / 2.2 数据与环境双探索,method,48e35b00c894cc9ef2cd7ed3fb0a85e460c0e0379a84eea525a1b2bf42d7a553,E009;E010;E011;E012,unverified,not_estimated,not_applicable,55
-C018,2 问题定义与方法 / 2.2 数据与环境双探索,method,5a3479820f4e26fe1fdcd9e4fcade7f39394c5f74d31294bfa707df829f1cdf0,E009;E010;E011;E012,unverified,not_estimated,not_applicable,59
-C019,2 问题定义与方法 / 2.3 知识引导生成与证据核验,method,76f9d34d9f49ef94701785e528a48a076c21a059a0ca2f4fe84dd14ba9ee0ef4,E009;E010;E011;E012,unverified,not_estimated,not_applicable,63
-C020,2 问题定义与方法 / 2.3 知识引导生成与证据核验,method,d1d858086cbb98351579cc28e3443dfb2cd1d7c84f16b8a5de76bd4e321a9519,E009;E010;E011;E012,unverified,not_estimated,not_applicable,66
-C021,2 问题定义与方法 / 2.3 知识引导生成与证据核验,method,b3068096019df746e238ef343ba32cdb011c823264af5eb88225b50eb315969c,E009;E010;E011;E012,unverified,not_estimated,not_applicable,69
-C022,2 问题定义与方法 / 2.3 知识引导生成与证据核验,method,7f555c1d3b819ef7c18acb859878f02e7e0f43661b4ba9bb2438759ffea091bf,E009;E010;E011;E012,unverified,not_estimated,not_applicable,71
-C023,2 问题定义与方法 / 2.4 反馈驱动的策略自进化,method,1ea80bdbd4208bd1554367a8dd6727ceba9d664f8011732c31825f6e52713396,E009;E010;E011;E012,unverified,not_estimated,not_applicable,75
-C024,2 问题定义与方法 / 2.4 反馈驱动的策略自进化,method,caf1ef5f8b51d18bd897cea91c45818a2bfa6683fcfa6be866c472f8b845fa7a,E009;E010;E011;E012,unverified,not_estimated,not_applicable,77
-C025,2 问题定义与方法 / 2.4 反馈驱动的策略自进化,method,4bde886d73ae7802b25500b692019df7c8aa5c8339079b4b387e0c37fc5c5208,E009;E010;E011;E012,unverified,not_estimated,not_applicable,80
-C026,2 问题定义与方法 / 2.4 反馈驱动的策略自进化,method,c30b6b64034fd30dd1caddc2bc9d5dcb602fc7faa5d72742cc0dbc5a899fbe9e,E009;E010;E011;E012,unverified,not_estimated,not_applicable,81
-C027,2 问题定义与方法 / 2.4 反馈驱动的策略自进化,method,315360760cffd6f1691ecb484bf2a390bfecce00703a0f3cdcf15fc267ef933a,E009;E010;E011;E012,unverified,not_estimated,not_applicable,82
-C028,2 问题定义与方法 / 2.4 反馈驱动的策略自进化,method,b1ebd99312818dd429e106a08511c41271225e349a8d337014959201d0360cc9,E009;E010;E011;E012,unverified,not_estimated,not_applicable,85
-C029,2 问题定义与方法 / 2.4 反馈驱动的策略自进化,method,12be55dd4c6832ca2a905054fa52a2da118bda05a8d83d9c5d8939a70c3b2493,E009;E010;E011;E012,unverified,not_estimated,not_applicable,87
-C166,2 问题定义与方法 / 2.4 反馈驱动的策略自进化,descriptive,b395cf94cb846e44963ea6fbf43726e4c696fc9aaeb1664919b1ad08abceebfd,E017,unverified,not_estimated,not_applicable,91
-C030,3 实验设置 / 3.1 研究问题与患者划分,method,e8960de0b84b36910a06a260b5fc111febcb3fe5cbdb30665a3160195210de8e,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,97
-C031,3 实验设置 / 3.1 研究问题与患者划分,method,1009a601bb9365c80b3af7c7e78585db9a81fb820b3f3bd81700e34f748aeb01,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,99
-C032,3 实验设置 / 3.1 研究问题与患者划分,method,caa33954e5ad0c1217ebd0a588275fae99bb93469867e47b05a38c7a03ee9c45,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,101
-C033,3 实验设置 / 3.1 研究问题与患者划分,method,9e9c518d9a9d0ce6828b8ab83cefd69902765606e9065bc30a7f1d632b12581c,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,103
-C034,3 实验设置 / 3.1 研究问题与患者划分,method,2e37c85c64b9c2ebe206683673603157f5659ff77c1fb8d986df32a300558ac0,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,105
-C035,3 实验设置 / 3.1 研究问题与患者划分,method,b70fa700472b90265c890d4bccd95e3fc29afc05f8d82e80f56f07887a76757a,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,106
-C036,3 实验设置 / 3.1 研究问题与患者划分,method,43b0d1d91cf5bf085f4f86cccc00b7d81c4b0d63ff59c65f839f9831c60003f8,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,108
-C037,3 实验设置 / 3.2 模型与对比方法,method,00f9f88ae36a8775a97d368e0498d4eb1a81680dab81ce98386d47da3ff86b2c,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,112
-C038,3 实验设置 / 3.2 模型与对比方法,method,19e0b7cc910170ca2d71e824e318ddcfe26ff41faadf0d5901ed6f204570d1e6,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,114
-C039,3 实验设置 / 3.2 模型与对比方法,method,b725f9e9667d700d98dfc11952fd446c048511bb32550fdb5ffe07a467d14db9,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,116
-C040,3 实验设置 / 3.3 评价指标与统计,method,12de6d66b804eeb367f886ccb78a019aaf42100cee207d1fe03e2cee95c9af16,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,120
-C041,3 实验设置 / 3.3 评价指标与统计,method,3b07107472b750c87356525dcca7bd95fb7673da08d416889724449303569e96,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,122
-C042,3 实验设置 / 3.3 评价指标与统计,method,109604bb3ba519929464570bc1ddf107cff2d8b6b10b71bf5385caf1885d6fbf,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,124
-C043,3 实验设置 / 3.3 评价指标与统计,method,647ae60f904b62df8e5f76e4a343091cc0f342733523d519dea62426098980f8,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,126
-C044,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,5ce4abc4c8d33c3b583c19b9ff36d250c3a98de1a8413b93ab180241c1037dbe,E013;E015,unverified,not_estimated,descriptive,132
-C167,4 结果与分析 / 4.1 生成任务的有效产出与质量,descriptive,2a49e5fe2d83fdb5e3b2f1c1ff79d207b65b670fa5a8846ba7c1b521e87a594a,E018,unverified,not_estimated,not_applicable,134
-C168,4 结果与分析 / 4.1 生成任务的有效产出与质量,descriptive,0b839338c8388260e11d9c46326313257303fa8f201a7fd2a595eadf96441830,E018,unverified,not_estimated,not_applicable,138
-C169,4 结果与分析 / 4.1 生成任务的有效产出与质量,descriptive,5bcfdf02194ae2914b5ebf376b1e2adbc7b9b353bf9e0ff80fd4ed4613b0544f,E018,unverified,not_estimated,not_applicable,142
-C045,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,eff55fa973e7fa6301380d1068e4693786cf25f71e81c8564504bcf68ff9701e,E013;E015,unverified,not_estimated,descriptive,144
-C046,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,5255e35c127367f510e5cecc244e36039bf0260a54e30534c916cf90901dcdd4,E013;E015,unverified,not_estimated,descriptive,146
-C063,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,9702c90c28a743f6ca2181607872ff75bd9f69974e722dc99b8fef24dcb394c9,E013;E015,unverified,not_estimated,descriptive,170
-C064,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,47d4aabc06961804bf9a54d6dd81cd6ed011a49de75d49c27957e62facf6da82,E013;E015,unverified,not_estimated,descriptive,171
-C065,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,fdbc801be3fb703f551c6df6127bdebb919a63d682f8bf401ed209a4648c479c,E013;E015,unverified,not_estimated,descriptive,172
-C066,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,6de552da2e2d8c6655d4cd8516884f021a42a89db3e4d8210b58f83f3845bf5c,E013;E015,unverified,not_estimated,descriptive,173
-C067,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,0404f6d6696a27a51c84a0372864a592ad27702b86cf01a3651915257b29090c,E013;E015,unverified,not_estimated,descriptive,174
-C068,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,af4e17945b6234a397a2123332e47ef1c97c99ec53d4212f297b153d97d2afd2,E013;E015,unverified,not_estimated,descriptive,175
-C053,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,0af26d1a1abf45a8539296fc67b98174de640156c72c188f499aea8ecf490957,E013;E015,unverified,not_estimated,descriptive,155
-C054,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,fc6650713eb68fb842935b3ae6a11b4260818366c3884b7b853e341632db1013,E013;E015,unverified,not_estimated,descriptive,157
-C063,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,9702c90c28a743f6ca2181607872ff75bd9f69974e722dc99b8fef24dcb394c9,E013;E015,unverified,not_estimated,descriptive,170
-C064,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,47d4aabc06961804bf9a54d6dd81cd6ed011a49de75d49c27957e62facf6da82,E013;E015,unverified,not_estimated,descriptive,171
-C065,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,fdbc801be3fb703f551c6df6127bdebb919a63d682f8bf401ed209a4648c479c,E013;E015,unverified,not_estimated,descriptive,172
-C066,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,6de552da2e2d8c6655d4cd8516884f021a42a89db3e4d8210b58f83f3845bf5c,E013;E015,unverified,not_estimated,descriptive,173
-C067,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,0404f6d6696a27a51c84a0372864a592ad27702b86cf01a3651915257b29090c,E013;E015,unverified,not_estimated,descriptive,174
-C068,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,af4e17945b6234a397a2123332e47ef1c97c99ec53d4212f297b153d97d2afd2,E013;E015,unverified,not_estimated,descriptive,175
-C061,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,5b7e52b0b874ec28b67fe9a7cef144e4644074c8700da805578e7712c2a4eb58,E013;E015,unverified,not_estimated,descriptive,166
-C062,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,55a1308f19de923407fcfdda8a8e82f2c16be63adc22fcdd23796bc8d5448392,E013;E015,unverified,not_estimated,descriptive,168
-C063,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,9702c90c28a743f6ca2181607872ff75bd9f69974e722dc99b8fef24dcb394c9,E013;E015,unverified,not_estimated,descriptive,170
-C064,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,47d4aabc06961804bf9a54d6dd81cd6ed011a49de75d49c27957e62facf6da82,E013;E015,unverified,not_estimated,descriptive,171
-C065,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,fdbc801be3fb703f551c6df6127bdebb919a63d682f8bf401ed209a4648c479c,E013;E015,unverified,not_estimated,descriptive,172
-C066,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,6de552da2e2d8c6655d4cd8516884f021a42a89db3e4d8210b58f83f3845bf5c,E013;E015,unverified,not_estimated,descriptive,173
-C067,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,0404f6d6696a27a51c84a0372864a592ad27702b86cf01a3651915257b29090c,E013;E015,unverified,not_estimated,descriptive,174
-C068,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,af4e17945b6234a397a2123332e47ef1c97c99ec53d4212f297b153d97d2afd2,E013;E015,unverified,not_estimated,descriptive,175
-C069,4 结果与分析 / 4.1 生成任务的有效产出与质量,interpretive,a7abcc90dcb6e1e459b78a402a5b0433b8d0a1afa6eb5ad0b18e6ddf756fb9a6,E013;E015,unverified,not_estimated,descriptive,177
-C170,4 结果与分析 / 4.2 策略自进化,protocol,71436bd46d38c389a8eb24d89a2a0c254155d07cb3aab37fb20a5784d059adec,E019,unverified,not_estimated,planned,181
-C171,4 结果与分析 / 4.2 策略自进化,protocol,d9be303af3f349f0cfd573bd9a42ec795a5515c37959382ea669f1a53a50c761,E019,unverified,not_estimated,planned,183
-C172,4 结果与分析 / 4.2 策略自进化,protocol,bf0bd9656a8c0c03996e8da80a649ec9cfce0aacf830638a0cca63cefcfd4743,E019,unverified,not_estimated,planned,187
-C173,4 结果与分析 / 4.2 策略自进化,protocol,1c0e5cd35812036596423f4e75532364b23fac1fd8b5e7d27fb3600c0817de39,E019,unverified,not_estimated,planned,189
-C174,4 结果与分析 / 4.3 组件消融,protocol,58d35464468dae58fb04c6432c8c2b4ad5c7c57f0870017374e713f78a6775af,E019,unverified,not_estimated,planned,193
-C175,4 结果与分析 / 4.3 组件消融,protocol,16c508a4144f6bfdc14caf40c00afc4e8fc4073a8afe8507e31649941cb75097,E019,unverified,not_estimated,planned,195
-C176,4 结果与分析 / 4.3 组件消融,protocol,43a2e9323110676d2b58c501f180950748f420858d5e95ad6c1692fbe10c2afb,E019,unverified,not_estimated,planned,197
-C177,4 结果与分析 / 4.3 组件消融,protocol,a23b87e5b56c971f127e7e44558e1e37d16b9c96863df3099f143933bfc967c8,E019,unverified,not_estimated,planned,199
-C178,4 结果与分析 / 4.3 组件消融,protocol,2b1a43adac824c247b47411ef541d878f8ab435ae3953c237588b2a6513cfada,E019,unverified,not_estimated,planned,200
-C179,4 结果与分析 / 4.3 组件消融,protocol,45c610919ef394a96aee7251d283018d862b6ef970677a6efee2bcdc1b674e01,E019,unverified,not_estimated,planned,201
-C180,4 结果与分析 / 4.3 组件消融,protocol,5e40b98d3483643f34c976f29d1ac3ed87988e3ca3bd82c597a6e0431b072b37,E019,unverified,not_estimated,planned,202
-C181,4 结果与分析 / 4.3 组件消融,protocol,db1a4a74d293ce718287b3f4e71aa57a84bb4773f51d1fa7b0b71d2cd9fce77a,E019,unverified,not_estimated,planned,204
-C079,4 结果与分析 / 4.4 下游经验学习,interpretive,69af2981fce7756ff7219e74cb1c2107024d4181665d3ff2f7948b9b24e5ff68,E005;E014,unverified,not_estimated,descriptive,208
-C080,4 结果与分析 / 4.4 下游经验学习,interpretive,8a408a2ca7d81fb53ac5d636ded03c85c1416bbf64a5826ab8928d444a00bc01,E005;E014,unverified,not_estimated,descriptive,210
-C081,4 结果与分析 / 4.4 下游经验学习,interpretive,6f0a763b64180f8045708e93de4c20179ea02329bc3c06239cffde5713eebecd,E014,unverified,not_estimated,descriptive,212
-C082,4 结果与分析 / 4.4 下游经验学习,interpretive,87027a82fe549ed8b12a2baa145dc8f49757672c63aeaa1566a943eaae8cc491,E005;E014,unverified,not_estimated,descriptive,214
-C083,4 结果与分析 / 4.4 下游经验学习,interpretive,bde45a0abe87f63e507c9b92d972dfc6fc405e654fdc412234adb24b6888c355,E014,unverified,not_estimated,descriptive,217
-C084,4 结果与分析 / 4.4 下游经验学习,interpretive,f2d4732559d6e5715b0e29fd1b67855c05522e8341077877cb24cd7559749073,E014,unverified,not_estimated,descriptive,218
-C085,4 结果与分析 / 4.4 下游经验学习,interpretive,0851091a2d4d4c32a0128ea04943396b5fc5740d4d4364c77d03a998b77979a4,E014,unverified,not_estimated,descriptive,221
-C086,4 结果与分析 / 4.4 下游经验学习,interpretive,aa5f9687f4dbae10adb834e4b2a4b37325e736a09ab4bd09c5f3e133b6d710d6,E014,unverified,not_estimated,descriptive,223
-C087,4 结果与分析 / 4.4 下游经验学习,interpretive,58a4f20ff9593293e8e82fdc321deb3865e465756bdf2039b4c2e6c2c901bf8e,E014,unverified,not_estimated,descriptive,225
-C088,4 结果与分析 / 4.4 下游经验学习,interpretive,789d3667e14715738221f5f5200f584b400d9cab01cd220f263e906acf1a026a,E014,unverified,not_estimated,descriptive,227
-C089,4 结果与分析 / 4.4 下游经验学习,interpretive,26c14c758063c2a7295481a79e7b6efe462dfe0a8f3b448da9b71c7b6b2554c9,E014,unverified,not_estimated,descriptive,228
-C090,4 结果与分析 / 4.4 下游经验学习,interpretive,5ee3f0ab17f41dabefa3ed7f7931ddf707a06300532d629be99519e56c9d4ccc,E014,unverified,not_estimated,descriptive,229
-C091,4 结果与分析 / 4.4 下游经验学习,interpretive,b637f74fdf3ac00062f4f3d8ac20ccfdb9e8e8cd5586321b820a98cc8ce53e7b,E014,unverified,not_estimated,descriptive,230
-C092,4 结果与分析 / 4.4 下游经验学习,interpretive,e9006bc6477e4d2c9f5ed711dc4f255df545b63d03467f8fc9d44f842ccc8f05,E014,unverified,not_estimated,descriptive,231
-C093,4 结果与分析 / 4.4 下游经验学习,interpretive,df5c1905c05a30278695bc2be2abb0a37721670587fdfa5552d4b09ba3961ae3,E014,unverified,not_estimated,descriptive,232
-C094,4 结果与分析 / 4.4 下游经验学习,interpretive,691a6b5069641ad101eb4fe0d7b2c90c7ba915e2ca88ce26b22d420a97a0f7a4,E014,unverified,not_estimated,descriptive,233
-C095,4 结果与分析 / 4.4 下游经验学习,interpretive,c0aedba59e165ebebe8a8387da163f1481798aa8d3410b6419e6b0f0e202d47e,E005;E014,unverified,not_estimated,descriptive,235
-C099,5 讨论与结论 / 5.1 讨论,interpretive,65527bbf9a31e44e4e9eebc8e942298542831c8d464064f921932f4fde028f75,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,241
-C100,5 讨论与结论 / 5.1 讨论,interpretive,e900fcf4bcfcd4033a93b41284a61b556321aecf958b46548dab9c5d78bc616b,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,243
-C101,5 讨论与结论 / 5.2 结论,interpretive,b0527ed9ca59bc2fad4bdf076150568a8e2dbd1d73d8b8bb689be61dd0fb5baf,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,247
-C102,局限性（Limitations） / ,interpretive,32aa5658b291ec3cf58dba9672ce9614d8ed2a46620f746bccfd696abcdf8912,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,251
-C103,局限性（Limitations） / ,interpretive,5963bf186db2838271af117e0fbcb799569ee32aea3700936a7fb039969ec5dd,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,253
-C104,局限性（Limitations） / ,interpretive,518030c21621ff58ac3c4e38fbbd639d2d1cb2e4525493f5cf8ffc22c3187364,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,255
-C105,局限性（Limitations） / ,interpretive,85e61204fc5411e2bad9f789961c45d5ca3ced5c5ba2ffbffb67da8106997b44,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,257
-C106,参考文献 / ,factual,8dc2c422e0b9a4168020ec1c08b87c0d2e44c873c18f3f88642e975f3ca9fb5d,E001,unverified,not_estimated,not_applicable,261
-C107,参考文献 / ,factual,9f1d37efa401b01c4b4ea8c346fd3863006f25de41a4b45be94bd3f57687b127,E002,unverified,not_estimated,not_applicable,263
-C108,参考文献 / ,factual,e1b4dc11a5fb36b300c3c2b6a653d937ded82439ee87102305218cb908f715aa,E003,unverified,not_estimated,not_applicable,265
-C109,参考文献 / ,factual,100ed0195e7a7c377b534d94708bbc6c5651065d57b94aea0013fdfae5e7d970,E004,unverified,not_estimated,not_applicable,267
-C110,参考文献 / ,factual,9da035f68d0a89d32c51949680faf50367497ad4700e3564bface537e3ec9d75,E005,unverified,not_estimated,not_applicable,269
-C111,参考文献 / ,factual,b3c57b29dfe2321cc0104fc7c53c23d878dedc2c7325447e2d0644a84d049278,E006,unverified,not_estimated,not_applicable,271
-C112,参考文献 / ,factual,9c460b88122468a60cc86c2954a81e47a50f0cee5ef0005ca05c2701f30f49f7,E007,unverified,not_estimated,not_applicable,273
-C113,参考文献 / ,factual,e0a61df7e88619767862ff23f5630cd4b37cc86b4a0c0837c2b0578dfc9d6440,E008,unverified,not_estimated,not_applicable,275
-C114,附录 / A 探索与生成接口,method,f6bdaece5a42a386171e9ac70c82145fd125154ec8ca848f379e0cc9e82c5a12,E009;E010;E011;E012,unverified,not_estimated,not_applicable,283
-C115,附录 / A 探索与生成接口,method,b697777c60e0e9ac8716e169c8f56ac132a3d116db7d3d06bffc5ad3657a1f28,E009;E010;E011;E012,unverified,not_estimated,not_applicable,285
-C116,附录 / A 探索与生成接口,method,99e360505ae0ccb993f1bdb9117e01dd0c7e4ee7967d139237be15dd29cc18c3,E009;E010;E011;E012,unverified,not_estimated,not_applicable,289
-C117,附录 / A 探索与生成接口,method,bfb1a87994881c650d60faa725835ad9843e3df4088f0772b14f91d4292f5163,E009;E010;E011;E012,unverified,not_estimated,not_applicable,293
-C118,附录 / A 探索与生成接口,method,b22a5e079dfcf7567d6803f09f73d95ae37f0a37466085d0946e32073e8aa28a,E009;E010;E011;E012,unverified,not_estimated,not_applicable,295
-C119,附录 / B 环境、患者与信息访问,method,7a498589148c9a6d92acd664db0a82e24dd39483c2d9b4cab5a42f3ad0f78307,E010;E011;E013;E014,unverified,not_estimated,not_applicable,299
-C120,附录 / B 环境、患者与信息访问,method,b962e95951c237002ffee382fdc305b6eaafa7187c7dd2b97500712481a69323,E010;E011;E013;E014,unverified,not_estimated,not_applicable,301
-C121,附录 / B 环境、患者与信息访问,method,ae41951efa1efdfef45a1f5fe977c19fa3f726a514b274ec8a88daf2bb47ec73,E010;E011;E013;E014,unverified,not_estimated,not_applicable,303
-C122,附录 / C 生成方法与预算,method,3484e47c26c146e65f1034b9ec86da3da66fd29766c28819a392ce1fd730f89f,E009;E013;E016,unverified,not_estimated,not_applicable,307
-C123,附录 / C 生成方法与预算,method,6ffecef3962154a2396ea3af201c474a1dc59a9e2e7de801966257e5178aba6d,E009;E013;E016,unverified,not_estimated,not_applicable,309
-C124,附录 / C 生成方法与预算,method,ba93c6d75b6e5eb7270e38a1cb8dc5e957790082a28412ff10a3ca458a4968d0,E009;E013;E016,unverified,not_estimated,not_applicable,311
-C125,附录 / C 生成方法与预算,method,b704abeb4bdbe8a741deb0a9f5b5c572e26daa8133cab3cdb376303324f3a3e9,E009;E013;E016,unverified,not_estimated,not_applicable,313
-C126,附录 / D 评分、汇总与统计,method,e82c3c2456629c7aa75a2f9dbdef8c97c70a4a63ead1fbb5d967900c356ed3de,E012;E015,unverified,not_estimated,descriptive,319
-C127,附录 / D 评分、汇总与统计,method,24cac98d6e1696bc7dc40f4b3fa3be4888fe2ef649aa72ebdfcf4d154387c500,E012;E015,unverified,not_estimated,descriptive,321
-C128,附录 / D 评分、汇总与统计,method,3de2fadbe14d7dc22c571ef90eed7c043a16310e290050883011a324d3000b3c,E012;E015,unverified,not_estimated,descriptive,323
-C129,附录 / D 评分、汇总与统计,method,7b1bc3b0d6819c1bfeae05294fa3f5e5eb7753ae46c6a71962aa5ced0906258f,E012;E015,unverified,not_estimated,descriptive,324
-C130,附录 / D 评分、汇总与统计,method,1785d5df1fe52221241ee40a2cda7ed7b2c12fccb5fbf42382ec48eb0b34f62c,E012;E015,unverified,not_estimated,descriptive,325
-C131,附录 / D 评分、汇总与统计,method,5ac9105e6e3c783424cc2625b438a0daa59be8de164fee377e5cfb5ad5539171,E012;E015,unverified,not_estimated,descriptive,326
-C132,附录 / D 评分、汇总与统计,method,0515e5794fcf0ba0474b738621693284680af3af2934633247e1f74708289508,E012;E015,unverified,not_estimated,descriptive,327
-C133,附录 / D 评分、汇总与统计,method,72548a389435c9fec24906b9caa694244d4877ddd379418adb529db7910abacf,E012;E015,unverified,not_estimated,descriptive,329
-C134,附录 / D 评分、汇总与统计,method,c6409e56573d15409e5d75564f38fbecc5395385d53f017707d1f9773cbd2e65,E012;E015,unverified,not_estimated,descriptive,331
-C135,附录 / D 评分、汇总与统计,method,5ce5a31a212e49c053387af513ec19b89108c29a9540c6a0622a5b1ad971d8b9,E012;E015,unverified,not_estimated,descriptive,334
-C136,附录 / D 评分、汇总与统计,method,c503e181e73ba64bd6497311349f0493a523ddb1a3fea8e6ff7de75d8da934ff,E012;E015,unverified,not_estimated,descriptive,337
-C137,附录 / D 评分、汇总与统计,method,568d0de86e06c1c81682f795da8acf2a9715eba45e775dde438db99a162c5df9,E012;E015,unverified,not_estimated,descriptive,341
-C138,附录 / D 评分、汇总与统计,method,1b2f2ef8a1c0b05147e4d8214b5148525163bd41c281ebb7a223def2291286aa,E012;E015,unverified,not_estimated,descriptive,344
-C139,附录 / D 评分、汇总与统计,method,4406a1c662c381c9f5a5ee4e8cf6da91f307e7ae4f96f36078fd4f1405b2c6fb,E012;E015,unverified,not_estimated,descriptive,347
-C140,附录 / D 评分、汇总与统计,method,7f1ddf643a330b4983970a12197f0fa58f539ed1506621936339c639283d6c51,E012;E015,unverified,not_estimated,descriptive,349
-C141,附录 / D 评分、汇总与统计,method,d50892a08cd3a64c4082fb9b5f928900b5faaf769de9d1bbdf186155e470479c,E012;E015,unverified,not_estimated,descriptive,351
-C142,附录 / D 评分、汇总与统计,method,afc42e996d6cb5376c7f661aa1abb2cee596cc8a39c66051891a3496bec0bfdf,E012;E015,unverified,not_estimated,descriptive,353
-C143,附录 / D 评分、汇总与统计,method,f0e81f3d61d3001dfbfb9fc96686111f8d00b87ef80d484383d47c1705288397,E012;E015,unverified,not_estimated,descriptive,354
-C144,附录 / D 评分、汇总与统计,method,02a3f9a2a3cd5b055204b1b9b5ff5d12f5d061de1b0924c9fef2e17188d4865b,E012;E015,unverified,not_estimated,descriptive,355
-C145,附录 / D 评分、汇总与统计,method,187096f82db7688fb8c843c2136cd7300af58fc1b42e2f1f4c9482dc448ccea6,E012;E015,unverified,not_estimated,descriptive,356
-C146,附录 / D 评分、汇总与统计,method,36104cc72c862b15e72817872445c7a292dbf79c816a6d0c75d3e2f1a5cc7922,E012;E015,unverified,not_estimated,descriptive,357
-C147,附录 / D 评分、汇总与统计,method,b3d09962f968fcf54526a0b351373633d1efe6d0e924168d410f1cb768054fb9,E012;E015,unverified,not_estimated,descriptive,358
-C148,附录 / D 评分、汇总与统计,method,2c99ccc12a6bd29d55cdb1a1f50fa5d519a505b4ee5a8fa9bd468ff90cddb6d4,E012;E015,unverified,not_estimated,descriptive,359
-C149,附录 / D 评分、汇总与统计,method,7b4aa9b25bb890688f04b5a9d3634d6d217076a7856d68533e5b7417689fc6d7,E012;E015,unverified,not_estimated,descriptive,361
-C150,附录 / D 评分、汇总与统计,method,ce7e8ef68a152dc5537d5873903dc6400d61c6a501c0a4fbbf5498fc157de3c2,E012;E015,unverified,not_estimated,descriptive,365
-C151,附录 / D 评分、汇总与统计,method,08d97ccb1a0e9d4732240ab595ac7f328fc7b456e7ecc96bcb92ce817e20e4f9,E012;E015,unverified,not_estimated,descriptive,367
-C152,附录 / E 经验学习与官方评测,method,d6eb134af588574cd3499185cb64fb1ba795f25b3eefcf8b077cabe6234b5d26,E014,unverified,not_estimated,not_applicable,371
-C153,附录 / E 经验学习与官方评测,method,367e8eba25b21ed5d8c57bcf8c589d9231287a2abad93f644c4ed93b917bccaf,E014,unverified,not_estimated,not_applicable,373
-C154,附录 / E 经验学习与官方评测,method,d6684257003a145d24122e257de71aafb3b34b5acb567304b693db22ad7a7587,E014,unverified,not_estimated,not_applicable,375
-C155,附录 / E 经验学习与官方评测,method,79ae3789b70a6557592bbf0facdff16f33ae634a37e44f8504c8da5eb07b7d8b,E014,unverified,not_estimated,not_applicable,376
-C156,附录 / E 经验学习与官方评测,method,13ddba6fd557616c8278c97ea32485706889f1e0a7c64a94926df5c15163faba,E014,unverified,not_estimated,not_applicable,377
-C157,附录 / E 经验学习与官方评测,method,256de57b7444421d1fcf0fa9943d9c0953f9f6d2dfb644197866df7193ddc600,E014,unverified,not_estimated,not_applicable,378
-C158,附录 / E 经验学习与官方评测,method,7d0109d01e8093f003739b47b7bb042143390d7c1aec72d4c1f77248faccb693,E014,unverified,not_estimated,not_applicable,380
-C159,附录 / E 经验学习与官方评测,method,677a902bc4e70126a8a8fee5df8b125c1097924dc3ae70bb2af93a879bb4172b,E014,unverified,not_estimated,not_applicable,382
-C160,附录 / E 经验学习与官方评测,method,75403af30cc1a09113990612d7fc550402f7ae92fdf3b6958d5cee196aacb6b5,E014,unverified,not_estimated,not_applicable,384
-C161,附录 / E 经验学习与官方评测,method,d7fb95c272dc7317779bc70781ad0fde4445ee4cdfbbeadb023e7483b0c57515,E014,unverified,not_estimated,not_applicable,386
-C162,附录 / F 补充结果与案例,interpretive,1fff4041533fcce0ea122b7f69d7cd40bf3d245955c7f0aa6ce597f4dbdd5d3e,E015,unverified,not_estimated,not_applicable,390
-C163,附录 / F 补充结果与案例,interpretive,6367c0907a2ae3e48a071922f565634a076d665f3f4a58018e7f0bf8f75d40ec,E015,unverified,not_estimated,not_applicable,392
-C164,附录 / F 补充结果与案例,interpretive,f6eb22e3db14abef8eb074c853ae4e4f07750a570954f738463f086744c41fcc,E015,unverified,not_estimated,not_applicable,394
-C165,附录 / G 写作辅助工具,declaration,f11fca2af0fd43e4fcba46b82f40d6010f44cc7ebfaea35452e01dcd05c4a590,E008,unverified,not_estimated,not_applicable,398
+C182,摘要 / ,interpretive,14300cf90bb5aecd797366205ff4ffac670a6d4dbba1d30b3b2527430fc80587,E001;E002;E003;E004;E006;E009;E013;E019,unverified,not_estimated,not_applicable,7
+C183,1 引言与相关工作 / ,interpretive,e3989a0fda8b69d0a4d7709aad45baf757450d5f3d83f65e960f7ae31e3f1993,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,11
+C184,1 引言与相关工作 / ,interpretive,5724f2a907de7ef69ada0cb11e7d5035b44c73caa95b983e99f32d7fd47d8017,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,13
+C185,1 引言与相关工作 / ,interpretive,024cd776ce75524ef9812d730020640650de3bd5210e06d3330f192edf9ff88f,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,15
+C186,1 引言与相关工作 / ,interpretive,797808eb59f1fc33f889c94c088ff31badc80021674e7572b6df708186a6299d,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,17
+C187,1 引言与相关工作 / ,interpretive,54df887209f985c5343a1464a470e03106c900d4e1a957a4bc1a0957d3016cf8,E001;E002;E003;E004;E006;E009;E013,unverified,not_estimated,not_applicable,19
+C188,2 问题定义与方法 / 2.1 任务与生成策略,method,8c5c64b082380ff4228e6f8cd78f56fc955eafc5453ddeac375e2ce6f88d0740,E009;E010;E011;E012,unverified,not_estimated,not_applicable,25
+C189,2 问题定义与方法 / 2.1 任务与生成策略,method,4bfa74f8502a347624c2b7f3faf9e6e6e9c83994ff0f05400200e5114d2b367c,E009;E010;E011;E012,unverified,not_estimated,not_applicable,27
+C190,2 问题定义与方法 / 2.1 任务与生成策略,method,d59084bb3cd0de829e436d44e4b9829bd95c0c2a64f3aba273be237891ea81fe,E009;E010;E011;E012,unverified,not_estimated,not_applicable,30
+C191,2 问题定义与方法 / 2.1 任务与生成策略,method,9885f3f7beb4051b29c95fd48120be94a72359c55c5d2a205724ac42c658eca7,E009;E010;E011;E012,unverified,not_estimated,not_applicable,33
+C192,2 问题定义与方法 / 2.2 双探索,method,05bf482b69fdaa93357c22a3d2927b1110da0dbae3bbeb8f6225e9a1a18cc131,E009;E010;E011;E012,unverified,not_estimated,not_applicable,37
+C193,2 问题定义与方法 / 2.2 双探索,method,524f589a0555ea97e4b21b283f0d9f4a6c79e64c568cc9a7da0bc629b3282fad,E009;E010;E011;E012,unverified,not_estimated,not_applicable,39
+C018,2 问题定义与方法 / 2.2 双探索,method,5a3479820f4e26fe1fdcd9e4fcade7f39394c5f74d31294bfa707df829f1cdf0,E009;E010;E011;E012,unverified,not_estimated,not_applicable,43
+C194,2 问题定义与方法 / 2.3 生成与证据核验,method,7beda900c897239353c6055d9cea6f2ba2093a3908c17f6442a8e88f9413a707,E009;E010;E011;E012,unverified,not_estimated,not_applicable,47
+C020,2 问题定义与方法 / 2.3 生成与证据核验,method,d1d858086cbb98351579cc28e3443dfb2cd1d7c84f16b8a5de76bd4e321a9519,E009;E010;E011;E012,unverified,not_estimated,not_applicable,50
+C195,2 问题定义与方法 / 2.3 生成与证据核验,method,a0dab91d209a83c78e90a11202419237da53d31fd86dd7528bb3a6d48a7df4e3,E009;E010;E011;E012,unverified,not_estimated,not_applicable,53
+C196,2 问题定义与方法 / 2.3 生成与证据核验,method,faf9171ca1f496408d6379b2d03312c2297e3e5be8b95afc00177f911e4729d9,E009;E010;E011;E012,unverified,not_estimated,not_applicable,55
+C197,2 问题定义与方法 / 2.4 反馈驱动的自进化,method,2eeb63adaddde452296120a784bd6c86afdda549524a1a25f1f34af6242514e8,E009;E010;E011;E012,unverified,not_estimated,not_applicable,59
+C198,2 问题定义与方法 / 2.4 反馈驱动的自进化,method,0dfa9966d827e2b89fcdfc0511e58021a86bf494482b8543ad19cb38e501d76d,E009;E010;E011;E012,unverified,not_estimated,not_applicable,61
+C025,2 问题定义与方法 / 2.4 反馈驱动的自进化,method,4bde886d73ae7802b25500b692019df7c8aa5c8339079b4b387e0c37fc5c5208,E009;E010;E011;E012,unverified,not_estimated,not_applicable,64
+C026,2 问题定义与方法 / 2.4 反馈驱动的自进化,method,c30b6b64034fd30dd1caddc2bc9d5dcb602fc7faa5d72742cc0dbc5a899fbe9e,E009;E010;E011;E012,unverified,not_estimated,not_applicable,65
+C027,2 问题定义与方法 / 2.4 反馈驱动的自进化,method,315360760cffd6f1691ecb484bf2a390bfecce00703a0f3cdcf15fc267ef933a,E009;E010;E011;E012,unverified,not_estimated,not_applicable,66
+C199,2 问题定义与方法 / 2.4 反馈驱动的自进化,method,3467dc70263dc47d8d23f0d009be5e810912f57e167211d1b582025560d84106,E009;E010;E011;E012,unverified,not_estimated,not_applicable,69
+C200,3 实验设置 / 3.1 环境与对比方法,method,6bc672b071cc1c7a458803191f7e648f5d61fa2214db15ae929067065cd78f20,E010;E011;E012;E013;E015;E016;E019,unverified,not_estimated,not_applicable,75
+C201,3 实验设置 / 3.1 环境与对比方法,method,0e570bfbdc9e6cf5f0e004e74aa0fe47e0c0f9a10c93adc826e5c2bbe458485a,E010;E011;E012;E013;E015;E016;E019,unverified,not_estimated,not_applicable,77
+C202,3 实验设置 / 3.1 环境与对比方法,method,d57e88be2d42a69dcfba75b6c23beadf556c7c927367afbc87b4fe086ee185f0,E010;E011;E012;E013;E015;E016;E019,unverified,not_estimated,not_applicable,79
+C203,3 实验设置 / 3.2 评价协议,method,65fa6e785743029cee11414c507bf1bec4a62c309115554450e82a15a6a0d654,E010;E011;E012;E013;E015;E016;E019,unverified,not_estimated,not_applicable,83
+C204,3 实验设置 / 3.2 评价协议,method,0213fb87fedc1d54365eb344c7ad7f687eb82bde891f9a2cc7f74995d44005bc,E010;E011;E012;E013;E015;E016;E019,unverified,not_estimated,not_applicable,85
+C205,3 实验设置 / 3.2 评价协议,method,0580891b006092276f60054ad09f6506e9339a5b927b8f2aa4444893d6b0f870,E010;E011;E012;E013;E015;E016;E019,unverified,not_estimated,not_applicable,87
+C206,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,59460aa9d0c4f395a87d219a63408f7d16d479d117234dc6f041b94115a9799a,E013;E015;E018;E019,unverified,not_estimated,not_applicable,93
+C207,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,5fed866a8b6350463f703ad79b362035c22d8a1761c0cb87ad7bcc2c075ebb45,E013;E015;E018;E019,unverified,not_estimated,not_applicable,95
+C208,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,30073903f4c88ee1f1b17e49c001db13bdaaf0685522e544030b42413d57ddd9,E013;E015;E018;E019,unverified,not_estimated,not_applicable,97
+C209,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,f5a04b2bfb5e2c78b5d37ddb3ced8566e9535d8bcae3a76fb6dd7e1cada0e27d,E013;E015;E018;E019,unverified,not_estimated,not_applicable,99
+C210,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,e9933dea7c452edc821f8e803a24ad8c438cd224e8486ca739855dc844fa502c,E013;E015;E018;E019,unverified,not_estimated,not_applicable,100
+C211,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,8e9560303dbef6634a0c971afbedcc7aff268a3abf9c07dfcd5a6893d985436e,E013;E015;E018;E019,unverified,not_estimated,not_applicable,101
+C212,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,f504aae727acdf58e3eb2942393216492006c0b34d3c03d3dbeff5141e26e380,E013;E015;E018;E019,unverified,not_estimated,not_applicable,102
+C213,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,d6db6d82f88e01eaae763a0c874a2dcba076fb9c47043f6ed946ecfe92c46cc7,E013;E015;E018;E019,unverified,not_estimated,not_applicable,103
+C214,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,478e0c0b03e0fcdec671ac717326d07ed249a27916de330781eca31e82a4b378,E013;E015;E018;E019,unverified,not_estimated,not_applicable,104
+C215,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,4f265f06036c6364e489f9a39128b8769f79224ec5712cd53cd766508c73e75a,E013;E015;E018;E019,unverified,not_estimated,not_applicable,108
+C216,4 结果与分析 / 4.1 有效产出、质量与推理要求,interpretive,0d889b5fb6c74f8709337cac578f5c511f72e7eadf8a30246863e39a497a46f4,E013;E015;E018;E019,unverified,not_estimated,not_applicable,110
+C217,4 结果与分析 / 4.2 策略自进化,interpretive,7df4d4e4d04b5fb67b25798dbf5fce8944e555a64342d383ab68790128bf3a1d,E019,unverified,not_estimated,planned,114
+C218,4 结果与分析 / 4.2 策略自进化,interpretive,0a3649abdeab56364361767ef18c85ccdd43a2f91da9bb0cb88019b89101c132,E019,unverified,not_estimated,planned,116
+C219,4 结果与分析 / 4.2 策略自进化,interpretive,0ce33e308b98df9aa0b513f3bc61a2db6957e7c4dee3d6f94a03739ee3d0290e,E019,unverified,not_estimated,planned,120
+C220,4 结果与分析 / 4.3 组件消融,interpretive,aa5c73ca855955f86731e49099cda6599d981bcf55f1f0477731061faa55429c,E019,unverified,not_estimated,planned,124
+C221,4 结果与分析 / 4.3 组件消融,interpretive,2b126064483ee0298bbda642f2277d0cce217c0eca272a39bd6eb6fdaabf6075,E019,unverified,not_estimated,planned,126
+C176,4 结果与分析 / 4.3 组件消融,protocol,43a2e9323110676d2b58c501f180950748f420858d5e95ad6c1692fbe10c2afb,E019,unverified,not_estimated,planned,128
+C177,4 结果与分析 / 4.3 组件消融,protocol,a23b87e5b56c971f127e7e44558e1e37d16b9c96863df3099f143933bfc967c8,E019,unverified,not_estimated,planned,130
+C178,4 结果与分析 / 4.3 组件消融,protocol,2b1a43adac824c247b47411ef541d878f8ab435ae3953c237588b2a6513cfada,E019,unverified,not_estimated,planned,131
+C179,4 结果与分析 / 4.3 组件消融,protocol,45c610919ef394a96aee7251d283018d862b6ef970677a6efee2bcdc1b674e01,E019,unverified,not_estimated,planned,132
+C180,4 结果与分析 / 4.3 组件消融,protocol,5e40b98d3483643f34c976f29d1ac3ed87988e3ca3bd82c597a6e0431b072b37,E019,unverified,not_estimated,planned,133
+C222,4 结果与分析 / 4.3 组件消融,interpretive,a2b4f8c26a71c042b9216c149c34753cff268ed19a650823609f1d04e0a565b8,E019,unverified,not_estimated,planned,135
+C223,4 结果与分析 / 4.4 下游经验学习,interpretive,7b40b997de0a884a8dbbe67beb4fe4ce055f6e56bc0879044c33f122d38bc3a1,E005;E014,unverified,not_estimated,not_applicable,139
+C224,4 结果与分析 / 4.4 下游经验学习,interpretive,be0d53d7cfc9cfe7f4856a1c12fdb8664f0b689ba6839bcf18e7cad0f81ac996,E005;E014,unverified,not_estimated,not_applicable,141
+C225,4 结果与分析 / 4.4 下游经验学习,interpretive,96f4286ec1a658ae55abf4a3fcbe5d960bca6e1887ec8b2f021949501a271577,E005;E014,unverified,not_estimated,not_applicable,143
+C087,4 结果与分析 / 4.4 下游经验学习,interpretive,58a4f20ff9593293e8e82fdc321deb3865e465756bdf2039b4c2e6c2c901bf8e,E014,unverified,not_estimated,descriptive,145
+C088,4 结果与分析 / 4.4 下游经验学习,interpretive,789d3667e14715738221f5f5200f584b400d9cab01cd220f263e906acf1a026a,E014,unverified,not_estimated,descriptive,147
+C089,4 结果与分析 / 4.4 下游经验学习,interpretive,26c14c758063c2a7295481a79e7b6efe462dfe0a8f3b448da9b71c7b6b2554c9,E014,unverified,not_estimated,descriptive,148
+C090,4 结果与分析 / 4.4 下游经验学习,interpretive,5ee3f0ab17f41dabefa3ed7f7931ddf707a06300532d629be99519e56c9d4ccc,E014,unverified,not_estimated,descriptive,149
+C091,4 结果与分析 / 4.4 下游经验学习,interpretive,b637f74fdf3ac00062f4f3d8ac20ccfdb9e8e8cd5586321b820a98cc8ce53e7b,E014,unverified,not_estimated,descriptive,150
+C092,4 结果与分析 / 4.4 下游经验学习,interpretive,e9006bc6477e4d2c9f5ed711dc4f255df545b63d03467f8fc9d44f842ccc8f05,E014,unverified,not_estimated,descriptive,151
+C093,4 结果与分析 / 4.4 下游经验学习,interpretive,df5c1905c05a30278695bc2be2abb0a37721670587fdfa5552d4b09ba3961ae3,E014,unverified,not_estimated,descriptive,152
+C094,4 结果与分析 / 4.4 下游经验学习,interpretive,691a6b5069641ad101eb4fe0d7b2c90c7ba915e2ca88ce26b22d420a97a0f7a4,E014,unverified,not_estimated,descriptive,153
+C226,4 结果与分析 / 4.4 下游经验学习,interpretive,cd903497b357d8a599587b58a20c2bb9bfaa4a39689fb5c86a30a6fce595a843,E005;E014,unverified,not_estimated,not_applicable,155
+C083,4 结果与分析 / 4.4 下游经验学习,interpretive,bde45a0abe87f63e507c9b92d972dfc6fc405e654fdc412234adb24b6888c355,E014,unverified,not_estimated,descriptive,158
+C227,4 结果与分析 / 4.4 下游经验学习,interpretive,253ebd1cd7794b708db660dd8c86f930337777470c8550a9e04535f925a3b84d,E005;E014,unverified,not_estimated,not_applicable,159
+C228,4 结果与分析 / 4.4 下游经验学习,interpretive,3ac1c9c6c7142b36744f0e3506424097268dc618dfc47242386210dbe59d8e16,E005;E014,unverified,not_estimated,not_applicable,162
+C229,5 结论 / ,interpretive,c860c81e0ef9a689fd9350595d1f7c4d1dae0e305a5b3d7ff3e83da2ff71a3d6,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,166
+C102,局限性（Limitations） / ,interpretive,32aa5658b291ec3cf58dba9672ce9614d8ed2a46620f746bccfd696abcdf8912,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,170
+C103,局限性（Limitations） / ,interpretive,5963bf186db2838271af117e0fbcb799569ee32aea3700936a7fb039969ec5dd,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,172
+C104,局限性（Limitations） / ,interpretive,518030c21621ff58ac3c4e38fbbd639d2d1cb2e4525493f5cf8ffc22c3187364,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,174
+C105,局限性（Limitations） / ,interpretive,85e61204fc5411e2bad9f789961c45d5ca3ced5c5ba2ffbffb67da8106997b44,E009;E010;E011;E012;E013;E014;E015,unverified,not_estimated,not_applicable,176
+C106,参考文献 / ,factual,8dc2c422e0b9a4168020ec1c08b87c0d2e44c873c18f3f88642e975f3ca9fb5d,E001,unverified,not_estimated,not_applicable,180
+C107,参考文献 / ,factual,9f1d37efa401b01c4b4ea8c346fd3863006f25de41a4b45be94bd3f57687b127,E002,unverified,not_estimated,not_applicable,182
+C108,参考文献 / ,factual,e1b4dc11a5fb36b300c3c2b6a653d937ded82439ee87102305218cb908f715aa,E003,unverified,not_estimated,not_applicable,184
+C109,参考文献 / ,factual,100ed0195e7a7c377b534d94708bbc6c5651065d57b94aea0013fdfae5e7d970,E004,unverified,not_estimated,not_applicable,186
+C110,参考文献 / ,factual,9da035f68d0a89d32c51949680faf50367497ad4700e3564bface537e3ec9d75,E005,unverified,not_estimated,not_applicable,188
+C111,参考文献 / ,factual,b3c57b29dfe2321cc0104fc7c53c23d878dedc2c7325447e2d0644a84d049278,E006,unverified,not_estimated,not_applicable,190
+C112,参考文献 / ,factual,9c460b88122468a60cc86c2954a81e47a50f0cee5ef0005ca05c2701f30f49f7,E007,unverified,not_estimated,not_applicable,192
+C113,参考文献 / ,factual,e0a61df7e88619767862ff23f5630cd4b37cc86b4a0c0837c2b0578dfc9d6440,E008,unverified,not_estimated,not_applicable,194
+C114,附录 / A 探索与生成接口,method,f6bdaece5a42a386171e9ac70c82145fd125154ec8ca848f379e0cc9e82c5a12,E009;E010;E011;E012,unverified,not_estimated,not_applicable,202
+C115,附录 / A 探索与生成接口,method,b697777c60e0e9ac8716e169c8f56ac132a3d116db7d3d06bffc5ad3657a1f28,E009;E010;E011;E012,unverified,not_estimated,not_applicable,204
+C116,附录 / A 探索与生成接口,method,99e360505ae0ccb993f1bdb9117e01dd0c7e4ee7967d139237be15dd29cc18c3,E009;E010;E011;E012,unverified,not_estimated,not_applicable,208
+C230,附录 / A 探索与生成接口,method,8d04d5a0adc5646dd0513d3a18501f2a1adb4725f82d09f1bbc9d0b95653aa9d,E009;E010;E011;E012;E017,unverified,not_estimated,not_applicable,214
+C117,附录 / A 探索与生成接口,method,bfb1a87994881c650d60faa725835ad9843e3df4088f0772b14f91d4292f5163,E009;E010;E011;E012,unverified,not_estimated,not_applicable,218
+C118,附录 / A 探索与生成接口,method,b22a5e079dfcf7567d6803f09f73d95ae37f0a37466085d0946e32073e8aa28a,E009;E010;E011;E012,unverified,not_estimated,not_applicable,220
+C231,附录 / B 环境、患者与信息访问,method,8106b11b04093cdbadb71d4bbcd8f0d65962f89b144f1b7b6a325acc93992737,E009;E013;E016,unverified,not_estimated,not_applicable,224
+C033,附录 / B 环境、患者与信息访问,method,9e9c518d9a9d0ce6828b8ab83cefd69902765606e9065bc30a7f1d632b12581c,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,226
+C034,附录 / B 环境、患者与信息访问,method,2e37c85c64b9c2ebe206683673603157f5659ff77c1fb8d986df32a300558ac0,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,228
+C035,附录 / B 环境、患者与信息访问,method,b70fa700472b90265c890d4bccd95e3fc29afc05f8d82e80f56f07887a76757a,E010;E011;E012;E013;E015;E016,unverified,not_estimated,not_applicable,229
+C119,附录 / B 环境、患者与信息访问,method,7a498589148c9a6d92acd664db0a82e24dd39483c2d9b4cab5a42f3ad0f78307,E010;E011;E013;E014,unverified,not_estimated,not_applicable,232
+C120,附录 / B 环境、患者与信息访问,method,b962e95951c237002ffee382fdc305b6eaafa7187c7dd2b97500712481a69323,E010;E011;E013;E014,unverified,not_estimated,not_applicable,234
+C121,附录 / B 环境、患者与信息访问,method,ae41951efa1efdfef45a1f5fe977c19fa3f726a514b274ec8a88daf2bb47ec73,E010;E011;E013;E014,unverified,not_estimated,not_applicable,236
+C122,附录 / C 生成方法与预算,method,3484e47c26c146e65f1034b9ec86da3da66fd29766c28819a392ce1fd730f89f,E009;E013;E016,unverified,not_estimated,not_applicable,240
+C123,附录 / C 生成方法与预算,method,6ffecef3962154a2396ea3af201c474a1dc59a9e2e7de801966257e5178aba6d,E009;E013;E016,unverified,not_estimated,not_applicable,242
+C124,附录 / C 生成方法与预算,method,ba93c6d75b6e5eb7270e38a1cb8dc5e957790082a28412ff10a3ca458a4968d0,E009;E013;E016,unverified,not_estimated,not_applicable,244
+C125,附录 / C 生成方法与预算,method,b704abeb4bdbe8a741deb0a9f5b5c572e26daa8133cab3cdb376303324f3a3e9,E009;E013;E016,unverified,not_estimated,not_applicable,246
+C232,附录 / D 评分、汇总与统计,method,cec85e3de4429108005206fd9f99cce74620404c1fcca79892f1e1c59de3c41d,E012;E015,unverified,not_estimated,not_applicable,252
+C127,附录 / D 评分、汇总与统计,method,24cac98d6e1696bc7dc40f4b3fa3be4888fe2ef649aa72ebdfcf4d154387c500,E012;E015,unverified,not_estimated,descriptive,254
+C128,附录 / D 评分、汇总与统计,method,3de2fadbe14d7dc22c571ef90eed7c043a16310e290050883011a324d3000b3c,E012;E015,unverified,not_estimated,descriptive,256
+C129,附录 / D 评分、汇总与统计,method,7b1bc3b0d6819c1bfeae05294fa3f5e5eb7753ae46c6a71962aa5ced0906258f,E012;E015,unverified,not_estimated,descriptive,257
+C130,附录 / D 评分、汇总与统计,method,1785d5df1fe52221241ee40a2cda7ed7b2c12fccb5fbf42382ec48eb0b34f62c,E012;E015,unverified,not_estimated,descriptive,258
+C131,附录 / D 评分、汇总与统计,method,5ac9105e6e3c783424cc2625b438a0daa59be8de164fee377e5cfb5ad5539171,E012;E015,unverified,not_estimated,descriptive,259
+C132,附录 / D 评分、汇总与统计,method,0515e5794fcf0ba0474b738621693284680af3af2934633247e1f74708289508,E012;E015,unverified,not_estimated,descriptive,260
+C133,附录 / D 评分、汇总与统计,method,72548a389435c9fec24906b9caa694244d4877ddd379418adb529db7910abacf,E012;E015,unverified,not_estimated,descriptive,262
+C134,附录 / D 评分、汇总与统计,method,c6409e56573d15409e5d75564f38fbecc5395385d53f017707d1f9773cbd2e65,E012;E015,unverified,not_estimated,descriptive,264
+C135,附录 / D 评分、汇总与统计,method,5ce5a31a212e49c053387af513ec19b89108c29a9540c6a0622a5b1ad971d8b9,E012;E015,unverified,not_estimated,descriptive,267
+C136,附录 / D 评分、汇总与统计,method,c503e181e73ba64bd6497311349f0493a523ddb1a3fea8e6ff7de75d8da934ff,E012;E015,unverified,not_estimated,descriptive,270
+C137,附录 / D 评分、汇总与统计,method,568d0de86e06c1c81682f795da8acf2a9715eba45e775dde438db99a162c5df9,E012;E015,unverified,not_estimated,descriptive,274
+C138,附录 / D 评分、汇总与统计,method,1b2f2ef8a1c0b05147e4d8214b5148525163bd41c281ebb7a223def2291286aa,E012;E015,unverified,not_estimated,descriptive,277
+C139,附录 / D 评分、汇总与统计,method,4406a1c662c381c9f5a5ee4e8cf6da91f307e7ae4f96f36078fd4f1405b2c6fb,E012;E015,unverified,not_estimated,descriptive,280
+C233,附录 / D 评分、汇总与统计,method,9ffb57a2bd122abb08623c26659a7cc47c0541ade6a81f7c9f950dfec1c38186,E012;E015,unverified,not_estimated,not_applicable,282
+C141,附录 / D 评分、汇总与统计,method,d50892a08cd3a64c4082fb9b5f928900b5faaf769de9d1bbdf186155e470479c,E012;E015,unverified,not_estimated,descriptive,284
+C142,附录 / D 评分、汇总与统计,method,afc42e996d6cb5376c7f661aa1abb2cee596cc8a39c66051891a3496bec0bfdf,E012;E015,unverified,not_estimated,descriptive,286
+C143,附录 / D 评分、汇总与统计,method,f0e81f3d61d3001dfbfb9fc96686111f8d00b87ef80d484383d47c1705288397,E012;E015,unverified,not_estimated,descriptive,287
+C144,附录 / D 评分、汇总与统计,method,02a3f9a2a3cd5b055204b1b9b5ff5d12f5d061de1b0924c9fef2e17188d4865b,E012;E015,unverified,not_estimated,descriptive,288
+C145,附录 / D 评分、汇总与统计,method,187096f82db7688fb8c843c2136cd7300af58fc1b42e2f1f4c9482dc448ccea6,E012;E015,unverified,not_estimated,descriptive,289
+C146,附录 / D 评分、汇总与统计,method,36104cc72c862b15e72817872445c7a292dbf79c816a6d0c75d3e2f1a5cc7922,E012;E015,unverified,not_estimated,descriptive,290
+C147,附录 / D 评分、汇总与统计,method,b3d09962f968fcf54526a0b351373633d1efe6d0e924168d410f1cb768054fb9,E012;E015,unverified,not_estimated,descriptive,291
+C148,附录 / D 评分、汇总与统计,method,2c99ccc12a6bd29d55cdb1a1f50fa5d519a505b4ee5a8fa9bd468ff90cddb6d4,E012;E015,unverified,not_estimated,descriptive,292
+C149,附录 / D 评分、汇总与统计,method,7b4aa9b25bb890688f04b5a9d3634d6d217076a7856d68533e5b7417689fc6d7,E012;E015,unverified,not_estimated,descriptive,294
+C150,附录 / D 评分、汇总与统计,method,ce7e8ef68a152dc5537d5873903dc6400d61c6a501c0a4fbbf5498fc157de3c2,E012;E015,unverified,not_estimated,descriptive,298
+C151,附录 / D 评分、汇总与统计,method,08d97ccb1a0e9d4732240ab595ac7f328fc7b456e7ecc96bcb92ce817e20e4f9,E012;E015,unverified,not_estimated,descriptive,300
+C234,附录 / E 经验学习与官方评测,method,4d4daf31619fa536767640f6d172aeba6e1e202a060f0a55da01c13bd444e7f2,E014,unverified,not_estimated,not_applicable,304
+C153,附录 / E 经验学习与官方评测,method,367e8eba25b21ed5d8c57bcf8c589d9231287a2abad93f644c4ed93b917bccaf,E014,unverified,not_estimated,not_applicable,306
+C154,附录 / E 经验学习与官方评测,method,d6684257003a145d24122e257de71aafb3b34b5acb567304b693db22ad7a7587,E014,unverified,not_estimated,not_applicable,308
+C155,附录 / E 经验学习与官方评测,method,79ae3789b70a6557592bbf0facdff16f33ae634a37e44f8504c8da5eb07b7d8b,E014,unverified,not_estimated,not_applicable,309
+C156,附录 / E 经验学习与官方评测,method,13ddba6fd557616c8278c97ea32485706889f1e0a7c64a94926df5c15163faba,E014,unverified,not_estimated,not_applicable,310
+C157,附录 / E 经验学习与官方评测,method,256de57b7444421d1fcf0fa9943d9c0953f9f6d2dfb644197866df7193ddc600,E014,unverified,not_estimated,not_applicable,311
+C158,附录 / E 经验学习与官方评测,method,7d0109d01e8093f003739b47b7bb042143390d7c1aec72d4c1f77248faccb693,E014,unverified,not_estimated,not_applicable,313
+C159,附录 / E 经验学习与官方评测,method,677a902bc4e70126a8a8fee5df8b125c1097924dc3ae70bb2af93a879bb4172b,E014,unverified,not_estimated,not_applicable,315
+C160,附录 / E 经验学习与官方评测,method,75403af30cc1a09113990612d7fc550402f7ae92fdf3b6958d5cee196aacb6b5,E014,unverified,not_estimated,not_applicable,317
+C161,附录 / E 经验学习与官方评测,method,d7fb95c272dc7317779bc70781ad0fde4445ee4cdfbbeadb023e7483b0c57515,E014,unverified,not_estimated,not_applicable,319
+C235,附录 / F 补充结果与案例,interpretive,99137fb6a381e7d7cdd65e2052bd17b1767b0ffd5b8d0211a7bf9ac4f9080c78,E015;E018,unverified,not_estimated,not_applicable,325
+C236,附录 / F 补充结果与案例,interpretive,be051b45e0a5b50a1069dca9f9a797c3fc750ac4f4f63887bfd8c75681c1adaa,E015;E018,unverified,not_estimated,not_applicable,327
+C062,附录 / F 补充结果与案例,interpretive,55a1308f19de923407fcfdda8a8e82f2c16be63adc22fcdd23796bc8d5448392,E013;E015,unverified,not_estimated,descriptive,329
+C063,附录 / F 补充结果与案例,interpretive,9702c90c28a743f6ca2181607872ff75bd9f69974e722dc99b8fef24dcb394c9,E013;E015,unverified,not_estimated,descriptive,331
+C064,附录 / F 补充结果与案例,interpretive,47d4aabc06961804bf9a54d6dd81cd6ed011a49de75d49c27957e62facf6da82,E013;E015,unverified,not_estimated,descriptive,332
+C065,附录 / F 补充结果与案例,interpretive,fdbc801be3fb703f551c6df6127bdebb919a63d682f8bf401ed209a4648c479c,E013;E015,unverified,not_estimated,descriptive,333
+C066,附录 / F 补充结果与案例,interpretive,6de552da2e2d8c6655d4cd8516884f021a42a89db3e4d8210b58f83f3845bf5c,E013;E015,unverified,not_estimated,descriptive,334
+C067,附录 / F 补充结果与案例,interpretive,0404f6d6696a27a51c84a0372864a592ad27702b86cf01a3651915257b29090c,E013;E015,unverified,not_estimated,descriptive,335
+C068,附录 / F 补充结果与案例,interpretive,af4e17945b6234a397a2123332e47ef1c97c99ec53d4212f297b153d97d2afd2,E013;E015,unverified,not_estimated,descriptive,336
+C162,附录 / F 补充结果与案例,interpretive,1fff4041533fcce0ea122b7f69d7cd40bf3d245955c7f0aa6ce597f4dbdd5d3e,E015,unverified,not_estimated,not_applicable,339
+C163,附录 / F 补充结果与案例,interpretive,6367c0907a2ae3e48a071922f565634a076d665f3f4a58018e7f0bf8f75d40ec,E015,unverified,not_estimated,not_applicable,341
+C164,附录 / F 补充结果与案例,interpretive,f6eb22e3db14abef8eb074c853ae4e4f07750a570954f738463f086744c41fcc,E015,unverified,not_estimated,not_applicable,343
+C165,附录 / G 写作辅助工具,declaration,f11fca2af0fd43e4fcba46b82f40d6010f44cc7ebfaea35452e01dcd05c4a590,E008,unverified,not_estimated,not_applicable,347
