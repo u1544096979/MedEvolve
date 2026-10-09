@@ -1,0 +1,220 @@
+{
+  "environment": "MedAgentBench",
+  "generator": "gpt-4o-mini",
+  "requested_tasks": 150,
+  "source_files": [
+    "/home/gwh/code/MedEvolve/outputs/nuc-full-experiment-20261007/initial-strategy-comparison/gpt-4o-mini-9d70ff8e/medagentbench/batch-01/attempt-01",
+    "/home/gwh/code/MedEvolve/outputs/nuc-full-experiment-20261007/initial-strategy-comparison/gpt-4o-mini-9d70ff8e/medagentbench/batch-02/attempt-02",
+    "/home/gwh/code/MedEvolve/outputs/overnight-20261009/experiment3/gpt-4o-mini-9d70ff8e/medagentbench/checkpoint-1/batch-01/attempt-01",
+    "/home/gwh/code/MedEvolve/outputs/overnight-20261009/experiment3/gpt-4o-mini-9d70ff8e/medagentbench/checkpoint-1/batch-02/attempt-01",
+    "/home/gwh/code/MedEvolve/outputs/overnight-20261009/experiment3/gpt-4o-mini-9d70ff8e/medagentbench/checkpoint-2/batch-01/attempt-01",
+    "/home/gwh/code/MedEvolve/outputs/overnight-20261009/experiment3/gpt-4o-mini-9d70ff8e/medagentbench/checkpoint-2/batch-02/attempt-01",
+    "/home/gwh/code/MedEvolve/outputs/overnight-20261009/experiment3/gpt-4o-mini-9d70ff8e/medagentbench/checkpoint-3/batch-01/attempt-01",
+    "/home/gwh/code/MedEvolve/outputs/overnight-20261009/experiment3/gpt-4o-mini-9d70ff8e/medagentbench/checkpoint-3/batch-02/attempt-01",
+    "/home/gwh/code/MedEvolve/outputs/overnight-20261009/experiment3/gpt-4o-mini-9d70ff8e/medagentbench/checkpoint-4/batch-01/attempt-01",
+    "/home/gwh/code/MedEvolve/outputs/overnight-20261009/experiment3/gpt-4o-mini-9d70ff8e/medagentbench/checkpoint-4/batch-02/attempt-01"
+  ],
+  "interval": "patient-cluster 95% bootstrap CI",
+  "checkpoints": [
+    {
+      "round": 0,
+      "quality": {
+        "factual_accuracy": {
+          "mean": 3.75,
+          "ci_low": 3.5,
+          "ci_high": 3.9411764705882355
+        },
+        "clinical_soundness": {
+          "mean": 3.875,
+          "ci_low": 3.6923076923076925,
+          "ci_high": 4.0
+        },
+        "evidence_sufficiency": {
+          "mean": 3.625,
+          "ci_low": 3.3636363636363638,
+          "ci_high": 3.8461538461538463
+        },
+        "task_clarity": {
+          "mean": 4.75,
+          "ci_low": 4.5,
+          "ci_high": 4.9411764705882355
+        }
+      },
+      "verification_rate": {
+        "mean": 11.03448275862069,
+        "ci_low": 6.756756756756757,
+        "ci_high": 16.110103391982587,
+        "valid_bootstrap_samples": 1000
+      },
+      "high_order_valid_tasks": {
+        "mean": 12,
+        "ci_low": 6.0,
+        "ci_high": 18.0,
+        "valid_bootstrap_samples": 1000
+      },
+      "verified_tasks": 16,
+      "scored_tasks": 16,
+      "patients": 75
+    },
+    {
+      "round": 1,
+      "quality": {
+        "factual_accuracy": {
+          "mean": 3.7083333333333335,
+          "ci_low": 3.4615384615384617,
+          "ci_high": 3.909090909090909
+        },
+        "clinical_soundness": {
+          "mean": 3.6666666666666665,
+          "ci_low": 3.4073784722222222,
+          "ci_high": 3.8947368421052633
+        },
+        "evidence_sufficiency": {
+          "mean": 3.2083333333333335,
+          "ci_low": 2.8928330115830114,
+          "ci_high": 3.5
+        },
+        "task_clarity": {
+          "mean": 4.541666666666667,
+          "ci_low": 4.304347826086956,
+          "ci_high": 4.769230769230769
+        }
+      },
+      "verification_rate": {
+        "mean": 16.0,
+        "ci_low": 10.65,
+        "ci_high": 22.666666666666668,
+        "valid_bootstrap_samples": 1000
+      },
+      "high_order_valid_tasks": {
+        "mean": 19,
+        "ci_low": 11.0,
+        "ci_high": 28.0,
+        "valid_bootstrap_samples": 1000
+      },
+      "verified_tasks": 24,
+      "scored_tasks": 24,
+      "patients": 75
+    },
+    {
+      "round": 2,
+      "quality": {
+        "factual_accuracy": {
+          "mean": 4.111111111111111,
+          "ci_low": 4.0,
+          "ci_high": 4.285714285714286
+        },
+        "clinical_soundness": {
+          "mean": 3.888888888888889,
+          "ci_low": 3.7222222222222223,
+          "ci_high": 4.0
+        },
+        "evidence_sufficiency": {
+          "mean": 3.5,
+          "ci_low": 3.277651515151515,
+          "ci_high": 3.7333333333333334
+        },
+        "task_clarity": {
+          "mean": 4.611111111111111,
+          "ci_low": 4.374835526315789,
+          "ci_high": 4.846153846153846
+        }
+      },
+      "verification_rate": {
+        "mean": 12.92517006802721,
+        "ci_low": 8.16326530612245,
+        "ci_high": 18.493150684931507,
+        "valid_bootstrap_samples": 1000
+      },
+      "high_order_valid_tasks": {
+        "mean": 12,
+        "ci_low": 6.0,
+        "ci_high": 18.0,
+        "valid_bootstrap_samples": 1000
+      },
+      "verified_tasks": 19,
+      "scored_tasks": 18,
+      "patients": 75
+    },
+    {
+      "round": 3,
+      "quality": {
+        "factual_accuracy": {
+          "mean": 4.04,
+          "ci_low": 3.9,
+          "ci_high": 4.172413793103448
+        },
+        "clinical_soundness": {
+          "mean": 3.92,
+          "ci_low": 3.7497282608695652,
+          "ci_high": 4.0
+        },
+        "evidence_sufficiency": {
+          "mean": 3.4,
+          "ci_low": 3.1599473684210526,
+          "ci_high": 3.6486824324324325
+        },
+        "task_clarity": {
+          "mean": 4.56,
+          "ci_low": 4.36,
+          "ci_high": 4.761904761904762
+        }
+      },
+      "verification_rate": {
+        "mean": 16.666666666666668,
+        "ci_low": 10.666666666666666,
+        "ci_high": 23.333333333333332,
+        "valid_bootstrap_samples": 1000
+      },
+      "high_order_valid_tasks": {
+        "mean": 14,
+        "ci_low": 8.0,
+        "ci_high": 21.0,
+        "valid_bootstrap_samples": 1000
+      },
+      "verified_tasks": 25,
+      "scored_tasks": 25,
+      "patients": 75
+    },
+    {
+      "round": 4,
+      "quality": {
+        "factual_accuracy": {
+          "mean": 3.8,
+          "ci_low": 3.5,
+          "ci_high": 4.0
+        },
+        "clinical_soundness": {
+          "mean": 3.8,
+          "ci_low": 3.5,
+          "ci_high": 4.0
+        },
+        "evidence_sufficiency": {
+          "mean": 3.2,
+          "ci_low": 2.6666666666666665,
+          "ci_high": 3.6666666666666665
+        },
+        "task_clarity": {
+          "mean": 4.2,
+          "ci_low": 3.8181818181818183,
+          "ci_high": 4.6
+        }
+      },
+      "verification_rate": {
+        "mean": 6.666666666666667,
+        "ci_low": 3.3333333333333335,
+        "ci_high": 10.683333333333318,
+        "valid_bootstrap_samples": 1000
+      },
+      "high_order_valid_tasks": {
+        "mean": 10,
+        "ci_low": 5.0,
+        "ci_high": 16.024999999999977,
+        "valid_bootstrap_samples": 1000
+      },
+      "verified_tasks": 10,
+      "scored_tasks": 10,
+      "patients": 75
+    }
+  ]
+}
