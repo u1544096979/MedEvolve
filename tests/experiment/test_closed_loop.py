@@ -114,6 +114,44 @@ def install_dependencies(monkeypatch, failure=False, preparation_failure=False):
     return calls, generated
 
 
+def install_single_batch(monkeypatch, output_result, evaluation_result=None, release_error=None):
+    trajectory = PatientTrajectory(patient_id="h1", environment="fake", text="record", sources=[])
+
+    async def create(config):
+        return EnvironmentInstance(instance_id="cache", endpoint="fake", environment="fake")
+
+    async def prepare(instance, patient):
+        return trajectory
+
+    async def release(config, instance):
+        if release_error:
+            raise RuntimeError(release_error)
+
+    async def generate(*args, **kwargs):
+        return output_result
+
+    async def evaluate(task, *args, **kwargs):
+        return (evaluation_result.model_copy(update={"task_id": task.id}) if evaluation_result else
+                EvaluationResult(task_id=task.id, observed_state={}, status="invalid", runs=[]))
+
+    for name, function in dict(create_environment=create, prepare_trajectory=prepare,
+                               release_environment=release, evaluate_task=evaluate).items():
+        monkeypatch.setattr(runner, name, function)
+    monkeypatch.setattr(runner, "resolve_generator", lambda method: generate)
+
+
+def single_batch_config(path):
+    config = config_for(path)
+    return config.model_copy(update={"method": "singleshot", "evolution_patients": [],
+                                     "evaluation_patients": ["h1"], "round_patients": []})
+
+
+def single_question_batch():
+    return {"questions": [{"instruction": "question", "task_type": "诊断与解释",
+                            "reference_answer": "answer", "evidence": [],
+                            "execution_requirement": "read_only"}]}
+
+
 @pytest.mark.parametrize("failure", [False, True])
 def test_two_rounds_and_read_only_summary(tmp_path, monkeypatch, capsys, failure):
     calls, generated = install_dependencies(monkeypatch, failure)
@@ -189,6 +227,127 @@ def test_patient_boundaries_and_failed_preparation_release(tmp_path, monkeypatch
     assert summary["status"] == "failed"
     assert summary["evolution"]["completion_among_generated"]["rate"] is None
     assert summary["model_runs"]["known_token_totals"] == {}
+
+
+@pytest.mark.parametrize("questions, expected_yield", [(1, {"numerator": 1, "denominator": 2, "rate": 0.5}),
+                                                        (0, {"numerator": 0, "denominator": 2, "rate": 0})])
+@pytest.mark.parametrize("evaluation_status, failure_category", [("invalid", None), ("completed", "clinical")])
+def test_short_empty_invalid_and_clinical_are_normal_completion(
+        tmp_path, monkeypatch, questions, expected_yield, evaluation_status, failure_category):
+    batch = {"questions": single_question_batch()["questions"][:questions]}
+    evaluation = EvaluationResult(task_id="placeholder", observed_state={}, status=evaluation_status,
+                                  failure_category=failure_category, runs=[])
+    install_single_batch(monkeypatch, result(batch), evaluation)
+    config = single_batch_config(tmp_path / f"run-{questions}-{evaluation_status}")
+
+    asyncio.run(runner.run_experiment(config))
+
+    root = Path(config.output_dir)
+    manifest = json.loads((root / "manifest.json").read_text())
+    summary = summarize_run(config.output_dir)
+    assert manifest["status"] == "completed"
+    assert manifest["generation"] == {"status": "completed", "failed": 0, "incomplete": 0}
+    assert manifest["evaluation"] == {"status": "completed", "failed": 0, "incomplete": 0}
+    assert summary["evaluation"]["generation_yield"] == expected_yield
+    assert summary["evaluation"]["generation_failure_rate"]["numerator"] == 0
+    assert summary["evaluation"]["evaluation_failure_rate"]["numerator"] == 0
+
+
+@pytest.mark.parametrize("with_output, expected_status, expected_failed, expected_incomplete", [
+    (True, "completed", 0, 0), (False, "failed", 0, 1),
+])
+def test_budget_exhaustion_with_and_without_valid_batch(
+        tmp_path, monkeypatch, with_output, expected_status, expected_failed, expected_incomplete):
+    run = RunResult(output=single_question_batch() if with_output else None, trace=[], usage={},
+                    status="budget_exhausted")
+    install_single_batch(monkeypatch, run)
+    config = single_batch_config(tmp_path / f"budget-{with_output}")
+
+    asyncio.run(runner.run_experiment(config))
+
+    manifest = json.loads((Path(config.output_dir) / "manifest.json").read_text())
+    summary = summarize_run(config.output_dir)
+    assert manifest["status"] == expected_status
+    assert manifest["generation"]["failed"] == expected_failed
+    assert manifest["generation"]["incomplete"] == expected_incomplete
+    assert manifest["evaluation"]["incomplete"] == 0
+    assert summary["evaluation"]["generation_yield"] == {
+        "numerator": int(with_output), "denominator": 2, "rate": 0.5 if with_output else 0}
+    assert summary["evaluation"]["generation_failure_rate"]["numerator"] == 0
+
+
+def test_returned_failed_evaluation_is_counted_and_cli_exits_nonzero_after_persisting(
+        tmp_path, monkeypatch):
+    failed_evaluation = EvaluationResult(task_id="placeholder", observed_state={}, status="failed", runs=[])
+    install_single_batch(monkeypatch, result(single_question_batch()), failed_evaluation)
+    config = single_batch_config(tmp_path / "returned-failure")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(config.model_dump_json())
+    monkeypatch.setattr(sys, "argv", ["run", "--config", str(config_path)])
+
+    exit_code = main()
+
+    root = Path(config.output_dir)
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert exit_code == 1
+    assert manifest["status"] == "failed"
+    assert manifest["evaluation"]["failed"] == 1
+    assert (root / "evaluation" / "tasks.json").exists()
+    assert (root / "evaluation" / "evaluations.json").exists()
+
+
+def test_environment_release_failure_cannot_leave_completed_manifest(tmp_path, monkeypatch):
+    install_single_batch(monkeypatch, result({"questions": []}), release_error="release failed")
+    config = single_batch_config(tmp_path / "release-failure")
+
+    asyncio.run(runner.run_experiment(config))
+
+    root = Path(config.output_dir)
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["errors"][-1]["stage"] == "environment_release"
+    assert (root / "summary.json").exists()
+
+
+def test_legacy_completed_manifest_with_missing_evaluation_is_not_skipped(tmp_path):
+    from scripts.run_full_comparison import status_of
+
+    root = tmp_path / "legacy"
+    evaluation = root / "evaluation"
+    evaluation.mkdir(parents=True)
+    (root / "manifest.json").write_text(json.dumps({"status": "completed", "errors": []}))
+    (evaluation / "tasks.json").write_text(json.dumps([{"id": "task"}]))
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"output_dir": str(root)}))
+
+    assert status_of(config_path) == "failed"
+
+
+def test_nested_usage_ledger_is_counted_once(tmp_path):
+    from methods.common import summarize_results
+
+    aggregate = summarize_results([
+        ("known", RunResult(output=None, trace=[], usage={"input_tokens": 5, "output_tokens": 2},
+                            status="completed")),
+        ("unknown", RunResult(output=None, trace=[{"type": "model_request"}], usage={}, status="completed")),
+        ("tool", RunResult(output=None, trace=[], usage={"tool_calls": 1,
+                            "runs_without_known_tokens": 0}, status="completed")),
+    ])
+    root = tmp_path / "nested-usage"
+    root.mkdir()
+    config = single_batch_config(root)
+    (root / "config.json").write_text(config.model_dump_json())
+    (root / "manifest.json").write_text(json.dumps({"status": "completed", "errors": []}))
+    (root / "runs.json").write_text(json.dumps([{"stage": "evaluation/evaluate/nested",
+                                                  "result": aggregate.model_dump(mode="json")}]))
+
+    summary = summarize_run(str(root))
+
+    assert aggregate.usage["total_tokens"] == 7
+    assert aggregate.usage["runs_without_known_tokens"] == 1
+    assert summary["model_runs"]["known_token_totals"]["total_tokens"] == 7
+    assert summary["model_runs"]["runs_without_known_tokens"] == 1
+    assert summary["costs"]["evaluation"]["runs_without_known_tokens"] == 1
 
 
 def test_summary_ignores_legacy_quality_records():
