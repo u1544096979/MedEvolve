@@ -120,9 +120,9 @@ class FakeRuntime:
         self.task_types = list(task_types)
         self.conclusions = conclusions if conclusions is not None else [
             {"conclusion": "2024-03-05 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
-             "source_ids": [BLOCK_A]},
+             "evidence": [{"source_id": BLOCK_A, "statement": "血钾升高"}]},
             {"conclusion": "2024-03-06 诊断高钾血症", "R": "活动问题列表中的诊断",
-             "source_ids": [BLOCK_B]},
+             "evidence": [{"source_id": BLOCK_B, "statement": "诊断高钾血症"}]},
         ]
         self.llm_answer = llm_answer
         self.agent_answer = agent_answer
@@ -171,7 +171,8 @@ class FakeRuntime:
         """按调用方声明的输出结构给出答案：text 用于识别单对象关系题。"""
         if self.FINAL_OBJECT_MARK in text:
             answer = {"identifier": BLOCK_B, "relation": "该问题条目下的检验结果",
-                      "source_ids": [BLOCK_B]}
+                      "evidence": [{"source_id": BLOCK_A, "statement": "问题列表关联检验"},
+                                   {"source_id": BLOCK_B, "statement": "该问题条目包含检验结果"}]}
             return [answer] if as_list else answer
         return [self.agent_answer] if as_list else {"answer_list": [self.agent_answer]}
 
@@ -381,12 +382,13 @@ def test_depth_preserves_relation_facts_from_parent_record():
     pipe = Pipeline(trajectory(), [], directions(), TaskCraftParameters(),
                     Ledger(GenerationBudget(runtime_config())))
     existing = [Evidence(source_id=BLOCK_A, statement="父题事实")]
-    relation = {"identifier": "就诊", "relation": "包含该检验", "source_ids": [BLOCK_A]}
+    relation = {"identifier": "就诊", "relation": "包含该检验",
+                "evidence": [Evidence(source_id=BLOCK_A, statement="就诊包含该检验")]}
 
     added = pipe._relation_evidence([relation, relation], existing)
 
     assert [(item.source_id, item.statement) for item in added] == [
-        (BLOCK_A, "就诊：包含该检验")]
+        (BLOCK_A, "就诊包含该检验")]
     assert pipe._relation_evidence([relation], [*existing, *added]) == []
 
 
@@ -542,16 +544,16 @@ async def test_atomic_stage_rejects_question_the_model_can_answer_alone(patched,
 
 
 @pytest.mark.asyncio
-async def test_atomic_stage_drops_conclusions_without_patient_records(patched, environment):
+async def test_atomic_stage_preserves_unknown_source_evidence_for_public_verification(patched, environment):
     fake = FakeRuntime(conclusions=[{"conclusion": "外部文献结论", "R": "文献指标",
-                                     "source_ids": ["Paper/unknown"]}])
+                                     "evidence": [{"source_id": "Paper/unknown",
+                                                   "statement": "模型声称已有诊断"}]}])
     patched(fake)
     result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
 
-    assert result.status == "failed"
-    rejections = [entry for entry in stage_records(result, "atomic/verify")
-                  if entry.get("rejected") == "evidence"]
-    assert rejections and rejections[0]["reason"].startswith("结论没有属于当前患者")
+    assert result.status == "completed"
+    assert [(item.source_id, item.statement) for item in TaskBatch.model_validate(result.output).questions[0].evidence] == [
+        ("Paper/unknown", "模型声称已有诊断")]
 
 
 @pytest.mark.asyncio
@@ -590,7 +592,7 @@ async def test_depth_extension_depends_on_parent_and_keeps_sub_query_chain(patch
                        if entry["parents"][0] == atomic[1]["question"]["instruction"])
     question = GeneratedQuestion.model_validate(depth_entry["question"])
     assert question.reference_answer == "5.9 mmol/L"
-    assert {item.source_id for item in question.evidence} == {BLOCK_B}
+    assert {item.source_id for item in question.evidence} == {BLOCK_A, BLOCK_B}
     parent = atomic[1]
     # 子问题与中间标识属于 trace，不拼进最终答案。
     completed = next(entry for entry in stage_records(result, "depth/extension")
@@ -772,6 +774,37 @@ async def test_atomic_detail_keeps_conclusion_relation_sources_and_clean_answer(
 
 
 @pytest.mark.asyncio
+async def test_atomic_keeps_each_source_fact_and_unknown_reference(monkeypatch):
+    fake = FakeRuntime(conclusions=[{"conclusion": "检验异常并有相关诊断", "R": "异常与诊断关联",
+                                     "evidence": [
+                                         {"source_id": BLOCK_A, "statement": "血钾升高"},
+                                         {"source_id": "Condition/missing", "statement": "模型声称已有诊断"},
+                                     ]}])
+    pipeline = stage_pipeline(monkeypatch, fake)
+
+    candidates = await pipeline.atomic()
+
+    assert len(candidates) == 1
+    assert [(item.source_id, item.statement) for item in candidates[0].question.evidence] == [
+        (BLOCK_A, "血钾升高"), ("Condition/missing", "模型声称已有诊断")]
+
+
+def test_evidence_deduplicates_only_identical_source_fact_pairs():
+    pipe = Pipeline(trajectory(), [], directions(), TaskCraftParameters(),
+                    Ledger(GenerationBudget(runtime_config())))
+    records = [Evidence(source_id=BLOCK_A, statement="血钾升高"),
+               Evidence(source_id=BLOCK_B, statement="诊断高钾血症"),
+               Evidence(source_id=BLOCK_A, statement="血钾升高"),
+               Evidence(source_id=BLOCK_A, statement="复查血钾升高")]
+
+    evidence, source_ids = pipe.evidence(records)
+
+    assert [(item.source_id, item.statement) for item in evidence] == [
+        (BLOCK_A, "血钾升高"), (BLOCK_B, "诊断高钾血症"), (BLOCK_A, "复查血钾升高")]
+    assert source_ids == [BLOCK_A, BLOCK_B]
+
+
+@pytest.mark.asyncio
 async def test_atomic_zero_score_tool_answer_is_still_accepted(monkeypatch):
     """原子过滤只按核验出错判断：工具作答得 0 分但核验无出错时仍接纳候选。"""
     fake = FakeRuntime(agent_answer="无法确定")
@@ -823,9 +856,12 @@ async def test_depth_detail_keeps_results_trajectory_auxiliary_sources_and_failu
     assert detail["solve_trajectory"]["trajectory"][-1] == {
         "sub_query": atomic[0].question.instruction, "sub_answer": "5.9 mmol/L",
         "sub_trajectory": None}
-    assert detail["superset_source_ids"] == [BLOCK_B]
+    assert detail["superset_source_ids"] == [BLOCK_A, BLOCK_B]
     assert detail["relations"] == [{"identifier": BLOCK_B, "relation": "该问题条目下的检验结果",
-                                    "source_ids": [BLOCK_B]}]
+                                    "evidence": [{"source_id": BLOCK_A,
+                                                  "statement": "问题列表关联检验"},
+                                                 {"source_id": BLOCK_B,
+                                                  "statement": "该问题条目包含检验结果"}]}]
     assert {item.source_id for item in extended[0].question.evidence} == {BLOCK_A, BLOCK_B}
 
 
@@ -862,7 +898,8 @@ async def test_failed_extension_stage_does_not_discard_produced_candidates(patch
 @pytest.mark.asyncio
 async def test_batch_selection_follows_directions_and_two_question_cap(patched, environment):
     fake = FakeRuntime(conclusions=[{"conclusion": "2024-03-05 血钾 5.9 mmol/L",
-                                     "R": "该次检验的血钾结果", "source_ids": [BLOCK_A]}])
+                                     "R": "该次检验的血钾结果",
+                                     "evidence": [{"source_id": BLOCK_A, "statement": "血钾升高"}]}])
     patched(fake)
     requested = [GenerationDirection(task_type="诊断与解释", difficulty="基础", weight=1),
                  GenerationDirection(task_type="药物处方", difficulty="基础", weight=1)]
@@ -915,7 +952,8 @@ async def test_exhaustion_delivers_only_verified_candidates(patched, environment
 async def test_stages_use_the_shared_budget_as_their_only_limit(patched, environment):
     """原子与扩展阶段不再按阶段份额或预留轮数截断，跑满共享生成预算才停。"""
     conclusions = [{"conclusion": f"2024-03-{index:02d} 血钾 5.9 mmol/L", "R": "该次检验的血钾结果",
-                    "source_ids": [BLOCK_A]} for index in range(1, 9)]
+                    "evidence": [{"source_id": BLOCK_A, "statement": f"事实 {index}"}]}
+                   for index in range(1, 9)]
     fake = FakeRuntime(conclusions=conclusions)
     patched(fake)
     result = await generate_tasks(trajectory(), environment, directions(), runtime_config())
@@ -1326,7 +1364,8 @@ async def test_forced_final_keeps_author_answer_typing_for_depth_backward(monkey
     context = BackwardContext.model_validate(run.output)
     assert context.identifier == BLOCK_B
     assert context.relation == "该问题条目下的检验结果"
-    assert context.source_ids == [BLOCK_B]
+    assert [(item.source_id, item.statement) for item in context.evidence] == [
+        (BLOCK_A, "问题列表关联检验"), (BLOCK_B, "该问题条目包含检验结果")]
 
 
 @pytest.mark.asyncio
@@ -1606,7 +1645,7 @@ def test_selection_stops_at_the_direction_quota():
     assert [candidate.question.task_type for candidate in selected] == ["诊断与解释"]
 
 
-def test_selection_ignores_incomplete_candidates_and_foreign_sources():
+def test_selection_defers_evidence_validation_to_public_verification():
     qualified = qualified_candidates(2)
     unusable = [
         Candidate(question=GeneratedQuestion(instruction="  ", task_type="诊断与解释",
@@ -1635,8 +1674,10 @@ def test_selection_ignores_incomplete_candidates_and_foreign_sources():
     ]
     selected = select_candidates([*unusable, *qualified], directions(), {BLOCK_A}, 4)
 
-    assert sorted(candidate.question.instruction for candidate in selected) == sorted(
-        candidate.question.instruction for candidate in qualified)
+    assert len(selected) == 2
+    assert all(candidate.question.instruction.strip() and candidate.question.reference_answer.strip()
+               for candidate in selected)
+    assert all(candidate.question.decision_point is None for candidate in selected)
 
 
 def test_selection_does_not_read_the_generation_origin():

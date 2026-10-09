@@ -28,7 +28,7 @@ def derive_seed(experiment_seed: int, environment: str, patient_id: str, purpose
 
 def select_candidates(candidates: list, directions: list, source_ids, seed: int,
                       records: list | None = None) -> list:
-    """洗牌固定顺序候选池后按公共字段、患者来源与临床题型配额接纳；最多两题。
+    """洗牌候选池后按公共字段与临床题型配额接纳；证据完整性由公共核验判定。
 
     不读生成来源标签、内置评分或公共评测结果。``records`` 传入时逐条记录接纳与拒绝
     的真实原因，顺序与下面的接纳判据一致。
@@ -41,10 +41,8 @@ def select_candidates(candidates: list, directions: list, source_ids, seed: int,
         q = candidate.question
         if not q.instruction.strip() or not q.reference_answer.strip():
             reason = "empty_instruction_or_answer"
-        elif q.decision_point is not None or not q.evidence:
-            reason = "decision_point_or_missing_evidence"
-        elif any(e.source_id not in source_ids or not e.statement.strip() for e in q.evidence):
-            reason = "evidence_not_retrievable"
+        elif q.decision_point is not None:
+            reason = "decision_point_present"
         elif remaining[q.task_type] <= 0:
             reason = "task_type_quota_exhausted"
         else:

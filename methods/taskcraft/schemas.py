@@ -4,6 +4,7 @@ import json
 from typing import Literal
 
 from pydantic import BaseModel, Field, JsonValue, field_validator
+from contracts import Evidence
 
 __all__ = [
     "AgentThought", "AnswerList", "AnswerScore", "BackwardContext", "CleanedQuestion",
@@ -17,8 +18,8 @@ __all__ = [
 class Conclusion(BaseModel):
     conclusion: str
     R: str
-    # 医疗适配新增：支持该结论的病历记录块标识。
-    source_ids: list[str] = Field(default_factory=list)
+    # 每项事实与其直接来源保持配对。
+    evidence: list[Evidence] = Field(default_factory=list)
 
 
 class ConclusionList(BaseModel):
@@ -72,8 +73,8 @@ class QueryJudgement(BaseModel):
 class BackwardContext(BaseModel):
     identifier: str
     relation: str
-    # 医疗适配新增：支持该上下文与关系的病历记录块标识。
-    source_ids: list[str] = Field(default_factory=list)
+    # 每项关系事实与其直接来源保持配对。
+    evidence: list[Evidence] = Field(default_factory=list)
 
 
 class MergedQuestion(BaseModel):

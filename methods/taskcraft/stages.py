@@ -197,13 +197,15 @@ class Pipeline:
             labels.append(f"[{time}] {source_id}" if time else source_id)
         return "；".join(labels) if labels else self.trajectory.patient_id
 
-    def evidence(self, statement: str, source_ids: list[str]) -> tuple[list[Evidence], list[str]]:
-        accepted, evidence = [], []
-        for source_id in source_ids:
-            if source_id in self.source_ids and source_id not in accepted:
-                accepted.append(source_id)
-                evidence.append(Evidence(source_id=source_id, statement=statement))
-        return evidence, accepted
+    def evidence(self, records: list[Evidence]) -> tuple[list[Evidence], list[str]]:
+        accepted, seen = [], set()
+        for raw_record in records:
+            record = Evidence.model_validate(raw_record)
+            key = (record.source_id, record.statement)
+            if key not in seen:
+                seen.add(key)
+                accepted.append(record)
+        return accepted, list(dict.fromkeys(record.source_id for record in accepted))
 
     async def run(self) -> None:
         atomic = await self.atomic()
@@ -310,11 +312,7 @@ class Pipeline:
             self.record("atomic/verify", question=item["question"], **outcome.record())
             if outcome.error is not None:
                 continue
-            evidence, source_ids = self.evidence(item["conclusion"], item["source_ids"])
-            if not evidence:
-                self.record("atomic/verify", question=item["question"], rejected="evidence",
-                            reason="结论没有属于当前患者的记录块标识", reported=item["source_ids"])
-                continue
+            evidence, source_ids = self.evidence(item["evidence"])
             accepted.append(Candidate(
                 question=GeneratedQuestion(
                     instruction=item["question"], task_type=item["task_type"],
@@ -333,7 +331,8 @@ class Pipeline:
         return accepted
 
     async def _initial_question(self, conclusion) -> dict | None:
-        locator = self.locator(conclusion.source_ids)
+        evidence, source_ids = self.evidence(conclusion.evidence)
+        locator = self.locator(source_ids)
         payload = (f"\nData to be Processed:\nID: {locator}\n"
                    f"R: {conclusion.R}\nA: {conclusion.conclusion}\n")
         run = await self.ledger.llm(
@@ -366,7 +365,7 @@ class Pipeline:
         return {"question": cleaned.question, "task_type": parsed.task_type,
                 "answer": cleaned.refined_answer, "relation": conclusion.R,
                 "execution_requirement": cleaned.execution_requirement,
-                "conclusion": conclusion.conclusion, "source_ids": list(conclusion.source_ids),
+                "conclusion": conclusion.conclusion, "evidence": evidence,
                 "locator": locator}
 
     # ------------------------------------------------------------------ 宽度扩展
@@ -620,7 +619,7 @@ class Pipeline:
                                  "valid_hop": valid_hop, "trajectory": None,
                                  "agent_score": None, "llm_score": None})
             relations.append({"identifier": backward["identifier"], "relation": backward["relation"],
-                              "source_ids": list(backward["source_ids"])})
+                              "evidence": [record.model_dump() for record in backward["evidence"]]})
             last_identifier = backward["identifier"]
             full_query = merged_query
             if valid_hop >= self.parameters.max_hops:
@@ -646,8 +645,8 @@ class Pipeline:
             locator=last_identifier,
             detail={"full_results": full_results, "solve_trajectory": solve_trajectory,
                     "relations": relations,
-                    "superset_source_ids": [source_id for hop in relations
-                                            for source_id in hop["source_ids"]],
+                    "superset_source_ids": list(dict.fromkeys(
+                        record["source_id"] for hop in relations for record in hop["evidence"])),
                     "failed_attempts": failed},
         )
 
@@ -704,7 +703,7 @@ class Pipeline:
         self.record("depth/backward", status="completed", element=element,
                     identifier=context.identifier, relation=context.relation, query=query)
         return {"query": query, "identifier": context.identifier, "relation": context.relation,
-                "source_ids": list(context.source_ids)}
+            "evidence": context.evidence}
 
     async def _merge(self, prompts_depth: dict, full_query: str, now_query: str,
                      last_identifier: str, golden_answer: str) -> str | None:
@@ -766,7 +765,7 @@ class Pipeline:
         evidence = []
         seen = {(record.source_id, record.statement) for record in existing}
         for hop in relations:
-            records, _ = self.evidence(f"{hop['identifier']}：{hop['relation']}", hop["source_ids"])
+            records, _ = self.evidence(hop["evidence"])
             for record in records:
                 key = (record.source_id, record.statement)
                 if key not in seen:
