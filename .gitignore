@@ -11,6 +11,9 @@ outputs/
 
 .benchmark_sources/
 
+# 本地安装的 pi 技能包
+.pi/
+
 # LaTeX 编译产物
 *.aux
 *.bbl
