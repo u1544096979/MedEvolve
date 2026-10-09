@@ -1,11 +1,19 @@
 """Build deterministic inputs for quality and difficulty reviewers."""
 
-import copy
 import json
 from datetime import datetime, timezone
 
 from contracts import ComplexityMetrics, PatientTrajectory, Task, Verification
-from environments.fhir import decode_document_notes
+
+
+def _parse_datetime(value) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
 
 def _record(source) -> tuple[dict, datetime | None]:
@@ -15,37 +23,25 @@ def _record(source) -> tuple[dict, datetime | None]:
         return {"source_id": source.source_id, "record": source.statement}, None
     if not isinstance(parsed, dict):
         return {"source_id": source.source_id, "record": source.statement}, None
-    original = copy.deepcopy(parsed)
-    try:
-        parsed = decode_document_notes(parsed)
-    except (ValueError, UnicodeDecodeError):
-        parsed = original
     moment = None
     for key in ("effectiveDateTime", "onsetDateTime", "performedDateTime",
                 "occurrenceDateTime", "authoredOn", "sent", "start", "date",
                 "recordedDate", "issued"):
-        value = parsed.get(key)
-        if isinstance(value, str):
-            try:
-                moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                if moment.tzinfo is None:
-                    moment = moment.replace(tzinfo=timezone.utc)
-                break
-            except ValueError:
-                continue
+        moment = _parse_datetime(parsed.get(key))
+        if moment is not None:
+            break
     if moment is None:
         for key in ("effectivePeriod", "onsetPeriod", "performedPeriod", "period"):
             period = parsed.get(key)
             if isinstance(period, dict):
-                value = period.get("start")
-                if isinstance(value, str):
-                    try:
-                        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                        if moment.tzinfo is None:
-                            moment = moment.replace(tzinfo=timezone.utc)
-                        break
-                    except ValueError:
-                        continue
+                moment = _parse_datetime(period.get("start"))
+                if moment is not None:
+                    break
+        if moment is None:
+            context = parsed.get("context")
+            period = context.get("period") if isinstance(context, dict) else None
+            if isinstance(period, dict):
+                moment = _parse_datetime(period.get("start"))
     return {"source_id": source.source_id, "record": parsed}, moment
 
 
@@ -54,10 +50,9 @@ def review_material(task: Task, trajectory: PatientTrajectory,
                     *, mode: str) -> dict:
     """Return full or compact clinical context for scoring calls only.
 
-    Compact mode keeps every trajectory source and every clinical field. Its
-    reduction comes from omitting the duplicated rendered trajectory text and
-    placing cited sources apart from the chronologically ordered remaining
-    records.
+    Compact mode keeps every trajectory source and every clinical field,
+    separates cited sources from the chronologically ordered remaining records,
+    and preserves already-decoded source values as stored in the trajectory.
     """
     task_data = task.model_dump(include={
         "instruction", "task_type", "reference_answer", "evidence",
