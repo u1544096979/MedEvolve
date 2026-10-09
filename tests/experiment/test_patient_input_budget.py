@@ -47,4 +47,7 @@ async def test_oversized_patient_does_not_block_other_patients(tmp_path, monkeyp
     for index, patient_id in enumerate(("bad", "good")):
         saved = json.loads((tmp_path / f"run/trajectories/evaluation/{index:04d}.json").read_text())
         assert saved == originals[patient_id]
-    assert json.loads((tmp_path / "run/manifest.json").read_text())["status"] == "completed"
+    manifest = json.loads((tmp_path / "run/manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["generation"]["failed"] == 1
+    assert manifest["evaluation"]["failed"] == 0

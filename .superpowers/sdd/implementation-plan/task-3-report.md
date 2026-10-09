@@ -30,7 +30,7 @@ PYTHONPATH="$PWD" /Users/guagua/code/MedEvolve/.venv/bin/python -m pytest tests/
 46 passed
 ```
 
-更广的 `tests/experiment experiments` 回归结果为 145 passed、1 failed。唯一失败是 `tests/experiment/test_patient_input_budget.py::test_oversized_patient_does_not_block_other_patients` 仍断言存在生成失败时 manifest 为 `completed`；当前阶段账本会将该 run 标记为 `failed`。该测试不属于本任务范围，且修改会违背已集成的 manifest 状态语义，因此保留原状。
+更广的 `tests/experiment experiments` 回归现为 **147 passed**。超预算患者用例保留患者隔离和轨迹完整性断言，并验证整体 manifest 为 `failed`、generation.failed 为 1、evaluation.failed 为 0。
 
 ## 约束与风险
 
