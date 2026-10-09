@@ -139,6 +139,10 @@ def test_two_rounds_and_read_only_summary(tmp_path, monkeypatch, capsys, failure
     assert summary["evolution"]["production"] == {"numerator": 5 if failure else 8, "denominator": 8,
                                                    "rate": 5 / 8 if failure else 1}
     assert summary["evaluation"]["completion_among_generated"] == {"numerator": 2, "denominator": 2, "rate": 1}
+    assert summary["evaluation"]["generation_yield"]["denominator"] == 2
+    assert summary["evaluation"]["generation_failure_rate"]["numerator"] == 0
+    assert summary["evolution"]["generation_failure_rate"]["numerator"] == int(failure)
+    assert summary["evolution"]["evaluation_failure_rate"]["numerator"] == int(failure)
     reviews = 4 if failure else 8
     assert summary["evolution"]["quality_summary"]["task_clarity"] == {
         "mean": 4.0, "median": 4.0, "distribution": {"4": reviews}, "high_quality_rate": 1.0}
@@ -203,6 +207,31 @@ def test_summary_ignores_legacy_quality_records():
     assert summarize_difficulty([legacy]) == {}
     assert summarize_quality([legacy, current])["task_clarity"]["mean"] == 4.0
     assert summarize_difficulty([legacy, current])["reasoning_depth"]["distribution"] == {"2": 1}
+
+
+def test_summary_counts_unknown_model_requests_once_and_excludes_explicit_tool_record(tmp_path):
+    root = tmp_path / "usage"
+    config = config_for(root)
+    root.mkdir()
+    (root / "config.json").write_text(config.model_dump_json())
+    (root / "manifest.json").write_text(json.dumps({"status": "completed", "errors": []}))
+    records = [
+        {"stage": "run/evaluate/known", "result": {"status": "completed", "usage": {
+            "input_tokens": 5, "output_tokens": 2, "total_tokens": 7}}},
+        {"stage": "run/evaluate/unknown", "result": {"status": "completed", "trace": [{"type": "model_request"}],
+                                                           "usage": {"model_turns": 0}}},
+        {"stage": "run/evaluate/tool", "result": {"status": "completed", "usage": {
+            "model_turns": 0, "tool_calls": 1, "runs_without_known_tokens": 0}}},
+    ]
+    (root / "runs.json").write_text(json.dumps(records))
+
+    summary = summarize_run(str(root))
+
+    assert summary["model_runs"]["known_token_totals"]["total_tokens"] == 7
+    assert summary["model_runs"]["runs_without_known_tokens"] == 1
+    assert summary["costs"]["evaluation"]["runs_without_known_tokens"] == 1
+
+
 def test_taskcraft_generation_receives_the_experiment_seed(tmp_path, monkeypatch):
     """公共分派把实验种子绑定到 TaskCraft 入口，其他方法入口不变。"""
     released, generated, trajectories = [], [], {}

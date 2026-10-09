@@ -24,8 +24,8 @@ def normalize_usage(usage: dict) -> dict:
               "total_tokens": usage.get("total_tokens")}
     if result["total_tokens"] is None and all(result[k] is not None for k in ("input_tokens", "output_tokens")):
         result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
-    if "runs_without_known_tokens" in usage:
-        result["runs_without_known_tokens"] = usage["runs_without_known_tokens"]
+    result["runs_without_known_tokens"] = usage.get(
+        "runs_without_known_tokens", int(result["total_tokens"] is None))
     return result
 
 
@@ -131,7 +131,7 @@ def summarize_results(records: list[tuple[str, RunResult]], *, output: TaskBatch
              for field in USAGE_FIELDS}
     usage["model_turns"] = usage["model_turns"] or 0
     usage["tool_calls"] = usage["tool_calls"] or 0
-    usage["runs_without_known_tokens"] = sum(u.get("runs_without_known_tokens", int(u["total_tokens"] is None)) for u in usages)
+    usage["runs_without_known_tokens"] = sum(u["runs_without_known_tokens"] for u in usages)
     final = records[-1][1] if records else None
     final_status = status or (final.status if final else "completed")
     if output is not None and final_status in {"completed", "budget_exhausted"}:

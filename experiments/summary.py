@@ -105,6 +105,10 @@ def summarize_run(output_dir: str) -> JsonObject:
         verification = [e for e in evaluations if e.get("verification") is not None]
         completion = [e for e in evaluations if e.get("completion") is not None]
         completed = sum(e["completion"]["completed"] for e in completion)
+        produced = sum(int(a.get("produced", 0)) for a in attempts)
+        generation_requested = sum(int(a.get("requested", 0)) for a in attempts)
+        generation_failed = sum(a.get("status") == "failed" for a in attempts)
+        evaluation_failed = sum(e.get("status") == "failed" for e in evaluations)
         quality = summarize_quality(evaluations)
         difficulty = summarize_difficulty(evaluations)
         return {
@@ -115,6 +119,9 @@ def summarize_run(output_dir: str) -> JsonObject:
             "generation_errors": [a for a in attempts if a.get("error")],
             "actual_questions": len(tasks),
             "production": _ratio(len(tasks), requested),
+            "generation_yield": _ratio(produced, generation_requested),
+            "generation_failure_rate": _ratio(generation_failed, len(attempts)),
+            "evaluation_failure_rate": _ratio(evaluation_failed, len(tasks)),
             "evaluation_records": len(evaluations),
             "validity_among_verified": _ratio(sum(e["verification"]["valid"] for e in verification), len(verification)),
             "completion_among_generated": _ratio(completed, len(tasks)),
@@ -132,11 +139,13 @@ def summarize_run(output_dir: str) -> JsonObject:
     known = 0
     costs = {}
     partially_known = 0
+    unknown_token_runs = 0
     for record in records:
         usage = normalize_usage(record["result"].get("usage", {}))
         has_tokens = any(usage[k] is not None for k in ("input_tokens", "output_tokens", "total_tokens"))
         known += has_tokens
-        missing = usage.get("runs_without_known_tokens", int(not has_tokens))
+        missing = usage["runs_without_known_tokens"]
+        unknown_token_runs += missing
         partially_known += bool(has_tokens and missing)
         for key in ("input_tokens", "output_tokens", "total_tokens"):
             if usage[key] is not None:
@@ -175,5 +184,5 @@ def summarize_run(output_dir: str) -> JsonObject:
                        "known_token_totals": dict(tokens),
                        "runs_with_known_tokens": known,
                        "runs_with_partial_tokens": partially_known,
-                       "runs_without_known_tokens": len(records) - known},
+                       "runs_without_known_tokens": unknown_token_runs},
     }
