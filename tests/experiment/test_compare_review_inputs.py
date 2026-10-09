@@ -41,7 +41,8 @@ def _scores(count=3):
                                  reason="reason", complexity_metrics=ComplexityMetrics(
                                      evidence_count=1, resource_type_count=1,
                                      time_span_days=None))
-    runs = [RunResult(trace=[], usage={"input_tokens": 10, "output_tokens": 2},
+    runs = [RunResult(trace=[{"type": "model_request"}],
+                      usage={"model_turns": 1, "input_tokens": 10, "output_tokens": 2},
                       status="completed") for _ in range(count)]
     return quality, difficulty, runs
 
@@ -86,4 +87,39 @@ def test_cli_persists_cases_runs_and_comparison(monkeypatch, tmp_path):
     assert all(item["trajectory_path"].endswith("trajectory.json") for item in written_cases)
     assert len(written_runs) == comparison["request_count"] == 72
     assert all(item["status"] == "completed" for item in written_runs)
+    assert all(item["request_count"] == 1 for item in written_runs)
     assert fake.await_count == 18
+
+
+def test_comparison_counts_requests_separately_from_attempts_and_retains_raw_runs():
+    successful = RunResult(trace=[{"type": "model_request"}],
+                           usage={"model_turns": 1, "input_tokens": 10,
+                                  "output_tokens": 2, "total_tokens": 12},
+                           status="completed").model_dump(mode="json")
+    pre_call_failure = RunResult(trace=[], usage={"model_turns": 0}, status="failed",
+                                 error="ContextBudgetError").model_dump(mode="json")
+    started_unknown = RunResult(trace=[{"type": "model_request"}], usage={"model_turns": 1},
+                                status="failed", error="provider error").model_dump(mode="json")
+    records = [{"case_id": "case", "scoring_mode": "joint", "review_input_mode": "full",
+                "status": "failed", "runs": [successful, pre_call_failure, started_unknown],
+                "scores": None}]
+
+    summary = compare._comparison(records)
+
+    assert summary["request_count"] == 2
+    assert summary["attempt_count"] == 3
+    assert summary["failed_attempts"] == 2
+    assert summary["failed_requests"] == 1
+    assert summary["usage_totals"] == {
+        "input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+        "unknown_requests": 1, "cost_usd": None,
+    }
+    assert summary["cases"][0]["variants"]["joint/full"]["statistics"] == {
+        "attempt_count": 3, "request_count": 2, "unknown_request_attempts": 0,
+        "failed_attempts": 2, "failed_requests": 1,
+        "usage_totals": {"input_tokens": 10, "output_tokens": 2,
+                          "total_tokens": 12, "unknown_requests": 1,
+                          "cost_usd": None},
+    }
+    assert records[0]["runs"] == [successful, pre_call_failure, started_unknown]
+    assert compare._request_count({"trace": [], "usage": {}}) is None

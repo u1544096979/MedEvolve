@@ -93,6 +93,43 @@ def _usage(usage: dict) -> dict:
                              else usage.get("total_tokens"))}
 
 
+def _request_count(run: dict) -> int | None:
+    """返回有轨迹或显式 model_turns 证明的请求数；缺少两者时保留未知。"""
+    traced = sum(item.get("type") == "model_request" for item in run.get("trace", []))
+    if traced:
+        return traced
+    turns = (run.get("usage") or {}).get("model_turns")
+    return turns if isinstance(turns, int) and turns >= 0 else None
+
+
+def _run_statistics(runs: list[dict]) -> dict:
+    requests = [(_request_count(run), _usage(run.get("usage", {}))) for run in runs]
+
+    def total(key):
+        values = [usage[key] for _, usage in requests if usage[key] is not None]
+        return sum(values) if values else None
+
+    failed = [run for run in runs if run["status"] != "completed"]
+    return {
+        "attempt_count": len(runs),
+        "request_count": sum(count for count, _ in requests if count is not None),
+        "unknown_request_attempts": sum(count is None for count, _ in requests),
+        "failed_attempts": len(failed),
+        "failed_requests": sum(count for run in failed
+                                if (count := _request_count(run)) is not None),
+        "usage_totals": {
+            "input_tokens": total("input_tokens"),
+            "output_tokens": total("output_tokens"),
+            "total_tokens": total("total_tokens"),
+            "unknown_requests": sum(
+                count for count, usage in requests
+                if count is not None and count > 0 and usage["total_tokens"] is None
+            ),
+            "cost_usd": None,
+        },
+    }
+
+
 async def _execute(cases: list[dict], args) -> tuple[list[dict], list[dict]]:
     semaphore = asyncio.Semaphore(args.concurrency)
     records = []
@@ -119,7 +156,9 @@ async def _execute(cases: list[dict], args) -> tuple[list[dict], list[dict]]:
                               "quality": exc.quality.model_dump(mode="json") if exc.quality else None,
                               "difficulty": exc.difficulty.model_dump(mode="json") if exc.difficulty else None,
                           })
-        record["request_count"] = len(record["runs"])
+        counts = [_request_count(run) for run in record["runs"]]
+        record["request_count"] = sum(count for count in counts if count is not None)
+        record["unknown_request_attempts"] = sum(count is None for count in counts)
         return case_index, record
 
     jobs = [one(index, case, scoring_mode, input_mode)
@@ -138,6 +177,7 @@ async def _execute(cases: list[dict], args) -> tuple[list[dict], list[dict]]:
                              "scoring_mode": record["scoring_mode"],
                              "review_input_mode": record["review_input_mode"],
                              "status": run["status"],
+                             "request_count": _request_count(run),
                              "model_identity": identity, "run": run})
     return records, requests
 
@@ -152,7 +192,9 @@ def _comparison(records: list[dict]) -> dict:
                   "task_clarity", "reasoning_depth")
     for case_id, variants in sorted(by_case.items()):
         compact_variants = {
-            name: {key: value for key, value in record.items() if key != "runs"}
+            name: {**{key: value for key, value in record.items()
+                      if key not in {"runs", "request_count", "unknown_request_attempts"}},
+                   "statistics": _run_statistics(record["runs"])}
             for name, record in variants.items()
         }
         base = variants.get("joint/full")
@@ -172,18 +214,7 @@ def _comparison(records: list[dict]) -> dict:
         comparisons.append({"case_id": case_id, "variants": compact_variants,
                             "deltas_vs_joint_full": deltas})
     raw_runs = [run for item in records for run in item["runs"]]
-    usages = [_usage(run.get("usage", {})) for run in raw_runs]
-    def total(key):
-        values = [usage[key] for usage in usages]
-        return sum(values) if values and all(value is not None for value in values) else None
-    return {"cases": comparisons, "request_count": len(raw_runs),
-            "failed_runs": sum(run["status"] != "completed" for run in raw_runs),
-            "usage_totals": {"input_tokens": total("input_tokens"),
-                             "output_tokens": total("output_tokens"),
-                             "total_tokens": total("total_tokens"),
-                             "unknown_requests": sum(any(value is None for value in usage.values())
-                                                     for usage in usages),
-                             "cost_usd": None}}
+    return {"cases": comparisons, **_run_statistics(raw_runs)}
 
 
 def main(argv=None) -> None:
