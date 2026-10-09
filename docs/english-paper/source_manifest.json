@@ -1,0 +1,26 @@
+{
+  "document": "MedEvolve English manuscript",
+  "target": "NAACL",
+  "template": "User-provided ACL archive; style and bibliography style preserved byte-for-byte",
+  "source_document": "papers/medevolve.md",
+  "evidence_record": "docs/paper-revision/source_manifest.json",
+  "claim_record": "docs/paper-revision/claims.csv",
+  "human_verification_status": "unverified",
+  "submission_ready": false,
+  "results_status": "pending",
+  "figures": 5,
+  "tables": 8,
+  "files": {
+    "papers/medevolve.md": "3aacef93b050dad34b545a99620934d1a338053b826a9317f3373fc0e3adc7d1",
+    "papers/english/medevolve.tex": "bf62b6c334dfea3741842eeae06e1a449a655deb7e2947475940a11b3ce9d87e",
+    "papers/english/references.bib": "80199923e1279b69fede7e6d89b2a14c4c2bbdb1083c273a72bfa316a23fbb59",
+    "docs/paper-revision/source_manifest.json": "01926f5277d0ba04cebd4fa56b0d4b156360b9655241367677b2b6c8321e6aa5",
+    "docs/paper-revision/claims.csv": "a76bb3e59f2e51367b2831a1d826c48071644ac08fa5551ec3cb733c2dec1495"
+  },
+  "layout_mode": "preprint",
+  "main_figures": 3,
+  "main_tables": 3,
+  "main_content_limit_pages": 8,
+  "main_content_end_page": 6,
+  "total_pdf_pages": 11
+}
