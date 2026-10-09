@@ -10,3 +10,17 @@ outputs/
 .latex-build/
 
 .benchmark_sources/
+
+# LaTeX 编译产物
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex*
+missfont.log
+papers/english/.build/
+# 由 papers/medevolve.tex 的 filecontents 生成
+papers/acl.sty
