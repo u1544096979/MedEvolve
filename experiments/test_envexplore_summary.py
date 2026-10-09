@@ -1,4 +1,5 @@
 import json
+from contracts import EnvironmentExploration, FrozenEnvironmentGuidance, RunResult
 from experiments.summary import summarize_run
 
 def test_method_cost_includes_failed_exploration_and_generation_only(tmp_path):
@@ -25,3 +26,24 @@ def test_method_cost_includes_failed_exploration_and_generation_only(tmp_path):
     assert costs["method"]["total_tokens"] == 22
     assert costs["method"]["model_turns"] == 3
     assert costs["method"]["tool_calls"] == 1 and costs["method"]["runs"] == 2
+
+
+def test_frozen_exploration_is_reference_cost_not_batch_method_cost(tmp_path):
+    frozen_path = tmp_path / "frozen.json"
+    frozen_path.write_text(FrozenEnvironmentGuidance(
+        environment="PhysicianBench", exploration_patients=["train"],
+        guidance=EnvironmentExploration(guidance="已验证"),
+        exploration_run=RunResult(output={"guidance": "已验证"}, trace=[],
+            usage={"model_turns": 5, "tool_calls": 2, "input_tokens": 100,
+                   "output_tokens": 50, "total_tokens": 150}, status="completed"),
+        runtime={"models": {}, "budgets": {}},
+    ).model_dump_json())
+    config = dict(run_id="batch", method="envexplore", evolution_patients=["train"],
+        evaluation_patients=["test"], round_patients=[], runtime={"budgets": {}},
+        evaluation={"runtime": {"budgets": {}}}, guidance_path=str(frozen_path))
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    (tmp_path / "manifest.json").write_text(json.dumps({"status": "completed", "errors": []}))
+    (tmp_path / "runs.json").write_text("[]")
+    costs = summarize_run(str(tmp_path))["costs"]
+    assert costs["method"]["total_tokens"] == 0
+    assert costs["frozen_exploration_reference"]["total_tokens"] == 150

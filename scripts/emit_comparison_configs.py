@@ -167,13 +167,31 @@ def main() -> None:
         if not Path(guidance).exists():
             raise ValueError(f"guidance is missing next to the frozen strategy: {guidance}")
 
+    exploration_guidance = None
+    if args.method == "envexplore" and args.slug in {"physicianbench", "medagentbench"}:
+        exploration_output = root / "exploration"
+        exploration_payload = _payload(
+            template, spec, run_id=f"full-{args.slug}-envexplore-exploration",
+            output_dir=exploration_output, slug=args.slug, method=args.method,
+            evolution=evolution_patients, evaluation=[], rounds=[],
+            manager_url=args.manager_url,
+        )
+        exploration_payload["exploration_only"] = True
+        ExperimentConfig.model_validate(exploration_payload)
+        exploration_path = args.configs_dir / f"full-{args.slug}-envexplore-exploration.json"
+        _save(exploration_path, exploration_payload)
+        written.append(exploration_path)
+        exploration_guidance = str(exploration_output / "environment_guidance.json")
+
     for index, batch in enumerate(batches, start=1):
         payload = _payload(
             template, spec, run_id=f"full-{args.slug}-{args.method}-batch-{index:02d}",
             output_dir=root / f"batch-{index:02d}", slug=args.slug, method=args.method,
-            evolution=(evolution_patients if spec.get("exploration_in_batches") else []),
+            evolution=(evolution_patients if (exploration_guidance or
+                                               (spec.get("exploration_in_batches") and
+                                                args.slug == "fhir-agentbench")) else []),
             evaluation=batch, rounds=[], manager_url=args.manager_url,
-            strategy=strategy, guidance=guidance,
+            strategy=strategy, guidance=guidance or exploration_guidance,
         )
         ExperimentConfig.model_validate(payload)
         path = args.configs_dir / f"full-{args.slug}-{args.method}-batch-{index:02d}.json"

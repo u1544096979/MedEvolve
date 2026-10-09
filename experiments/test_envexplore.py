@@ -5,7 +5,8 @@ from pathlib import Path
 from unittest.mock import ANY, AsyncMock
 import pytest
 from contracts import (
-    EnvironmentInstance, EvaluationResult, Evidence, ExperimentConfig,
+    EnvironmentExploration, EnvironmentInstance, EvaluationResult, Evidence, ExperimentConfig,
+    FrozenEnvironmentGuidance,
     PatientTrajectory, RunResult,
 )
 from experiments import runner
@@ -80,11 +81,85 @@ def test_once_exploration_fixed_strategy_and_public_sampling(config, wired):
         assert body["directions"] == [d.model_dump(mode="json") for d in expected[index]]
         assert "trial-record" not in entry.kwargs["input_text"]
     root = Path(config.output_dir)
-    assert json.loads((root / "environment_guidance.json").read_text()) == {"guidance": "已验证读取能力"}
+    frozen = FrozenEnvironmentGuidance.model_validate_json(
+        (root / "environment_guidance.json").read_text()
+    )
+    assert frozen.environment == config.environment.name
+    assert frozen.exploration_patients == ["train"]
+    assert frozen.guidance.guidance == "已验证读取能力"
+    assert frozen.exploration_run.status == "completed"
     assert not (root / "rounds").exists() and not (root / "data_exploration_patients.json").exists()
     runs = json.loads((root / "runs.json").read_text())
     assert sum(r["stage"] == "explore_environment" for r in runs) == 1
     assert all(e.args[0].source_method == "envexplore" for e in evaluate.await_args_list)
+
+
+def test_exploration_only_writes_reusable_frozen_guidance(config, wired, tmp_path):
+    prepared, _, exploration, _, call, evaluate = wired
+    config.exploration_only = True
+    config.evaluation_patients = []
+    config.round_patients = []
+    config.output_dir = str(tmp_path / "exploration")
+    asyncio.run(runner.run_experiment(config))
+    exploration.assert_awaited_once()
+    assert prepared == [] and call.await_count == evaluate.await_count == 0
+    frozen = FrozenEnvironmentGuidance.model_validate_json(
+        (Path(config.output_dir) / "environment_guidance.json").read_text()
+    )
+    assert frozen.environment == config.environment.name
+    assert frozen.exploration_run.status == "completed"
+    assert frozen.exploration_patients == ["train"]
+
+
+def test_frozen_guidance_reused_across_batches_without_explorer_role(config, wired, tmp_path):
+    _, _, exploration, _, call, evaluate = wired
+    frozen_path = tmp_path / "frozen.json"
+    frozen_path.write_text(FrozenEnvironmentGuidance(
+        environment=config.environment.name,
+        exploration_patients=["train"],
+        guidance=EnvironmentExploration(guidance="已验证读取能力"),
+        exploration_run=RunResult(output={"guidance": "已验证读取能力"}, trace=[], usage={
+            "model_turns": 2, "tool_calls": 1, "input_tokens": 8, "output_tokens": 4,
+        }, status="completed"),
+        runtime=config.runtime,
+    ).model_dump_json())
+    del config.runtime.models["environment_explorer"]
+    del config.runtime.budgets["environment_explorer"]
+    config.guidance_path = str(frozen_path)
+    for index in range(2):
+        config.output_dir = str(tmp_path / f"batch-{index}")
+        asyncio.run(runner.run_experiment(config))
+    exploration.assert_not_awaited()
+    assert call.await_count == evaluate.await_count == 4
+    for index in range(2):
+        runs = json.loads((tmp_path / f"batch-{index}" / "runs.json").read_text())
+        assert all(row["stage"] != "explore_environment" for row in runs)
+
+
+@pytest.mark.parametrize("fault", ["failed", "environment", "overlap", "missing"])
+def test_invalid_frozen_guidance_prevents_generation(config, wired, tmp_path, fault):
+    _, _, exploration, _, call, evaluate = wired
+    path = tmp_path / "frozen.json"
+    config.guidance_path = str(path)
+    if fault == "missing":
+        with pytest.raises(ValueError, match="guidance_path"):
+            asyncio.run(runner.run_experiment(config))
+    else:
+        payload = FrozenEnvironmentGuidance(
+            environment=("MedAgentBench" if fault == "environment" else config.environment.name),
+            exploration_patients=(config.evaluation_patients if fault == "overlap" else ["train"]),
+            guidance=EnvironmentExploration(guidance="有效指导"),
+            exploration_run=RunResult(output={"guidance": "有效指导"}, trace=[], usage={},
+                status="failed" if fault == "failed" else "completed"),
+            runtime=config.runtime,
+        )
+        path.write_text(payload.model_dump_json())
+        with pytest.raises(ValueError):
+            asyncio.run(runner.run_experiment(config))
+    assert wired[0] == []
+    exploration.assert_not_awaited()
+    call.assert_not_awaited()
+    evaluate.assert_not_awaited()
 
 @pytest.mark.parametrize("status,output", [
     ("failed", None), ("budget_exhausted", None),

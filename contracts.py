@@ -233,6 +233,14 @@ class RuntimeConfig(BaseModel):
     budgets: dict[str, Budget]
 
 
+class FrozenEnvironmentGuidance(BaseModel):
+    environment: str
+    exploration_patients: list[str]
+    guidance: EnvironmentExploration
+    exploration_run: RunResult
+    runtime: RuntimeConfig
+
+
 class EvaluationConfig(BaseModel):
     runtime: RuntimeConfig
     judges: list[ModelConfig] = Field(default_factory=list)
@@ -260,5 +268,12 @@ class ExperimentConfig(BaseModel):
     output_dir: str
     compare_initial_strategy: bool = False
     guidance_path: str | None = None
+    exploration_only: bool = False
     generation_concurrency: int | None = Field(default=None, gt=0, strict=True)
     evaluation_concurrency: int | None = Field(default=None, gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_exploration_only(self) -> "ExperimentConfig":
+        if self.exploration_only and self.method != "envexplore":
+            raise ValueError("exploration_only is supported only for envexplore")
+        return self

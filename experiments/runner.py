@@ -11,6 +11,7 @@ from typing import get_args
 
 from contracts import (
     DataExploration, EnvironmentExploration, EvaluationResult, ExperimentConfig,
+    FrozenEnvironmentGuidance,
     ExplorationGuidance, Feedback, RunResult, Strategy, Task,
     TaskBatch, TaskType,
 )
@@ -121,14 +122,34 @@ async def run_experiment(config: ExperimentConfig) -> None:
     if config.method == "taskcraft":
         # 实验种子只在方法内部以可选关键字传递，不进入 RuntimeConfig。
         taskcraft = importlib.import_module("methods.taskcraft")
-    if "generator" not in config.runtime.models or "generator" not in config.runtime.budgets:
+    frozen_guidance = None
+    if config.method == "envexplore" and config.guidance_path:
+        if not Path(config.guidance_path).exists():
+            raise ValueError(f"guidance_path does not exist: {config.guidance_path}")
+        frozen_guidance = FrozenEnvironmentGuidance.model_validate_json(
+            Path(config.guidance_path).read_text(encoding="utf-8")
+        )
+        if frozen_guidance.environment != config.environment.name:
+            raise ValueError("Frozen EnvExplore guidance environment mismatch")
+        if not frozen_guidance.guidance.guidance.strip():
+            raise ValueError("Frozen EnvExplore guidance is empty")
+        if frozen_guidance.exploration_run.status != "completed":
+            raise ValueError("Frozen EnvExplore run did not complete")
+        if not frozen_guidance.exploration_patients:
+            raise ValueError("Frozen EnvExplore guidance has no exploration patients")
+        if set(frozen_guidance.exploration_patients) != set(config.evolution_patients):
+            raise ValueError("Frozen EnvExplore guidance patient set mismatch")
+        if set(frozen_guidance.exploration_patients) & set(config.evaluation_patients):
+            raise ValueError("Exploration and evaluation patients must be disjoint")
+    if (not config.exploration_only and
+            ("generator" not in config.runtime.models or "generator" not in config.runtime.budgets)):
         raise ValueError("runtime requires generator model and cumulative generator budget")
     if config.method == "workflow":
         output_constraints(config.initial_strategy.allocation, candidate_pool=True)
     if config.method == "envexplore":
         if not config.evolution_patients:
             raise ValueError("EnvExplore requires nonempty exploration patients")
-        if ("environment_explorer" not in config.runtime.models
+        if frozen_guidance is None and ("environment_explorer" not in config.runtime.models
                 or "environment_explorer" not in config.runtime.budgets):
             raise ValueError("EnvExplore requires environment_explorer model and budget")
     evolution = set(config.evolution_patients)
@@ -197,6 +218,28 @@ async def run_experiment(config: ExperimentConfig) -> None:
     rng = random.Random(config.random_seed)
     checkpoint()
     try:
+        if config.method == "envexplore" and config.exploration_only:
+            environment_run = await invoke(
+                "explore_environment", explore_environment,
+                config.environment, config.evolution_patients, config.runtime,
+                environments=environments,
+            )
+            environment_guidance = await parse(
+                "explore_environment", environment_run, EnvironmentExploration
+            )
+            if environment_guidance is None or not environment_guidance.guidance.strip():
+                raise RuntimeError("EnvExplore environment exploration did not produce valid guidance")
+            frozen = FrozenEnvironmentGuidance(
+                environment=config.environment.name,
+                exploration_patients=config.evolution_patients,
+                guidance=environment_guidance,
+                exploration_run=environment_run,
+                runtime=config.runtime,
+            )
+            _save(root / "environment_guidance.json", frozen.model_dump(mode="json"))
+            manifest["status"] = "completed"
+            return
+
         async with environments.instance(config.environment, phase="prepare") as instance:
             for group, patients in (("evolution", config.evolution_patients if config.method == "medevolve" else []),
                                     ("evaluation", config.evaluation_patients)):
@@ -232,7 +275,10 @@ async def run_experiment(config: ExperimentConfig) -> None:
                     exploration[patient] = trajectory
 
         guidance = None
-        if config.guidance_path:
+        if config.method == "envexplore" and frozen_guidance is not None:
+            environment_guidance = frozen_guidance.guidance
+            _save(root / "environment_guidance.json", frozen_guidance.model_dump(mode="json"))
+        elif config.guidance_path:
             guidance = ExplorationGuidance.model_validate_json(
                 Path(config.guidance_path).read_text(encoding="utf-8")
             )
@@ -256,15 +302,24 @@ async def run_experiment(config: ExperimentConfig) -> None:
             _save(root / "guidance.json", guidance.model_dump(mode="json"))
 
         if config.method == "envexplore":
-            environment_run = await invoke(
-                "explore_environment", explore_environment,
-                config.environment, config.evolution_patients, config.runtime,
-                environments=environments,
-            )
-            environment_guidance = await parse("explore_environment", environment_run, EnvironmentExploration)
-            if environment_guidance is None or not environment_guidance.guidance.strip():
-                raise RuntimeError("EnvExplore environment exploration did not produce valid guidance")
-            _save(root / "environment_guidance.json", environment_guidance.model_dump(mode="json"))
+            if frozen_guidance is None:
+                environment_run = await invoke(
+                    "explore_environment", explore_environment,
+                    config.environment, config.evolution_patients, config.runtime,
+                    environments=environments,
+                )
+                environment_guidance = await parse(
+                    "explore_environment", environment_run, EnvironmentExploration
+                )
+                if environment_guidance is None or not environment_guidance.guidance.strip():
+                    raise RuntimeError("EnvExplore environment exploration did not produce valid guidance")
+                _save(root / "environment_guidance.json", FrozenEnvironmentGuidance(
+                    environment=config.environment.name,
+                    exploration_patients=config.evolution_patients,
+                    guidance=environment_guidance,
+                    exploration_run=environment_run,
+                    runtime=config.runtime,
+                ).model_dump(mode="json"))
             method_generate = generator
             fixed_strategy = config.initial_strategy.model_copy(deep=True)
 

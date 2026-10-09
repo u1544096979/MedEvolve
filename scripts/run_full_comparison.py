@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from contracts import FrozenEnvironmentGuidance
+
 BASELINES = ("singleshot", "selfgen", "workflow", "taskcraft", "envexplore")
 # 每个环境的并发与容器预算：PhysicianBench 解题要独立实例，其余环境整轮共用一个实例。
 SETTINGS = {
@@ -161,6 +163,40 @@ def main() -> int:
             emit(slug, method, strategy)
         else:
             emit(slug, method)
+        if method == "envexplore" and slug in {"physicianbench", "medagentbench"}:
+            exploration = Path(f"configs/full-{slug}-envexplore-exploration.json")
+            exploration_data = json.loads(exploration.read_text(encoding="utf-8"))
+            frozen_path = Path(exploration_data["output_dir"]) / "environment_guidance.json"
+            test_configs = sorted(Path().glob(f"configs/full-{slug}-envexplore-batch-*.json"))
+            all_test_patients = set()
+            for config_path in test_configs:
+                payload = json.loads(config_path.read_text(encoding="utf-8"))
+                all_test_patients.update(payload["evaluation_patients"])
+            overlap = set(exploration_data["evolution_patients"]) & all_test_patients
+            if overlap:
+                print(f"[abort] EnvExplore patients overlap: {sorted(overlap)}", flush=True)
+                return 2
+            if status_of(exploration) != "completed":
+                code = run(exploration, settings, args.log_dir)
+                if code != 0:
+                    return code
+            if not frozen_path.exists():
+                print(f"[abort] frozen EnvExplore guidance is missing: {frozen_path}", flush=True)
+                return 2
+            try:
+                frozen = FrozenEnvironmentGuidance.model_validate_json(
+                    frozen_path.read_text(encoding="utf-8")
+                )
+            except Exception as exc:
+                print(f"[abort] frozen EnvExplore guidance is invalid: {exc}", flush=True)
+                return 2
+            if (frozen.environment != exploration_data["environment"]["name"] or
+                    set(frozen.exploration_patients) != set(exploration_data["evolution_patients"]) or
+                    frozen.exploration_run.status != "completed" or
+                    not frozen.guidance.guidance.strip() or
+                    set(frozen.exploration_patients) & all_test_patients):
+                print("[abort] frozen EnvExplore guidance failed validation", flush=True)
+                return 2
         code = run_glob(f"configs/full-{slug}-{method}-batch-*.json", settings, args.log_dir)
         if code != 0:
             return code

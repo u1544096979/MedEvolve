@@ -5,7 +5,7 @@ import statistics
 from collections import Counter
 from pathlib import Path
 
-from contracts import JsonObject
+from contracts import FrozenEnvironmentGuidance, JsonObject
 from methods.common import normalize_usage, USAGE_FIELDS
 
 
@@ -167,6 +167,17 @@ def summarize_run(output_dir: str) -> JsonObject:
                        for category in ("exploration", "generation"))
             for field in fields
         }
+        frozen_path = config.get("guidance_path")
+        if frozen_path and Path(frozen_path).exists():
+            frozen = FrozenEnvironmentGuidance.model_validate_json(
+                Path(frozen_path).read_text(encoding="utf-8")
+            )
+            costs["frozen_exploration_reference"] = {
+                **normalize_usage(frozen.exploration_run.usage),
+                "status": frozen.exploration_run.status,
+                "environment": frozen.environment,
+                "exploration_patients": frozen.exploration_patients,
+            }
     return {
         "run_id": config["run_id"], "method": config["method"],
         "status": manifest["status"], "errors": manifest.get("errors", []),
