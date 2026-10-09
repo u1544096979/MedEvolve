@@ -1680,6 +1680,18 @@ def test_selection_defers_evidence_validation_to_public_verification():
     assert all(candidate.question.decision_point is None for candidate in selected)
 
 
+def test_selection_retains_candidate_with_empty_evidence_for_public_verification():
+    candidate = Candidate(
+        question=GeneratedQuestion(instruction="问题", task_type="诊断与解释",
+                                   reference_answer="答案", evidence=[]),
+        origin="atomic", locator=BLOCK_A,
+    )
+
+    selected = select_candidates([candidate], directions(), {BLOCK_A}, 4)
+
+    assert selected == [candidate]
+
+
 def test_selection_does_not_read_the_generation_origin():
     candidates = qualified_candidates(6)
     relabelled = [Candidate(question=candidate.question, origin=f"origin-{index}",
