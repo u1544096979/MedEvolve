@@ -250,6 +250,7 @@ class EvaluationConfig(BaseModel):
     runtime: RuntimeConfig
     judges: list[ModelConfig] = Field(default_factory=list)
     scoring_mode: Literal["separate", "joint"] = "separate"
+    review_input_mode: Literal["full", "compact"] = "full"
 
     @model_validator(mode="after")
     def validate_judges(self) -> "EvaluationConfig":

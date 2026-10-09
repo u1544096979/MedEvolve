@@ -191,9 +191,12 @@ async def review_scores(
 ) -> tuple[QualityReview, DifficultyScore, list[RunResult]]:
     """独立审核质量与难度；record 在聚合前收到全部实际模型 runs。"""
     runtime = import_module("runtime")
-    material = _review_material(task, trajectory)
-    material["verification"] = verification.model_dump()
     complexity = _compute_complexity(task, trajectory)
+    from .material import review_material
+    material = review_material(
+        task, trajectory, verification, complexity,
+        mode=config.review_input_mode,
+    )
     joint = config.scoring_mode == "joint"
     count = len(config.judges) or JUDGE_COUNT
     if joint and count != JUDGE_COUNT:
@@ -260,8 +263,10 @@ async def review_scores(
             ]
             difficulty_runs = await asyncio.gather(*[
                 request(index, "difficulty", DifficultyJudgment, prompts.DIFFICULTY,
-                        {"task": material["task"],
-                         "complexity_metrics": complexity.model_dump()},
+                        (material if config.review_input_mode == "compact" else {
+                            "task": material["task"],
+                            "complexity_metrics": complexity.model_dump(),
+                        }),
                         difficulty_judges[index]) for index in range(count)
             ])
             runs.extend(difficulty_runs)
