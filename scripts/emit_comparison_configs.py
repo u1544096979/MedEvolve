@@ -97,6 +97,8 @@ def _payload(template: dict, spec: dict, *, run_id: str, output_dir: Path, slug:
         "output_dir": str(output_dir),
         "compare_initial_strategy": False,
     }
+    if slug in {"physicianbench", "medagentbench"}:
+        payload["evaluation"]["scoring_mode"] = "joint"
     if guidance:
         payload["guidance_path"] = guidance
     return payload

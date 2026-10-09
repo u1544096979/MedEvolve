@@ -163,6 +163,11 @@ class DifficultyJudgment(BaseModel):
     reason: str
 
 
+class JointJudgment(BaseModel):
+    quality: QualityJudgment
+    difficulty: DifficultyJudgment
+
+
 class DifficultyScore(BaseModel):
     reasoning_depth: int
     reasoning_depths: list[int]
@@ -244,6 +249,7 @@ class FrozenEnvironmentGuidance(BaseModel):
 class EvaluationConfig(BaseModel):
     runtime: RuntimeConfig
     judges: list[ModelConfig] = Field(default_factory=list)
+    scoring_mode: Literal["separate", "joint"] = "separate"
 
     @model_validator(mode="after")
     def validate_judges(self) -> "EvaluationConfig":
@@ -251,6 +257,8 @@ class EvaluationConfig(BaseModel):
             raise ValueError("judges must contain zero, two or three models")
         if self.judges and len({judge.model for judge in self.judges}) != len(self.judges):
             raise ValueError("judge model names must be distinct")
+        if self.scoring_mode == "joint" and self.judges and len(self.judges) != 3:
+            raise ValueError("joint scoring requires exactly three configured judges")
         return self
 
 

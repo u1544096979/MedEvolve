@@ -96,7 +96,8 @@
           "max_tool_calls": 200
         }
       }
-    }
+    },
+    "scoring_mode": "joint"
   },
   "evolution_patients": [
     "S6534835",

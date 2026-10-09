@@ -52,3 +52,6 @@ def test_envexplore_emits_one_frozen_exploration_and_shared_batch_path(
     assert len(batches) == 2
     guidance_paths = {json.loads(path.read_text())["guidance_path"] for path in batches}
     assert guidance_paths == {str(output_root / "exploration" / "environment_guidance.json")}
+    assert exploration["evaluation"]["scoring_mode"] == "joint"
+    assert all(json.loads(path.read_text())["evaluation"]["scoring_mode"] == "joint"
+               for path in batches)

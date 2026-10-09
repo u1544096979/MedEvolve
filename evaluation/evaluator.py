@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from contracts import (
     CompletionReview, ComplexityMetrics, DifficultyJudgment, DifficultyScore,
     EnvironmentConfig, EvaluationConfig, EvaluationResult, PatientTrajectory,
-    QualityDimension, QualityJudgment, QualityReview, RunResult, SolverAnswer,
+    JointJudgment, QualityDimension, QualityJudgment, QualityReview, RunResult, SolverAnswer,
     SolverInput, Task, Verification,
 )
 from environments.capabilities import capability_instructions, read_only_scope_instructions
@@ -130,8 +130,7 @@ def _judge_outputs(runs: list[RunResult], schema: type[BaseModel]) -> list[BaseM
     return [_output(run, schema) for run in runs]
 
 
-def _aggregate_quality_scores(runs: list[RunResult]) -> QualityReview:
-    judges = _judge_outputs(runs, QualityJudgment)
+def _aggregate_quality_judgments(judges: list[QualityJudgment]) -> QualityReview:
 
     def aggregate(dimension: str) -> QualityDimension:
         judgments = [getattr(judge, dimension) for judge in judges]
@@ -156,9 +155,8 @@ def _aggregate_quality_scores(runs: list[RunResult]) -> QualityReview:
     )
 
 
-def _aggregate_difficulty_scores(runs: list[RunResult],
+def _aggregate_difficulty_judgments(judges: list[DifficultyJudgment],
                                  complexity: ComplexityMetrics) -> DifficultyScore:
-    judges = _judge_outputs(runs, DifficultyJudgment)
     depths = [judge.reasoning_depth for judge in judges]
     for judge in judges:
         if not judge.reason.strip():
@@ -172,6 +170,111 @@ def _aggregate_difficulty_scores(runs: list[RunResult],
                           for index, judge in enumerate(judges, start=1)),
         complexity_metrics=complexity,
     )
+
+
+class ScoringError(ValueError):
+    """聚合失败时保留本轮所有真实评分运行记录。"""
+
+    def __init__(self, message: str, runs: list[RunResult],
+                 quality: QualityReview | None = None,
+                 difficulty: DifficultyScore | None = None):
+        super().__init__(message)
+        self.runs = runs
+        self.quality = quality
+        self.difficulty = difficulty
+
+
+async def review_scores(
+    task: Task, trajectory: PatientTrajectory, verification: Verification,
+    config: EvaluationConfig, *, request_semaphore: asyncio.Semaphore | None = None,
+    record=None,
+) -> tuple[QualityReview, DifficultyScore, list[RunResult]]:
+    """独立审核质量与难度；record 在聚合前收到全部实际模型 runs。"""
+    runtime = import_module("runtime")
+    material = _review_material(task, trajectory)
+    material["verification"] = verification.model_dump()
+    complexity = _compute_complexity(task, trajectory)
+    joint = config.scoring_mode == "joint"
+    count = len(config.judges) or JUDGE_COUNT
+    if joint and count != JUDGE_COUNT:
+        raise ValueError("joint scoring requires exactly three judges")
+    if config.judges:
+        judges = config.judges
+    elif joint:
+        if "quality" not in config.runtime.models:
+            raise ValueError("missing evaluation model: quality")
+        judges = [config.runtime.models["quality"]] * JUDGE_COUNT
+    else:
+        judges = [config.runtime.models["quality"] for _ in range(count)]
+
+    async def request(index: int, role: str, schema, instructions: str, payload: dict,
+                      model) -> RunResult:
+        kwargs = dict(instructions=_review_instructions(task.environment, instructions),
+                      input_text=_json(payload), output_type=schema, model=model)
+        try:
+            if request_semaphore is None:
+                run = await runtime.call_llm(**kwargs)
+            else:
+                async with request_semaphore:
+                    run = await runtime.call_llm(**kwargs)
+        except Exception as exc:
+            run = RunResult(trace=[], usage={}, status="failed", error=str(exc))
+        return run.model_copy(update={"trace": [*run.trace, {
+            "type": "model_identity", "model_identity": {
+                "role": role, "model": model.model, "judge_index": index,
+            },
+        }]})
+
+    runs: list[RunResult] = []
+    quality = None
+    difficulty = None
+    try:
+        if joint:
+            runs = await asyncio.gather(*[
+                request(index, "quality", JointJudgment, prompts.JOINT_SCORING,
+                        {**material, "judge_index": index}, judges[index])
+                for index in range(JUDGE_COUNT)
+            ])
+            if record is not None:
+                for run in runs:
+                    record(run)
+            judgments = [_output(run, JointJudgment) for run in runs]
+            quality = _aggregate_quality_judgments([item.quality for item in judgments])
+            difficulty = _aggregate_difficulty_judgments(
+                [item.difficulty for item in judgments], complexity)
+        else:
+            quality_runs = await asyncio.gather(*[
+                request(index, "quality", QualityJudgment, prompts.QUALITY, material,
+                        judges[index]) for index in range(count)
+            ])
+            runs.extend(quality_runs)
+            if record is not None:
+                for run in quality_runs:
+                    record(run)
+            quality = _aggregate_quality_judgments([
+                _output(run, QualityJudgment) for run in quality_runs
+            ])
+            difficulty_judges = config.judges or [
+                config.runtime.models["difficulty"] for _ in range(count)
+            ]
+            difficulty_runs = await asyncio.gather(*[
+                request(index, "difficulty", DifficultyJudgment, prompts.DIFFICULTY,
+                        {"task": material["task"],
+                         "complexity_metrics": complexity.model_dump()},
+                        difficulty_judges[index]) for index in range(count)
+            ])
+            runs.extend(difficulty_runs)
+            if record is not None:
+                for run in difficulty_runs:
+                    record(run)
+            difficulty = _aggregate_difficulty_judgments([
+                _output(run, DifficultyJudgment) for run in difficulty_runs
+            ], complexity)
+        return quality, difficulty, runs
+    except Exception as exc:
+        if isinstance(exc, ScoringError):
+            raise
+        raise ScoringError(str(exc), runs, quality, difficulty) from exc
 
 
 def _parse_moment(value) -> datetime | None:
@@ -283,7 +386,7 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
         phase = "model_error"
         runtime = import_module("runtime")
         required_roles = ["verifier", "solver", "completion"]
-        if not config.judges:
+        if not config.judges and config.scoring_mode == "separate":
             required_roles.extend(("quality", "difficulty"))
         for role in required_roles:
             if role not in config.runtime.models:
@@ -375,30 +478,14 @@ async def _evaluate_task(task: Task, trajectory: PatientTrajectory,
 
         phase = "model_error"
         material["verification"] = result.verification.model_dump()
-        judge_count = len(config.judges) or JUDGE_COUNT
-        quality_judges = config.judges or [config.runtime.models["quality"]] * JUDGE_COUNT
-        quality_runs = await asyncio.gather(*[
-            model_run(runtime.call_llm, role="quality", schema=QualityJudgment,
-                      instructions=role_instructions(prompts.QUALITY), payload=material,
-                      model=quality_judges[index], judge_index=index, record=False)
-            for index in range(judge_count)
-        ])
-        result.runs.extend(quality_runs)
-        result.quality = _aggregate_quality_scores(quality_runs)
-        complexity = _compute_complexity(task, trajectory)
-        difficulty_judges = (
-            config.judges or [config.runtime.models["difficulty"]] * JUDGE_COUNT
-        )
-        difficulty_runs = await asyncio.gather(*[
-            model_run(runtime.call_llm, role="difficulty", schema=DifficultyJudgment,
-                      instructions=role_instructions(prompts.DIFFICULTY),
-                      payload={"task": material["task"],
-                               "complexity_metrics": complexity.model_dump()},
-                      model=difficulty_judges[index], judge_index=index, record=False)
-            for index in range(judge_count)
-        ])
-        result.runs.extend(difficulty_runs)
-        result.difficulty = _aggregate_difficulty_scores(difficulty_runs, complexity)
+        try:
+            result.quality, result.difficulty, _ = await review_scores(
+                task, trajectory, result.verification, config, record=result.runs.append,
+            )
+        except ScoringError as exc:
+            result.quality = exc.quality
+            result.difficulty = exc.difficulty
+            raise
 
         phase = "environment_error"
         body_failed = False

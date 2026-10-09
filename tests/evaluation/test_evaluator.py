@@ -10,7 +10,7 @@ import pytest
 from contracts import (
     Budget, CompletionReview, ComplexityMetrics, DifficultyJudgment, EnvironmentConfig,
     EnvironmentInstance, Evidence, EvaluationConfig, ModelConfig, PatientTrajectory,
-    QualityJudgment, QualityReview, RunResult, RuntimeConfig, SolverAnswer, Task,
+    JointJudgment, QualityJudgment, QualityReview, RunResult, RuntimeConfig, SolverAnswer, Task,
     Verification,
 )
 from evaluation import evaluate_task, review_completion
@@ -77,7 +77,7 @@ def harness(monkeypatch):
     async def run(**kwargs):
         h.model_calls.append(kwargs)
         role = {
-            Verification: "verifier", QualityJudgment: "quality",
+            Verification: "verifier", QualityJudgment: "quality", JointJudgment: "quality",
             DifficultyJudgment: "difficulty", SolverAnswer: "solver",
         }.get(kwargs["output_type"], "completion")
         if h.fail == role:
@@ -118,6 +118,11 @@ def harness(monkeypatch):
             output = {key: {"score": h.quality_scores[index], "reason": reason}
                       for key in ("factual_accuracy", "clinical_soundness",
                                   "evidence_sufficiency", "task_clarity")}
+            if kwargs["output_type"] is JointJudgment:
+                depth_reason = "" if h.blank_reason == "difficulty" else "跨记录整合"
+                output = {"quality": output, "difficulty": {
+                    "reasoning_depth": h.depths[index], "reason": depth_reason,
+                }}
         elif role == "difficulty":
             index = h.judge_counts[role]
             h.judge_counts[role] += 1
@@ -146,7 +151,8 @@ def harness(monkeypatch):
                 {"type": "tool_start", "name": "fhir_condition_search_problems", "call_id": "query-1", "arguments": "{}"},
                 {"type": "tool_output", "name": "fhir_condition_search_problems", "call_id": "query-1", "output": h.state},
             ]
-        return RunResult(output=output, trace=trace, usage={}, status="completed")
+        return RunResult(output=output, trace=trace,
+                         usage={"input_tokens": 1, "output_tokens": 2}, status="completed")
 
     monkeypatch.setitem(sys.modules, "environments", SimpleNamespace(
         create_environment=create_environment, get_tools=get_tools,
@@ -470,6 +476,58 @@ def test_three_judges_take_median_and_keep_raw_scores(harness):
                 if c["output_type"] is QualityJudgment]) == 3
     assert len([c for c in h.model_calls
                 if c["output_type"] is DifficultyJudgment]) == 3
+
+
+def test_joint_scoring_uses_three_calls_and_keeps_distinct_medians(harness):
+    h = harness
+    h.config = h.config.model_copy(update={"scoring_mode": "joint"})
+    h.quality_scores = [2, 5, 4]
+    h.depths = [4, 1, 3]
+    result = evaluate(h)
+    assert result.quality.factual_accuracy.score == 4
+    assert result.quality.factual_accuracy.scores == [2, 5, 4]
+    assert result.difficulty.reasoning_depth == 3
+    assert result.difficulty.reasoning_depths == [4, 1, 3]
+    assert len([call for call in h.model_calls
+                if call["output_type"] is JointJudgment]) == 3
+    assert not [call for call in h.model_calls
+                if call["output_type"] in {QualityJudgment, DifficultyJudgment}]
+    score_runs = [run for run in result.runs if any(
+        trace.get("model_identity", {}).get("judge_index") is not None
+        and trace.get("model_identity", {}).get("role") == "quality" for trace in run.trace)]
+    assert len(score_runs) == 3
+    assert sum(run.usage["input_tokens"] for run in score_runs) == 3
+    assert sum(run.usage["output_tokens"] for run in score_runs) == 6
+
+
+@pytest.mark.parametrize("failure", ["quality", "joint_missing", "joint_invalid", "joint_blank"])
+def test_joint_scoring_failure_keeps_all_joint_runs(harness, monkeypatch, failure):
+    h = harness
+    h.config = h.config.model_copy(update={"scoring_mode": "joint"})
+    original = sys.modules["runtime"].call_llm
+
+    async def joint_response(**kwargs):
+        if kwargs["output_type"] is not JointJudgment:
+            return await original(**kwargs)
+        if failure == "quality":
+            raise RuntimeError("joint judge unavailable")
+        result = await original(**{**kwargs, "output_type": JointJudgment})
+        output = dict(result.output)
+        if failure == "joint_missing":
+            output.pop("difficulty")
+        elif failure == "joint_invalid":
+            output["difficulty"] = {"reasoning_depth": 8, "reason": "invalid"}
+        elif failure == "joint_blank":
+            output["difficulty"] = {"reasoning_depth": 2, "reason": " "}
+        return result.model_copy(update={"output": output})
+
+    monkeypatch.setattr(sys.modules["runtime"], "call_llm", joint_response)
+    result = evaluate(h)
+    assert result.status == "failed"
+    assert result.failure_category == "model_error"
+    joint_runs = [run for run in result.runs if any(
+        trace.get("model_identity", {}).get("role") == "quality" for trace in run.trace)]
+    assert len(joint_runs) == 3
 
 
 @pytest.mark.parametrize("count", [1, 4])

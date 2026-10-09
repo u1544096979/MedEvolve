@@ -50,6 +50,10 @@ complexity_metrics已在输入中提供（evidence_count、resource_type_count�
 评分依据task.instruction的要求和evidence的复杂度。reason说明为何归为该层级。
 输出DifficultyJudgment，包含reasoning_depth（整数1-4）和reason（字符串）。"""
 
+JOINT_SCORING = QUALITY.replace("输出QualityJudgment", "输出联合评分中的quality对象") + "\n\n" + DIFFICULTY.replace(
+    "输出DifficultyJudgment", "输出联合评分中的difficulty对象"
+)
+
 SOLVER = """使用提供的环境工具完成患者的查询任务。仅查询指定患者，遵守可见时间范围。
 只需在最终答案中给出诊断、解释、分析、评估或建议；不得提交或持久化任何变更。遇到工具拒绝的操作，说明失败原因，不得声称已完成。
 输出 SolverAnswer。"""
