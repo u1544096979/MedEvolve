@@ -6,6 +6,20 @@
 
 Environment names (`PhysicianBench`, `MedAgentBench`, `FHIR-AgentBench`) are external identifiers and are valid only in those spellings.
 
+### Environment patient pools
+
+The three environments differ sharply in how much of their patient pool is clinically usable. Counts come from `outputs/pool-screening/<slug>/pool_sizes.json`; a patient counts as usable only when it carries clinical resources beyond its single `Patient` demographic record.
+
+| Environment | Patients in pool | With clinical records | `Patient` only |
+|---|---|---|---|
+| PhysicianBench | 108 | 108 | 0 |
+| MedAgentBench | 695 | 100 | 595 |
+| FHIR-AgentBench | 100 | 100 | 0 |
+
+MedAgentBench's seed image (`jyxsu6/medagentbench`) exposes 695 `Patient` resources, but 595 of them hold nothing beyond demographics — name, address, birth date, gender, roughly 780 tokens. Only 100 patients have `Condition` / `MedicationRequest` / `Observation` / `Procedure` data. The upstream test set (`data/medagentbench/test_data_v2.json`, 300 tasks) covers 98 patients, all of which fall inside those 100.
+
+`scripts/pool_screening.py` marks a patient `eligible` on token budget alone (`row["tokens"] <= args.budget_tokens`), so a demographics-only stub always passes. Cohort construction must additionally require clinical resources.
+
 ## Architecture & Data Flow
 
 Three layers:
