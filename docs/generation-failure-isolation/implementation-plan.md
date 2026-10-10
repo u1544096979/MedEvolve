@@ -599,7 +599,10 @@ async def test_bad_draft_question_is_dropped_and_the_rest_continues(monkeypatch,
     elif fault == "wrong_type":
         changed["batch"]["questions"][0]["task_type"] = TYPES[2]
     else:
-        changed["batch"]["questions"][0]["execution_requirement"] = "write"
+        # The reachable production shape is a missing/null field: `runtime` validates the raw
+        # model output against `DirectedBatch` first, so a value outside the literal never
+        # reaches `validate_draft`.
+        changed["batch"]["questions"][0]["execution_requirement"] = None
     result, calls, _ = await run_script(monkeypatch, [changed, review([True])])
 
     assert result.status == "completed" and len(calls) == 2
@@ -723,7 +726,14 @@ Expected: PASS
             return closing(budget.finish(directions, output=current.batch))
 ```
 
-并把函数末尾 `except (ValueError, TypeError)` 分支与 `final_filter` 分支的返回改为 `closing(...)`：
+并`failed_run` 也改为经 `closing(...)` 返回，否则后续阶段失败时草稿阶段的丢弃记录会从 trace 中丢失：
+
+```python
+    def failed_run(run):
+        return closing(budget.finish(directions, status=run.status, error=run.error))
+```
+
+把函数末尾 `except (ValueError, TypeError)` 分支与 `final_filter` 分支的返回改为 `closing(...)`：
 
 ```python
                 record(budget, "final_filter", {"review_number": number,
