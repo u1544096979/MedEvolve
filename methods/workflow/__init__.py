@@ -167,6 +167,7 @@ async def generate_tasks(
     selected = [directions[focus.direction_index] for focus in focuses]
     known = {source.source_id for source in trajectory.sources}
     candidates: list[GeneratedQuestion] = []
+    failed_positions = 0
     for index, focus in enumerate(kept):
         direction = directions[focus.direction_index]
         stage = f"generate_{index}"
@@ -184,18 +185,32 @@ async def generate_tasks(
             ),
             output_type=TaskBatch,
         )
+        if generated.status == "failed":
+            # An LLM call that fails is not a rejected output: it stays fatal for the patient.
+            return _finish(budget, selected, focuses, status="failed",
+                           error=f"{stage}: {generated.error}", drops=drops)
         validated = validate_task_batch(generated, [direction], max_questions=1)
         if validated.status != "completed":
-            return _finish(budget, selected, focuses, status=validated.status,
-                           error=f"{stage}: {validated.error}", drops=drops)
+            failed_positions += 1
+            drops.append({"stage": stage, "reason": validated.error or validated.status,
+                          "status": validated.status})
+            continue
         batch = TaskBatch.model_validate(validated.output)
-        if any(evidence.source_id not in known
-               for question in batch.questions for evidence in question.evidence):
-            return _finish(budget, selected, focuses, status="failed",
-                           error=f"{stage}: unknown evidence source", drops=drops)
+        unknown = [evidence.source_id for question in batch.questions
+                   for evidence in question.evidence if evidence.source_id not in known]
+        if unknown:
+            failed_positions += 1
+            drops.append({"stage": stage, "reason": "unknown evidence source",
+                          "source_ids": unknown})
+            continue
         candidates.extend(batch.questions)
 
     if not candidates:
+        if failed_positions == len(kept):
+            exhausted = any(drop.get("status") == "budget_exhausted" for drop in drops)
+            return _finish(budget, selected, focuses,
+                           status="budget_exhausted" if exhausted else "failed",
+                           error="every generation position failed", drops=drops)
         return _finish(budget, selected, focuses, output=TaskBatch(questions=[]), drops=drops)
 
     records = _record_blocks(trajectory)

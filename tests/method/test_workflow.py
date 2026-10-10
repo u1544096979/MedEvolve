@@ -257,14 +257,14 @@ async def test_nodes_generate_one_type_each_then_unified_check(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage_index,expected_calls", [(0, 1), (1, 2), (2, 3), (3, 4)])
-async def test_failed_stage_stops_flow_and_keeps_cost(monkeypatch, stage_index, expected_calls):
-    results = [completed(located()), completed({"questions": [first_candidate()]}),
-               completed({"questions": [second_candidate()]}), completed(reviews())]
-    results[stage_index] = RunResult(
-        trace=[{"raw": "provider error"}], status="failed", error="RuntimeError: provider unavailable",
-        usage={"model_turns": 1, "tool_calls": 0, "prompt_tokens": 10, "completion_tokens": 5},
-    )
+async def test_failed_stage_stops_flow_and_keeps_cost(monkeypatch):
+    results = [RunResult(trace=[{"raw": "provider error"}], status="failed",
+                         error="RuntimeError: provider unavailable",
+                         usage={"model_turns": 1, "tool_calls": 0,
+                                "prompt_tokens": 10, "completion_tokens": 5}),
+               completed({"questions": [first_candidate()]}),
+               completed({"questions": [second_candidate()]}),
+               completed(reviews())]
     call = substitute(results)
     monkeypatch.setattr("runtime.call_llm", call)
 
@@ -272,40 +272,77 @@ async def test_failed_stage_stops_flow_and_keeps_cost(monkeypatch, stage_index, 
 
     assert result.status == "failed"
     assert result.output is None
-    assert result.usage["model_turns"] == expected_calls
-    assert call.await_count == expected_calls
-    if expected_calls == 1:
-        assert result.trace[-1]["stage"] == "locate"
-    else:
-        assert result.trace[-1] == selection_output()
+    assert result.usage["model_turns"] == 1
+    assert call.await_count == 1
+    assert result.trace[-1]["stage"] == "locate"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage_index,payload", [
-    (1, {"questions": [first_candidate(), first_candidate()]}),
-    (1, {"questions": [second_candidate()]}),
-    (1, {"questions": [{**first_candidate(), "instruction": "   "}]}),
+async def test_provider_failure_at_a_generation_position_fails_the_patient(monkeypatch):
+    results = [completed(located()),
+               RunResult(trace=[{"raw": "provider error"}], status="failed",
+                         error="RuntimeError: provider unavailable",
+                         usage={"model_turns": 1, "tool_calls": 0,
+                                "prompt_tokens": 10, "completion_tokens": 5}),
+               completed({"questions": [second_candidate()]}),
+               completed(reviews(kept=(0,), count=1))]
+    call = substitute(results)
+    monkeypatch.setattr("runtime.call_llm", call)
+
+    result = await workflow.generate_tasks(patient(), environment(), directions_pool(), runtime())
+
+    assert result.status == "failed"
+    assert result.output is None
+    assert result.error == "generate_0: RuntimeError: provider unavailable"
+    assert result.usage["model_turns"] == 2
+    assert call.await_count == 2
+    assert [entry["stage"] for entry in result.trace[:2]] == ["locate", "generate_0"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage_index,payload,expected_type", [
+    (1, {"questions": [first_candidate(), first_candidate()]}, "药物处方"),
+    (1, {"questions": [{**first_candidate(), "instruction": "   "}]}, "药物处方"),
     (1, {"questions": [{**first_candidate(),
-                        "evidence": [{"source_id": "Observation/missing", "statement": "缺失"}]}]}),
-    (2, {"questions": [second_candidate(), second_candidate()]}),
-    (2, {"questions": [candidate("治疗规划", "调整治疗", "Observation/o1", "158/96")]}),
+                        "evidence": [{"source_id": "Observation/missing", "statement": "缺失"}]}]},
+     "药物处方"),
+    (2, {"questions": [second_candidate(), second_candidate()]}, "诊断与解释"),
+    (2, {"questions": [candidate("治疗规划", "调整治疗", "Observation/o1", "158/96")]},
+     "诊断与解释"),
 ])
-async def test_invalid_node_output_fails_stage_before_check(monkeypatch, stage_index, payload):
+async def test_invalid_node_output_drops_only_that_position(monkeypatch, stage_index, payload,
+                                                            expected_type):
     results = [completed(located()), completed({"questions": [first_candidate()]}),
-               completed({"questions": [second_candidate()]}), completed(reviews())]
+               completed({"questions": [second_candidate()]}),
+               completed(reviews(kept=(0,), count=1))]
     results[stage_index] = completed(payload)
     call = substitute(results)
     monkeypatch.setattr("runtime.call_llm", call)
 
     result = await workflow.generate_tasks(patient(), environment(), directions_pool(), runtime())
 
+    assert result.status == "completed"
+    assert call.await_count == 4
+    questions = TaskBatch.model_validate(result.output).questions
+    assert [question.task_type for question in questions] == [expected_type]
+    drops = [entry for entry in result.trace if entry.get("type") == "drops"]
+    assert [entry["drops"][0]["stage"] for entry in drops] == [f"generate_{stage_index - 1}"]
+    assert result.trace[-1]["type"] == "internal_check"
+
+
+@pytest.mark.asyncio
+async def test_all_positions_failed_still_fails_the_patient(monkeypatch):
+    broken = {**first_candidate(), "instruction": "   "}
+    call = substitute([completed(located()), completed({"questions": [broken]}),
+                       completed({"questions": [broken]})])
+    monkeypatch.setattr("runtime.call_llm", call)
+
+    result = await workflow.generate_tasks(patient(), environment(), directions_pool(), runtime())
+
     assert result.status == "failed"
     assert result.output is None
-    assert result.error.startswith(f"generate_{stage_index - 1}: ")
-    assert result.usage["model_turns"] == stage_index + 1
-    assert call.await_count == stage_index + 1
-    assert workflow.BatchReview not in [entry.kwargs["output_type"] for entry in call.await_args_list]
-    assert result.trace[-1] == selection_output()
+    assert result.error == "every generation position failed"
+    assert call.await_count == 3
 
 
 @pytest.mark.asyncio
