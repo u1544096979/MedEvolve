@@ -99,25 +99,45 @@ def _selection_entry(focuses: list[ClinicalFocus]) -> dict:
     }
 
 
-def _decisions(review: BatchReview, questions: list[GeneratedQuestion]) -> list[dict]:
-    if len(review.reviews) != len(questions):
-        raise ValueError("internal check must judge every candidate exactly once")
-    by_index = {item.index: item for item in review.reviews}
-    if len(by_index) != len(review.reviews) or set(by_index) != set(range(len(questions))):
-        raise ValueError("internal check must judge every candidate exactly once")
-    return [
-        {
+def _decisions(review: BatchReview,
+               questions: list[GeneratedQuestion]) -> tuple[list[dict], list[dict]]:
+    """Judge every candidate once, dropping the ones the check did not report."""
+    judged: dict[int, QuestionReview] = {}
+    repeated: set[int] = set()
+    drops: list[dict] = []
+    for item in review.reviews:
+        if not 0 <= item.index < len(questions):
+            drops.append({"index": item.index, "reason": "review index is outside the candidates"})
+            continue
+        if item.index in judged or item.index in repeated:
+            # Two verdicts for one candidate leave no single judgement to trust: drop it.
+            drops.append({"index": item.index, "reason": "candidate was reviewed twice"})
+            repeated.add(item.index)
+            judged.pop(item.index, None)
+            continue
+        judged[item.index] = item
+    decisions: list[dict] = []
+    for index in range(len(questions)):
+        item = judged.get(index)
+        if item is None:
+            if index in repeated:
+                reason = "candidate was reviewed twice"
+            else:
+                reason = "candidate was not reviewed"
+                drops.append({"index": index, "reason": reason})
+            decisions.append({"index": index, "keep": False, "clarity": False,
+                              "answer_alignment": False, "citations_supported": False,
+                              "reason": reason})
+            continue
+        decisions.append({
             "index": index,
-            "keep": by_index[index].clarity
-            and by_index[index].answer_alignment
-            and by_index[index].citations_supported,
-            "clarity": by_index[index].clarity,
-            "answer_alignment": by_index[index].answer_alignment,
-            "citations_supported": by_index[index].citations_supported,
-            "reason": by_index[index].reason,
-        }
-        for index in range(len(questions))
-    ]
+            "keep": item.clarity and item.answer_alignment and item.citations_supported,
+            "clarity": item.clarity,
+            "answer_alignment": item.answer_alignment,
+            "citations_supported": item.citations_supported,
+            "reason": item.reason,
+        })
+    return decisions, drops
 
 
 def _finish(budget: GenerationBudget, selected: list[GenerationDirection],
@@ -236,13 +256,14 @@ async def generate_tasks(
         output_type=BatchReview,
     )
     if checked.status != "completed":
-        return _finish(budget, selected, focuses, status=checked.status, error=f"check: {checked.error}",
-                       drops=drops)
+        return _finish(budget, selected, focuses, status=checked.status,
+                       error=f"check: {checked.error}", drops=drops)
     try:
-        decisions = _decisions(BatchReview.model_validate(checked.output), candidates)
+        decisions, check_drops = _decisions(BatchReview.model_validate(checked.output), candidates)
     except Exception as exc:
         return _finish(budget, selected, focuses, status="failed",
                        error=f"check: {type(exc).__name__}: {exc}", drops=drops)
+    drops.extend(check_drops)
 
     kept_questions = [question for question, decision in zip(candidates, decisions) if decision["keep"]]
     result = _finish(budget, selected, focuses, output=TaskBatch(questions=kept_questions),

@@ -353,10 +353,12 @@ async def test_all_positions_failed_still_fails_the_patient(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("verdicts", [
-    "duplicate", "missing", "out_of_range",
+@pytest.mark.parametrize("verdicts,expected_kept", [
+    ("duplicate", []),
+    ("missing", [0]),
+    ("out_of_range", [0]),
 ])
-async def test_duplicate_or_missing_verdicts_fail_instead_of_filtering(monkeypatch, verdicts):
+async def test_unjudged_candidates_are_dropped_not_fatal(monkeypatch, verdicts, expected_kept):
     review = reviews()
     replacement = {
         "duplicate": {"reviews": [review["reviews"][0], review["reviews"][0]]},
@@ -369,11 +371,27 @@ async def test_duplicate_or_missing_verdicts_fail_instead_of_filtering(monkeypat
 
     result = await workflow.generate_tasks(patient(), environment(), directions_pool(), runtime())
 
+    assert result.status == "completed"
+    assert call.await_count == 4
+    assert result.trace[-1]["kept"] == expected_kept
+    assert len(result.trace[-1]["decisions"]) == 2
+    drops = [entry for entry in result.trace if entry.get("type") == "drops"]
+    assert drops and any(item["reason"] == "candidate was not reviewed"
+                         for item in drops[0]["drops"])
+
+
+@pytest.mark.asyncio
+async def test_unparsable_review_still_fails_the_patient(monkeypatch):
+    call = substitute([completed(located()), completed({"questions": [first_candidate()]}),
+                       completed({"questions": [second_candidate()]}),
+                       completed({"reviews": "not-a-list"})])
+    monkeypatch.setattr("runtime.call_llm", call)
+
+    result = await workflow.generate_tasks(patient(), environment(), directions_pool(), runtime())
+
     assert result.status == "failed"
     assert result.output is None
-    assert "every candidate" in result.error
-    assert result.usage["model_turns"] == 4
-    assert call.await_count == 4
+    assert result.error.startswith("check: ")
 
 
 @pytest.mark.asyncio
