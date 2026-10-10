@@ -1,9 +1,10 @@
 import json
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from contracts import (
     EnvironmentConfig,
+    GeneratedQuestion,
     GenerationDirection,
     PatientTrajectory,
     RunResult,
@@ -20,6 +21,17 @@ class DirectedBatch(BaseModel):
     direction_indices: list[int]
 
 
+class _RawBatch(BaseModel):
+    questions: list[dict]
+
+
+class _RawDraft(BaseModel):
+    """The draft envelope, read without validating each candidate's own fields."""
+
+    batch: _RawBatch
+    direction_indices: list[int]
+
+
 class QuestionReview(BaseModel):
     candidate_index: int = Field(ge=0)
     passed: bool
@@ -31,22 +43,45 @@ class BatchReview(BaseModel):
 
 
 def validate_draft(value, trajectory, directions):
-    current = DirectedBatch.model_validate(value)
+    """Keep every candidate whose own fields hold; drop the ones that do not."""
+    current = _RawDraft.model_validate(value)
     slots = current.direction_indices
     questions = current.batch.questions
-    if len(slots) != len(questions) or len(set(slots)) != len(slots):
-        raise ValueError("Direction mapping must be unique and complete")
-    probe = validate_task_batch(RunResult(output=current.batch.model_dump(mode="json"),
-        status="completed", trace=[], usage={}), directions)
-    if probe.status != "completed":
-        raise ValueError(probe.error)
-    allowed = {s.source_id for s in trajectory.sources}
-    for slot, q in zip(slots, questions):
-        if slot not in (0, 1) or q.task_type != directions[slot].task_type:
-            raise ValueError("Candidate changed its direction")
-        if not q.evidence or any(e.source_id not in allowed for e in q.evidence):
-            raise ValueError("Candidate evidence is absent or outside patient sources")
-    return current
+    allowed = {source.source_id for source in trajectory.sources}
+    kept_slots: list[int] = []
+    kept_questions: list[GeneratedQuestion] = []
+    drops: list[dict] = []
+    used: set[int] = set()
+    for position, raw in enumerate(questions):
+        slot = slots[position] if position < len(slots) else None
+        if slot is None or slot not in (0, 1):
+            drops.append({"index": position,
+                          "reason": "direction index is missing or outside the two positions"})
+            continue
+        if slot in used:
+            drops.append({"index": position, "reason": "direction index is duplicated"})
+            continue
+        try:
+            question = GeneratedQuestion.model_validate(raw)
+        except ValidationError as exc:
+            drops.append({"index": position, "reason": f"candidate fields rejected: {exc}"})
+            continue
+        probe = validate_task_batch(
+            RunResult(output={"questions": [question.model_dump(mode="json")]},
+                      status="completed", trace=[], usage={}),
+            [directions[slot]], max_questions=1)
+        if probe.status != "completed":
+            drops.append({"index": position, "reason": probe.error or "output rejected"})
+            continue
+        if not question.evidence or any(e.source_id not in allowed for e in question.evidence):
+            drops.append({"index": position,
+                          "reason": "candidate evidence is absent or outside patient sources"})
+            continue
+        used.add(slot)
+        kept_slots.append(slot)
+        kept_questions.append(question)
+    return (DirectedBatch(batch=TaskBatch(questions=kept_questions),
+                          direction_indices=kept_slots), drops)
 
 
 def validate_review(value, size):
@@ -62,16 +97,11 @@ def validate_review(value, size):
     return review
 
 
-def validate_revision(previous, review, revised):
-    before = dict(zip(previous.direction_indices, previous.batch.questions))
-    after = dict(zip(revised.direction_indices, revised.batch.questions))
-    if not after.keys() <= before.keys():
+def validate_revision(previous, revised):
+    """A revision may drop or keep directions, never introduce a new one."""
+    before = set(previous.direction_indices)
+    if not set(revised.direction_indices) <= before:
         raise ValueError("Revision added a direction")
-    for item in review.questions:
-        slot = previous.direction_indices[item.candidate_index]
-        if item.passed and (slot not in after or
-                after[slot].model_dump() != before[slot].model_dump()):
-            raise ValueError("Revision changed or removed a passed candidate")
 
 
 def record(budget, stage, payload, *, status="completed", error=None):
@@ -88,6 +118,16 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
     if environment.name not in {"PhysicianBench", "MedAgentBench"}:
         raise ValueError("Unsupported environment")
     budget = GenerationBudget(runtime, environment.name)
+    notes: list[dict] = []
+
+    def note(kind: str, **payload) -> None:
+        notes.append({"type": kind, **payload})
+
+    def closing(result: RunResult) -> RunResult:
+        if not notes:
+            return result
+        return result.model_copy(update={"trace": [*result.trace, *notes]})
+
     context = {
         "trajectory": trajectory.model_dump(mode="json"),
         "directions": [d.model_dump(mode="json") for d in directions],
@@ -109,9 +149,11 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
         run = await call("candidate_generation", DRAFT + constraints, context, DirectedBatch)
         if run.status != "completed":
             return failed_run(run)
-        current = validate_draft(run.output, trajectory, directions)
+        current, draft_drops = validate_draft(run.output, trajectory, directions)
+        if draft_drops:
+            note("drops", stage="candidate_generation", drops=draft_drops)
         if not current.batch.questions:
-            return budget.finish(directions, output=current.batch)
+            return closing(budget.finish(directions, output=current.batch))
         for number in range(1, 4):
             body = {**context, "current": current.model_dump(mode="json")}
             run = await call(f"self_review/{number}", REVIEW, body, BatchReview)
@@ -124,16 +166,18 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
                 record(budget, "final_filter", {"review_number": number,
                     "kept_indices": passed, "feedback": review.model_dump(mode="json"),
                     "output": final.model_dump(mode="json")})
-                return budget.finish(directions, output=final)
+                return closing(budget.finish(directions, output=final))
             run = await call(f"refine/{number}", REFINE + constraints,
                 {**body, "feedback": review.model_dump(mode="json")}, DirectedBatch)
             if run.status != "completed":
                 return failed_run(run)
-            revised = validate_draft(run.output, trajectory, directions)
-            validate_revision(current, review, revised)
+            revised, refine_drops = validate_draft(run.output, trajectory, directions)
+            validate_revision(current, revised)
+            if refine_drops:
+                note("drops", stage=f"refine/{number}", drops=refine_drops)
             current = revised
             if not current.batch.questions:
-                return budget.finish(directions, output=current.batch)
+                return closing(budget.finish(directions, output=current.batch))
     except (ValueError, TypeError) as exc:
         record(budget, "validation_failed", {"error": str(exc)}, status="failed", error=str(exc))
-        return budget.finish(directions, status="failed", error=str(exc))
+        return closing(budget.finish(directions, status="failed", error=str(exc)))

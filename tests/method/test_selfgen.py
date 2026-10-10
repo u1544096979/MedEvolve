@@ -158,23 +158,43 @@ async def test_bad_feedback_does_not_trigger_repair(monkeypatch, bad):
     assert len(calls) == 2
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fault", ["missing_source", "missing_evidence", "changed_passed", "deleted_passed"])
-async def test_source_and_passed_candidate_faults(monkeypatch, fault):
+@pytest.mark.parametrize("fault", ["missing_source", "missing_evidence", "wrong_type", "read_only"])
+async def test_bad_draft_question_is_dropped_and_the_rest_continues(monkeypatch, fault):
     original = draft()
     changed = deepcopy(original)
     if fault == "missing_source":
         changed["batch"]["questions"][0]["evidence"][0]["source_id"] = "Observation/other"
     elif fault == "missing_evidence":
         changed["batch"]["questions"][0]["evidence"] = []
-    elif fault == "changed_passed":
+    elif fault == "wrong_type":
+        changed["batch"]["questions"][0]["task_type"] = TYPES[2]
+    else:
+        changed["batch"]["questions"][0]["execution_requirement"] = "write"
+    result, calls, _ = await run_script(monkeypatch, [changed, review([True])])
+
+    assert result.status == "completed" and len(calls) == 2
+    assert result.output == {"questions": [changed["batch"]["questions"][1]]}
+    assert result.trace[-1]["type"] == "drops"
+    assert result.trace[-1]["drops"][0]["index"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["changed_passed", "deleted_passed"])
+async def test_passed_candidate_is_not_fatal(monkeypatch, fault):
+    original = draft()
+    changed = deepcopy(original)
+    if fault == "changed_passed":
         changed["batch"]["questions"][0]["reference_answer"] = "改动已通过答案"
     else:
         changed["batch"]["questions"] = changed["batch"]["questions"][1:]
         changed["direction_indices"] = [1]
+    # 第二次自审针对修订后存活的题目数，删除方向的用例只剩一题。
+    second_review = review([True, True]) if fault == "changed_passed" else review([True])
     result, calls, _ = await run_script(monkeypatch,
-        [original, review([True, False]), changed])
-    assert result.status == "failed" and result.output is None
-    assert len(calls) == 3
+        [original, review([True, False]), changed, second_review])
+
+    assert result.status == "completed"
+    assert len(calls) == 4
 
 @pytest.mark.asyncio
 async def test_revision_cannot_restore_deleted_direction(monkeypatch):
