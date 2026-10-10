@@ -341,16 +341,19 @@ Expected: PASS
 
 provider 失败在 locate、generate、check 三个阶段仍然整批失败，因此该测试原有的 4 个参数化用例全部保持通过、无需删减，只需在其后补一个覆盖生成位置 provider 失败的用例：
 
+保留原有参数化测试，并在其上加一条 `result.error` 断言：该断言钉住「失败阶段本身报错」这条分支，
+否则删掉 `check` 阶段的致命分支后其余断言仍会通过（后续校验会把同一个错误重新包装一次）。
+
 ```python
 @pytest.mark.asyncio
-async def test_failed_stage_stops_flow_and_keeps_cost(monkeypatch):
-    results = [RunResult(trace=[{"raw": "provider error"}], status="failed",
-                         error="RuntimeError: provider unavailable",
-                         usage={"model_turns": 1, "tool_calls": 0,
-                                "prompt_tokens": 10, "completion_tokens": 5}),
-               completed({"questions": [first_candidate()]}),
-               completed({"questions": [second_candidate()]}),
-               completed(reviews())]
+@pytest.mark.parametrize("stage_index,expected_calls", [(0, 1), (1, 2), (2, 3), (3, 4)])
+async def test_failed_stage_stops_flow_and_keeps_cost(monkeypatch, stage_index, expected_calls):
+    results = [completed(located()), completed({"questions": [first_candidate()]}),
+               completed({"questions": [second_candidate()]}), completed(reviews())]
+    results[stage_index] = RunResult(
+        trace=[{"raw": "provider error"}], status="failed", error="RuntimeError: provider unavailable",
+        usage={"model_turns": 1, "tool_calls": 0, "prompt_tokens": 10, "completion_tokens": 5},
+    )
     call = substitute(results)
     monkeypatch.setattr("runtime.call_llm", call)
 
@@ -358,9 +361,16 @@ async def test_failed_stage_stops_flow_and_keeps_cost(monkeypatch):
 
     assert result.status == "failed"
     assert result.output is None
-    assert result.usage["model_turns"] == 1
-    assert call.await_count == 1
-    assert result.trace[-1]["stage"] == "locate"
+    # Pins the fatal branch of the failing stage: the provider error is reported verbatim
+    # instead of being re-wrapped by the following validation step.
+    assert result.error == f"{['locate', 'generate_0', 'generate_1', 'check'][stage_index]}: " \
+                           "RuntimeError: provider unavailable"
+    assert result.usage["model_turns"] == expected_calls
+    assert call.await_count == expected_calls
+    if expected_calls == 1:
+        assert result.trace[-1]["stage"] == "locate"
+    else:
+        assert result.trace[-1] == selection_output()
 ```
 
 - [ ] **Step 8: 运行全量方法测试**
