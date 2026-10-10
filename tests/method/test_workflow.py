@@ -129,25 +129,22 @@ def test_selected_focuses_match_pool_and_reject_duplicates():
     pool = directions_pool()
     selection = pool_selection()
 
-    focuses = workflow._selected_focuses(selection, pool, patient())
+    focuses, drops = workflow._selected_focuses(selection, pool, patient())
 
     assert [focus.direction_index for focus in focuses] == [0, 3]
     assert focuses == selection.focuses
+    assert drops == []
     duplicate = selection.model_copy(update={"focuses": [selection.focuses[0]] * 2})
     with pytest.raises(ValueError):
         workflow._selected_focuses(duplicate, pool, patient())
 
 
-def test_selected_focuses_reject_three_focuses_missing_source_and_blank_topic():
+def test_selected_focuses_reject_three_focuses_and_blank_topic():
     pool = directions_pool()
     selection = pool_selection()
     third = dict(direction_index=2, clinical_focus="检查选择", source_ids=["Observation/o1"])
     cases = [
         selection.model_copy(update={"focuses": [*selection.focuses, third]}),
-        selection.model_copy(update={"focuses": [
-            selection.focuses[0],
-            selection.focuses[1].model_copy(update={"source_ids": ["Observation/missing"]}),
-        ]}),
         selection.model_copy(update={"focuses": [
             selection.focuses[0],
             selection.focuses[1].model_copy(update={"clinical_focus": "   "}),
@@ -157,6 +154,34 @@ def test_selected_focuses_reject_three_focuses_missing_source_and_blank_topic():
     for case in cases:
         with pytest.raises(ValueError):
             workflow._selected_focuses(case, pool, patient())
+
+
+def test_selected_focuses_drop_unknown_sources_and_keep_the_rest():
+    pool = directions_pool()
+    selection = pool_selection()
+    mixed = selection.model_copy(update={"focuses": [
+        selection.focuses[0].model_copy(
+            update={"source_ids": ["Observation/o1", "Observation/missing"]}),
+        selection.focuses[1],
+    ]})
+
+    focuses, drops = workflow._selected_focuses(mixed, pool, patient())
+
+    assert [focus.source_ids for focus in focuses] == [["Observation/o1"], ["MedicationRequest/m1"]]
+    assert drops == [{"focus": 0, "reason": "unknown source",
+                      "source_ids": ["Observation/missing"]}]
+
+
+def test_selected_focuses_reject_when_every_focus_loses_its_sources():
+    pool = directions_pool()
+    selection = pool_selection()
+    missing = selection.model_copy(update={"focuses": [
+        focus.model_copy(update={"source_ids": ["Observation/missing"]})
+        for focus in selection.focuses
+    ]})
+
+    with pytest.raises(ValueError):
+        workflow._selected_focuses(missing, pool, patient())
 
 
 def test_selected_focuses_require_a_valid_task_pool():
@@ -377,3 +402,29 @@ async def test_empty_nodes_skip_check_and_single_candidate_is_still_checked(monk
 async def test_generation_requires_the_five_type_candidate_pool():
     with pytest.raises(ValueError, match="five task types"):
         await workflow.generate_tasks(patient(), environment(), directions(), runtime())
+
+
+@pytest.mark.asyncio
+async def test_locate_with_one_unknown_source_still_generates(monkeypatch):
+    selection = pool_selection()
+    located = selection.model_copy(update={"focuses": [
+        selection.focuses[0],
+        selection.focuses[1].model_copy(update={"source_ids": ["MedicationRequest/missing"]})]})
+    call = substitute([completed(located.model_dump(mode="json")),
+                       completed({"questions": [first_candidate()]}),
+                       completed(reviews(kept=(0,), count=1))])
+    monkeypatch.setattr("runtime.call_llm", call)
+
+    result = await workflow.generate_tasks(patient(), environment(), directions_pool(), runtime())
+
+    assert result.status == "completed"
+    assert call.await_count == 3
+    assert [entry for entry in result.trace if entry.get("type") == "drops"] == [
+        {"type": "drops",
+         "drops": [{"focus": 3, "reason": "unknown source",
+                    "source_ids": ["MedicationRequest/missing"]}]}]
+    assert result.trace[-2] == {
+        "type": "selection",
+        "selected_directions": [0, 3],
+        "focuses": [focus.model_dump(mode="json") for focus in located.focuses],
+    }

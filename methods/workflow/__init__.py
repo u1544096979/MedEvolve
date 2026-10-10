@@ -60,21 +60,34 @@ def _record_blocks(trajectory: PatientTrajectory) -> dict[str, str]:
 
 
 def _selected_focuses(selection: FocusSelection, directions: list[GenerationDirection],
-                      trajectory: PatientTrajectory) -> list[ClinicalFocus]:
-    """Validate the two located task types against the candidate pool and trajectory."""
+                      trajectory: PatientTrajectory) -> tuple[list[ClinicalFocus], list[dict]]:
+    """Validate the located task types, dropping focuses whose sources are unknown."""
     output_constraints(directions, candidate_pool=True)
     focuses = selection.focuses
     if len(focuses) != 2 or len({focus.direction_index for focus in focuses}) != 2:
         raise ValueError("locate must select two distinct task types")
     known = {source.source_id for source in trajectory.sources}
+    kept: list[ClinicalFocus] = []
+    drops: list[dict] = []
     for focus in focuses:
         if not 0 <= focus.direction_index < len(directions):
             raise ValueError("focus index is outside candidate pool")
-        if not focus.clinical_focus.strip() or not focus.source_ids:
+        if not focus.clinical_focus.strip():
             raise ValueError("focus requires a topic and evidence sources")
-        if set(focus.source_ids) - known:
-            raise ValueError("focus sources are absent from trajectory")
-    return focuses
+        valid = [source_id for source_id in focus.source_ids if source_id in known]
+        unknown = [source_id for source_id in focus.source_ids if source_id not in known]
+        if not valid:
+            drops.append({"focus": focus.direction_index,
+                          "reason": "unknown source" if unknown else "focus has no valid source",
+                          "source_ids": unknown or list(focus.source_ids)})
+            continue
+        if unknown:
+            drops.append({"focus": focus.direction_index, "reason": "unknown source",
+                          "source_ids": unknown})
+        kept.append(focus.model_copy(update={"source_ids": valid}))
+    if not kept:
+        raise ValueError("no focus survives source validation")
+    return kept, drops
 
 
 def _selection_entry(focuses: list[ClinicalFocus]) -> dict:
@@ -109,10 +122,13 @@ def _decisions(review: BatchReview, questions: list[GeneratedQuestion]) -> list[
 
 def _finish(budget: GenerationBudget, selected: list[GenerationDirection],
             focuses: list[ClinicalFocus], *, output: TaskBatch | None = None,
-            status: str | None = None, error: str | None = None) -> RunResult:
-    """Close the run with the selected directions and keep the located selection in the trace."""
+            status: str | None = None, error: str | None = None,
+            drops: list[dict] | None = None) -> RunResult:
+    """Close the run, recording dropped candidates before the located selection."""
     result = budget.finish(selected, output=output, status=status, error=error)
-    return result.model_copy(update={"trace": [*result.trace, _selection_entry(focuses)]})
+    entries = [{"type": "drops", "drops": drops}] if drops else []
+    entries.append(_selection_entry(focuses))
+    return result.model_copy(update={"trace": [*result.trace, *entries]})
 
 
 async def generate_tasks(
@@ -140,15 +156,19 @@ async def generate_tasks(
     if located.status != "completed":
         return summarize_results(budget.records, status=located.status, error=f"locate: {located.error}")
     try:
-        focuses = _selected_focuses(FocusSelection.model_validate(located.output), directions, trajectory)
+        selection = FocusSelection.model_validate(located.output)
+        kept, drops = _selected_focuses(selection, directions, trajectory)
     except Exception as exc:
         return summarize_results(budget.records, status="failed",
                                  error=f"locate: {type(exc).__name__}: {exc}")
 
+    # The trace keeps the located selection; only the surviving focuses are generated.
+    focuses = selection.focuses
     selected = [directions[focus.direction_index] for focus in focuses]
     known = {source.source_id for source in trajectory.sources}
     candidates: list[GeneratedQuestion] = []
-    for index, (focus, direction) in enumerate(zip(focuses, selected)):
+    for index, focus in enumerate(kept):
+        direction = directions[focus.direction_index]
         stage = f"generate_{index}"
         generated = await budget.call_llm(
             stage,
@@ -167,16 +187,16 @@ async def generate_tasks(
         validated = validate_task_batch(generated, [direction], max_questions=1)
         if validated.status != "completed":
             return _finish(budget, selected, focuses, status=validated.status,
-                           error=f"{stage}: {validated.error}")
+                           error=f"{stage}: {validated.error}", drops=drops)
         batch = TaskBatch.model_validate(validated.output)
         if any(evidence.source_id not in known
                for question in batch.questions for evidence in question.evidence):
             return _finish(budget, selected, focuses, status="failed",
-                           error=f"{stage}: unknown evidence source")
+                           error=f"{stage}: unknown evidence source", drops=drops)
         candidates.extend(batch.questions)
 
     if not candidates:
-        return _finish(budget, selected, focuses, output=TaskBatch(questions=[]))
+        return _finish(budget, selected, focuses, output=TaskBatch(questions=[]), drops=drops)
 
     records = _record_blocks(trajectory)
     checked = await budget.call_llm(
@@ -201,15 +221,17 @@ async def generate_tasks(
         output_type=BatchReview,
     )
     if checked.status != "completed":
-        return _finish(budget, selected, focuses, status=checked.status, error=f"check: {checked.error}")
+        return _finish(budget, selected, focuses, status=checked.status, error=f"check: {checked.error}",
+                       drops=drops)
     try:
         decisions = _decisions(BatchReview.model_validate(checked.output), candidates)
     except Exception as exc:
         return _finish(budget, selected, focuses, status="failed",
-                       error=f"check: {type(exc).__name__}: {exc}")
+                       error=f"check: {type(exc).__name__}: {exc}", drops=drops)
 
-    kept = [question for question, decision in zip(candidates, decisions) if decision["keep"]]
-    result = _finish(budget, selected, focuses, output=TaskBatch(questions=kept))
+    kept_questions = [question for question, decision in zip(candidates, decisions) if decision["keep"]]
+    result = _finish(budget, selected, focuses, output=TaskBatch(questions=kept_questions),
+                     drops=drops)
     return result.model_copy(
         update={
             "trace": [
