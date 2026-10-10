@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,16 @@ class DirectedBatch(BaseModel):
     direction_indices: list[int]
 
 
+class _DraftBatch(BaseModel):
+    # 保留正常题目的字段 schema，坏字段留到逐题校验时丢弃。
+    questions: list[GeneratedQuestion | dict[str, Any]]
+
+
+class _DirectedDraft(BaseModel):
+    batch: _DraftBatch
+    direction_indices: list[int]
+
+
 class QuestionReview(BaseModel):
     candidate_index: int = Field(ge=0)
     passed: bool
@@ -33,7 +44,7 @@ class BatchReview(BaseModel):
 
 def validate_draft(value, trajectory, directions):
     """Keep every candidate whose own fields hold; drop the ones that do not."""
-    current = DirectedBatch.model_validate(value)
+    current = _DirectedDraft.model_validate(value)
     slots = current.direction_indices
     questions = current.batch.questions
     allowed = {source.source_id for source in trajectory.sources}
@@ -50,13 +61,15 @@ def validate_draft(value, trajectory, directions):
         if slot in used:
             drops.append({"index": position, "reason": "direction index is duplicated"})
             continue
+        payload = question.model_dump(mode="json") if isinstance(question, GeneratedQuestion) else question
         probe = validate_task_batch(
-            RunResult(output={"questions": [question.model_dump(mode="json")]},
+            RunResult(output={"questions": [payload]},
                       status="completed", trace=[], usage={}),
             [directions[slot]], max_questions=1)
         if probe.status != "completed":
             drops.append({"index": position, "reason": probe.error or "output rejected"})
             continue
+        question = TaskBatch.model_validate(probe.output).questions[0]
         if not question.evidence or any(e.source_id not in allowed for e in question.evidence):
             drops.append({"index": position,
                           "reason": "candidate evidence is absent or outside patient sources"})
@@ -176,7 +189,7 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
         return closing(budget.finish(directions, status=run.status, error=run.error))
 
     try:
-        run = await call("candidate_generation", DRAFT + constraints, context, DirectedBatch)
+        run = await call("candidate_generation", DRAFT + constraints, context, _DirectedDraft)
         if run.status != "completed":
             return failed_run(run)
         current, draft_drops = validate_draft(run.output, trajectory, directions)
@@ -200,7 +213,7 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
                     "output": final.model_dump(mode="json")})
                 return closing(budget.finish(directions, output=final))
             run = await call(f"refine/{number}", REFINE + constraints,
-                {**body, "feedback": review.model_dump(mode="json")}, DirectedBatch)
+                {**body, "feedback": review.model_dump(mode="json")}, _DirectedDraft)
             if run.status != "completed":
                 return failed_run(run)
             revised, refine_drops = validate_draft(run.output, trajectory, directions)

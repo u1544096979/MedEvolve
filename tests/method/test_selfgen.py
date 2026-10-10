@@ -1,6 +1,8 @@
 import json
 from copy import deepcopy
+import httpx
 import pytest
+from openai import AsyncOpenAI
 from contracts import (
     Budget, EnvironmentConfig, Evidence, GenerationDirection, ModelConfig,
     PatientTrajectory, RunResult, RuntimeConfig,
@@ -10,6 +12,52 @@ from methods.selfgen import generate_tasks
 from methods.selfgen.prompts import FACT_RULES, _fact_rules
 
 TYPES = ["诊断与解释", "检查与风险分层", "治疗规划", "药物处方", "治疗重规划"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["candidate_generation", "refine/1"])
+@pytest.mark.parametrize("fault", ["execution_requirement", "missing_answer"])
+async def test_sdk_draft_field_error_drops_only_bad_question(monkeypatch, stage, fault):
+    original = draft()
+    changed = deepcopy(original)
+    if fault == "execution_requirement":
+        changed["batch"]["questions"][0]["execution_requirement"] = "write"
+    else:
+        changed["batch"]["questions"][0].pop("reference_answer")
+    outputs = ([changed, review([True])] if stage == "candidate_generation" else
+               [original, review([False, True]), changed, review([True])])
+    requests = []
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "id": f"chat-{len(requests)}", "object": "chat.completion", "created": 0,
+            "model": "local-test", "choices": [{"index": 0, "message": {
+                "role": "assistant", "content": json.dumps(outputs[len(requests) - 1])},
+                "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        })
+
+    monkeypatch.setattr("runtime.execution._client", lambda model: AsyncOpenAI(
+        api_key="test-placeholder", base_url="http://model.test/v1", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle))))
+    trajectory = PatientTrajectory(patient_id="p1", environment="PhysicianBench",
+        text="患者原始轨迹", sources=[Evidence(source_id="Observation/1", statement="原始记录事实")])
+    directions = [GenerationDirection(task_type=t, difficulty="基础", weight=1)
+                  for t in TYPES[:2]]
+    runtime = RuntimeConfig(models={"generator": ModelConfig(model="local-test", api_key_env="UNUSED")},
+        budgets={"generator": Budget(max_model_turns=6, max_tool_calls=0)})
+
+    result = await generate_tasks(trajectory, EnvironmentConfig(name="PhysicianBench",
+        manager_url="http://unused", seed_data="seed"), directions, runtime)
+
+    assert result.status == "completed", result.error
+    assert result.output == {"questions": [original["batch"]["questions"][1]]}
+    assert len(requests) == result.usage["model_turns"] == len(outputs)
+    assert result.usage["total_tokens"] == 15 * len(outputs)
+    drops = [entry for entry in result.trace if entry.get("type") == "drops"]
+    assert len(drops) == 1 and drops[0]["stage"] == stage
+    assert drops[0]["drops"][0]["index"] == 0
 
 def draft(slots=(0, 1), version="初稿", kinds=None):
     kinds = kinds or TYPES[:2]
@@ -217,9 +265,6 @@ async def test_bad_draft_question_is_dropped_and_the_rest_continues(monkeypatch,
     elif fault == "wrong_type":
         changed["batch"]["questions"][0]["task_type"] = TYPES[2]
     else:
-        # The reachable production shape is a missing/null field: `runtime` validates the raw
-        # model output against `DirectedBatch` first, so a value outside the literal never
-        # reaches `validate_draft`.
         changed["batch"]["questions"][0]["execution_requirement"] = None
     result, calls, _ = await run_script(monkeypatch, [changed, review([True])])
 
