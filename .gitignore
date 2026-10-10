@@ -27,6 +27,7 @@ configs/full-*-batch-*.json
 *.out
 *.synctex*
 missfont.log
+*.xdv
 papers/english/.build/
 # 由 papers/medevolve.tex 的 filecontents 生成
 papers/acl.sty
