@@ -1,6 +1,6 @@
 import json
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from contracts import (
     EnvironmentConfig,
@@ -21,17 +21,6 @@ class DirectedBatch(BaseModel):
     direction_indices: list[int]
 
 
-class _RawBatch(BaseModel):
-    questions: list[dict]
-
-
-class _RawDraft(BaseModel):
-    """The draft envelope, read without validating each candidate's own fields."""
-
-    batch: _RawBatch
-    direction_indices: list[int]
-
-
 class QuestionReview(BaseModel):
     candidate_index: int = Field(ge=0)
     passed: bool
@@ -44,7 +33,7 @@ class BatchReview(BaseModel):
 
 def validate_draft(value, trajectory, directions):
     """Keep every candidate whose own fields hold; drop the ones that do not."""
-    current = _RawDraft.model_validate(value)
+    current = DirectedBatch.model_validate(value)
     slots = current.direction_indices
     questions = current.batch.questions
     allowed = {source.source_id for source in trajectory.sources}
@@ -52,7 +41,7 @@ def validate_draft(value, trajectory, directions):
     kept_questions: list[GeneratedQuestion] = []
     drops: list[dict] = []
     used: set[int] = set()
-    for position, raw in enumerate(questions):
+    for position, question in enumerate(questions):
         slot = slots[position] if position < len(slots) else None
         if slot is None or slot not in (0, 1):
             drops.append({"index": position,
@@ -60,11 +49,6 @@ def validate_draft(value, trajectory, directions):
             continue
         if slot in used:
             drops.append({"index": position, "reason": "direction index is duplicated"})
-            continue
-        try:
-            question = GeneratedQuestion.model_validate(raw)
-        except ValidationError as exc:
-            drops.append({"index": position, "reason": f"candidate fields rejected: {exc}"})
             continue
         probe = validate_task_batch(
             RunResult(output={"questions": [question.model_dump(mode="json")]},
@@ -143,7 +127,7 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
         return run
 
     def failed_run(run):
-        return budget.finish(directions, status=run.status, error=run.error)
+        return closing(budget.finish(directions, status=run.status, error=run.error))
 
     try:
         run = await call("candidate_generation", DRAFT + constraints, context, DirectedBatch)

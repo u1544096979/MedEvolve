@@ -169,7 +169,10 @@ async def test_bad_draft_question_is_dropped_and_the_rest_continues(monkeypatch,
     elif fault == "wrong_type":
         changed["batch"]["questions"][0]["task_type"] = TYPES[2]
     else:
-        changed["batch"]["questions"][0]["execution_requirement"] = "write"
+        # The reachable production shape is a missing/null field: `runtime` validates the raw
+        # model output against `DirectedBatch` first, so a value outside the literal never
+        # reaches `validate_draft`.
+        changed["batch"]["questions"][0]["execution_requirement"] = None
     result, calls, _ = await run_script(monkeypatch, [changed, review([True])])
 
     assert result.status == "completed" and len(calls) == 2
