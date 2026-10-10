@@ -99,6 +99,11 @@ def _selection_entry(focuses: list[ClinicalFocus]) -> dict:
     }
 
 
+def _verdict(item: QuestionReview) -> tuple[bool, bool, bool]:
+    """The three judgements, without the prose that only explains them."""
+    return (item.clarity, item.answer_alignment, item.citations_supported)
+
+
 def _decisions(review: BatchReview,
                questions: list[GeneratedQuestion]) -> tuple[list[dict], list[dict]]:
     """Judge every candidate once, dropping the ones the check did not report."""
@@ -109,10 +114,13 @@ def _decisions(review: BatchReview,
         if item.index >= len(questions):
             drops.append({"index": item.index, "reason": "review index is outside the candidates"})
             continue
+        if item.index in conflicting:
+            # Once two verdicts disagree, later ones cannot restore trust.
+            continue
         previous = judged.get(item.index)
         if previous is None:
             judged[item.index] = item
-        elif previous != item:
+        elif _verdict(previous) != _verdict(item):
             # Two conflicting verdicts for one candidate leave no judgement to trust.
             judged.pop(item.index)
             conflicting.add(item.index)
