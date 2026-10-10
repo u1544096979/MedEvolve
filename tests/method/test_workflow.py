@@ -354,7 +354,8 @@ async def test_all_positions_failed_still_fails_the_patient(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("verdicts,expected_kept", [
-    ("duplicate", []),
+    ("duplicate", [0]),
+    ("conflicting", []),
     ("missing", [0]),
     ("out_of_range", [0]),
 ])
@@ -362,6 +363,8 @@ async def test_unjudged_candidates_are_dropped_not_fatal(monkeypatch, verdicts, 
     review = reviews()
     replacement = {
         "duplicate": {"reviews": [review["reviews"][0], review["reviews"][0]]},
+        "conflicting": {"reviews": [review["reviews"][0],
+                                    {**review["reviews"][0], "clarity": False}]},
         "missing": {"reviews": [review["reviews"][0]]},
         "out_of_range": {"reviews": [review["reviews"][0], {**review["reviews"][1], "index": 5}]},
     }[verdicts]

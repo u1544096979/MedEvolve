@@ -103,28 +103,26 @@ def _decisions(review: BatchReview,
                questions: list[GeneratedQuestion]) -> tuple[list[dict], list[dict]]:
     """Judge every candidate once, dropping the ones the check did not report."""
     judged: dict[int, QuestionReview] = {}
-    repeated: set[int] = set()
+    conflicting: set[int] = set()
     drops: list[dict] = []
     for item in review.reviews:
-        if not 0 <= item.index < len(questions):
+        if item.index >= len(questions):
             drops.append({"index": item.index, "reason": "review index is outside the candidates"})
             continue
-        if item.index in judged or item.index in repeated:
-            # Two verdicts for one candidate leave no single judgement to trust: drop it.
-            drops.append({"index": item.index, "reason": "candidate was reviewed twice"})
-            repeated.add(item.index)
-            judged.pop(item.index, None)
-            continue
-        judged[item.index] = item
+        previous = judged.get(item.index)
+        if previous is None:
+            judged[item.index] = item
+        elif previous != item:
+            # Two conflicting verdicts for one candidate leave no judgement to trust.
+            judged.pop(item.index)
+            conflicting.add(item.index)
     decisions: list[dict] = []
     for index in range(len(questions)):
         item = judged.get(index)
         if item is None:
-            if index in repeated:
-                reason = "candidate was reviewed twice"
-            else:
-                reason = "candidate was not reviewed"
-                drops.append({"index": index, "reason": reason})
+            reason = ("candidate was reviewed with conflicting verdicts" if index in conflicting
+                      else "candidate was not reviewed")
+            drops.append({"index": index, "reason": reason})
             decisions.append({"index": index, "keep": False, "clarity": False,
                               "answer_alignment": False, "citations_supported": False,
                               "reason": reason})
