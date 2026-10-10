@@ -489,8 +489,9 @@ def _decisions(review: BatchReview,
                        error=f"check: {type(exc).__name__}: {exc}", drops=drops)
     drops.extend(check_drops)
 
-    kept = [question for question, decision in zip(candidates, decisions) if decision["keep"]]
-    result = _finish(budget, selected, focuses, output=TaskBatch(questions=kept), drops=drops)
+    kept_questions = [question for question, decision in zip(candidates, decisions) if decision["keep"]]
+    result = _finish(budget, selected, focuses, output=TaskBatch(questions=kept_questions),
+                     drops=drops)
     return result.model_copy(
         update={
             "trace": [
