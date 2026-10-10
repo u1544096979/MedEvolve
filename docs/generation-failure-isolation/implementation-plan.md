@@ -267,7 +267,8 @@ Expected: FAIL，`assert result.status == "completed"` 得到 `"failed"`
 ```python
     candidates: list[GeneratedQuestion] = []
     failed_positions = 0
-    for index, (focus, direction) in enumerate(zip(focuses, selected)):
+    for index, focus in enumerate(kept):
+        direction = directions[focus.direction_index]
         stage = f"generate_{index}"
         generated = await budget.call_llm(
             stage,
@@ -300,7 +301,7 @@ Expected: FAIL，`assert result.status == "completed"` 得到 `"failed"`
         candidates.extend(batch.questions)
 
     if not candidates:
-        if failed_positions == len(selected):
+        if failed_positions == len(kept):
             exhausted = any(drop.get("status") == "budget_exhausted" for drop in drops)
             return _finish(budget, selected, focuses,
                            status="budget_exhausted" if exhausted else "failed",
