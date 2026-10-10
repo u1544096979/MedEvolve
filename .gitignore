@@ -30,3 +30,5 @@ missfont.log
 papers/english/.build/
 # 由 papers/medevolve.tex 的 filecontents 生成
 papers/acl.sty
+
+.DS_Store
