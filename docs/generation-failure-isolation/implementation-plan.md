@@ -408,7 +408,9 @@ git commit -m "feat(workflow): 生成位置独立成败
 @pytest.mark.asyncio
 @pytest.mark.parametrize("verdicts,expected_kept", [
     ("duplicate", [0]),
+    ("duplicate_reworded", [0]),
     ("conflicting", []),
+    ("conflicting_three", []),
     ("missing", [0]),
     ("out_of_range", [0]),
 ])
@@ -416,8 +418,13 @@ async def test_unjudged_candidates_are_dropped_not_fatal(monkeypatch, verdicts, 
     review = reviews()
     replacement = {
         "duplicate": {"reviews": [review["reviews"][0], review["reviews"][0]]},
+        "duplicate_reworded": {"reviews": [review["reviews"][0],
+                                          {**review["reviews"][0], "reason": "证据充分"}]},
         "conflicting": {"reviews": [review["reviews"][0],
                                     {**review["reviews"][0], "clarity": False}]},
+        "conflicting_three": {"reviews": [review["reviews"][0],
+                                          {**review["reviews"][0], "clarity": False},
+                                          review["reviews"][0]]},
         "missing": {"reviews": [review["reviews"][0]]},
         "out_of_range": {"reviews": [review["reviews"][0], {**review["reviews"][1], "index": 5}]},
     }[verdicts]
@@ -444,6 +451,11 @@ Expected: FAIL，`assert result.status == "completed"` 得到 `"failed"`
 - [ ] **Step 3: 重写 `_decisions`**
 
 ```python
+def _verdict(item: QuestionReview) -> tuple[bool, bool, bool]:
+    """The three judgements, without the prose that only explains them."""
+    return (item.clarity, item.answer_alignment, item.citations_supported)
+
+
 def _decisions(review: BatchReview,
                questions: list[GeneratedQuestion]) -> tuple[list[dict], list[dict]]:
     """Judge every candidate once, dropping the ones the check did not report."""
@@ -454,10 +466,13 @@ def _decisions(review: BatchReview,
         if item.index >= len(questions):
             drops.append({"index": item.index, "reason": "review index is outside the candidates"})
             continue
+        if item.index in conflicting:
+            # Once two verdicts disagree, later ones cannot restore trust.
+            continue
         previous = judged.get(item.index)
         if previous is None:
             judged[item.index] = item
-        elif previous != item:
+        elif _verdict(previous) != _verdict(item):
             # Two conflicting verdicts for one candidate leave no judgement to trust.
             judged.pop(item.index)
             conflicting.add(item.index)
