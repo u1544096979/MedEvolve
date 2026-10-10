@@ -68,17 +68,34 @@ def validate_draft(value, trajectory, directions):
                           direction_indices=kept_slots), drops)
 
 
-def validate_review(value, size):
+def validate_review(value):
+    """Reject self-contradicting verdicts; leave coverage gaps to the caller."""
     review = BatchReview.model_validate(value)
-    indices = [q.candidate_index for q in review.questions]
-    if sorted(indices) != list(range(size)):
-        raise ValueError("Review must cover each candidate exactly once")
     for item in review.questions:
         if any(not issue.strip() for issue in item.issues):
             raise ValueError("Review issue must be nonempty")
         if item.passed != (not item.issues):
             raise ValueError("Review verdict conflicts with issues")
     return review
+
+
+def passed_indices(review, size):
+    """Indices the review passed; every candidate it did not judge counts as failed."""
+    judged: dict[int, QuestionReview] = {}
+    drops: list[dict] = []
+    for item in review.questions:
+        if not 0 <= item.candidate_index < size:
+            drops.append({"index": item.candidate_index, "reason": "review index is outside the candidates"})
+            continue
+        if item.candidate_index in judged:
+            drops.append({"index": item.candidate_index, "reason": "candidate was reviewed twice"})
+            continue
+        judged[item.candidate_index] = item
+    passed = sorted(index for index, item in judged.items() if item.passed)
+    for index in range(size):
+        if index not in judged:
+            drops.append({"index": index, "reason": "candidate was not reviewed"})
+    return passed, drops
 
 
 def validate_revision(previous, revised):
@@ -143,8 +160,10 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
             run = await call(f"self_review/{number}", REVIEW, body, BatchReview)
             if run.status != "completed":
                 return failed_run(run)
-            review = validate_review(run.output, len(current.batch.questions))
-            passed = sorted(item.candidate_index for item in review.questions if item.passed)
+            review = validate_review(run.output)
+            passed, review_drops = passed_indices(review, len(current.batch.questions))
+            if review_drops:
+                note("drops", stage=f"self_review/{number}", drops=review_drops)
             if len(passed) == len(current.batch.questions) or number == 3:
                 final = TaskBatch(questions=[current.batch.questions[i] for i in passed])
                 record(budget, "final_filter", {"review_number": number,

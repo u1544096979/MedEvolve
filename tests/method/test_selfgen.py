@@ -123,7 +123,7 @@ async def test_kept_question_and_direction_after_deletion(monkeypatch):
     ([draft(), review([False, False]), draft(slots=())], 6, "completed", 3),
     ([draft()], 1, "budget_exhausted", 1),
     ([], 0, "budget_exhausted", 0),
-    ([draft(), {"questions": []}], 6, "failed", 2),
+    ([draft(), {"questions": []}, draft(version="一"), review([True, True])], 6, "completed", 4),
     ([draft(), review([True, True]), draft()], 6, "completed", 2),
 ])
 async def test_empty_fault_and_budget(monkeypatch, outputs, turns, expected, count):
@@ -149,11 +149,25 @@ async def test_each_failed_stage_stops_without_retry(monkeypatch, stage):
     {"questions": [dict(candidate_index=0, passed=True, issues=[])]},
     {"questions": [dict(candidate_index=0, passed=True, issues=[])] * 2},
     {"questions": [dict(candidate_index=i, passed=True, issues=[]) for i in (0, 2)]},
+])
+async def test_unjudged_candidates_are_treated_as_failed(monkeypatch, bad):
+    result, calls, _ = await run_script(monkeypatch, [draft(), bad, draft(version="一"),
+                                                     review([True, True])])
+
+    assert result.status == "completed"
+    assert len(calls) == 4
+    reasons = [item["reason"] for entry in result.trace if entry.get("type") == "drops"
+               for item in entry["drops"]]
+    assert "candidate was not reviewed" in reasons
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [
     {"questions": [dict(candidate_index=i, passed=True, issues=["有问题"]) for i in (0, 1)]},
     {"questions": [dict(candidate_index=i, passed=False, issues=[]) for i in (0, 1)]},
 ])
-async def test_bad_feedback_does_not_trigger_repair(monkeypatch, bad):
+async def test_self_contradicting_review_still_fails(monkeypatch, bad):
     result, calls, _ = await run_script(monkeypatch, [draft(), bad])
+
     assert result.status == "failed" and result.output is None
     assert len(calls) == 2
 
