@@ -339,7 +339,7 @@ Expected: PASS
 
 - [ ] **Step 7: 修正 `test_failed_stage_stops_flow_and_keeps_cost`**
 
-该测试的 4 个用例中，只有 stage 0（locate 的 provider 失败）仍然整批失败。改为只保留该用例，并新增一个覆盖 provider 失败的生成位置用例：
+provider 失败在 locate、generate、check 三个阶段仍然整批失败，因此该测试原有的 4 个参数化用例全部保持通过、无需删减，只需在其后补一个覆盖生成位置 provider 失败的用例：
 
 ```python
 @pytest.mark.asyncio
