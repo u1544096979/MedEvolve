@@ -257,14 +257,14 @@ async def test_nodes_generate_one_type_each_then_unified_check(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failed_stage_stops_flow_and_keeps_cost(monkeypatch):
-    results = [RunResult(trace=[{"raw": "provider error"}], status="failed",
-                         error="RuntimeError: provider unavailable",
-                         usage={"model_turns": 1, "tool_calls": 0,
-                                "prompt_tokens": 10, "completion_tokens": 5}),
-               completed({"questions": [first_candidate()]}),
-               completed({"questions": [second_candidate()]}),
-               completed(reviews())]
+@pytest.mark.parametrize("stage_index,expected_calls", [(0, 1), (1, 2), (2, 3), (3, 4)])
+async def test_failed_stage_stops_flow_and_keeps_cost(monkeypatch, stage_index, expected_calls):
+    results = [completed(located()), completed({"questions": [first_candidate()]}),
+               completed({"questions": [second_candidate()]}), completed(reviews())]
+    results[stage_index] = RunResult(
+        trace=[{"raw": "provider error"}], status="failed", error="RuntimeError: provider unavailable",
+        usage={"model_turns": 1, "tool_calls": 0, "prompt_tokens": 10, "completion_tokens": 5},
+    )
     call = substitute(results)
     monkeypatch.setattr("runtime.call_llm", call)
 
@@ -272,9 +272,16 @@ async def test_failed_stage_stops_flow_and_keeps_cost(monkeypatch):
 
     assert result.status == "failed"
     assert result.output is None
-    assert result.usage["model_turns"] == 1
-    assert call.await_count == 1
-    assert result.trace[-1]["stage"] == "locate"
+    # Pins the fatal branch of the failing stage: the provider error is reported verbatim
+    # instead of being re-wrapped by the following validation step.
+    assert result.error == f"{['locate', 'generate_0', 'generate_1', 'check'][stage_index]}: " \
+                           "RuntimeError: provider unavailable"
+    assert result.usage["model_turns"] == expected_calls
+    assert call.await_count == expected_calls
+    if expected_calls == 1:
+        assert result.trace[-1]["stage"] == "locate"
+    else:
+        assert result.trace[-1] == selection_output()
 
 
 @pytest.mark.asyncio
