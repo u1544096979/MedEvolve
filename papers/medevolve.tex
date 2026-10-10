@@ -372,7 +372,14 @@
 
 \subsection{问题设置}
 
-给定医疗环境 $\mathcal{E}$ 和纵向患者轨迹集合 $\mathcal{D}=\{X_p\}$，目标是为每条轨迹 $X_p$ 构造医疗 Agent 任务。每个任务由指令 $q$、候选参考答案 $a$ 和来源证据 $e$ 组成。生成过程由策略 $\theta_r=(g_r,w_r)$ 控制：$g_r$ 是自然语言生成指导，$w_r$ 是任务类型和难度方向的采样权重，$r$ 为进化轮次。MedEvolve 先通过探索得到数据指导 $K_D$ 与环境指导 $K_E$，再利用评价反馈更新 $\theta_r$。
+给定医疗环境 $\mathcal{E}$ 和纵向患者轨迹集合 $\mathcal{D}=\{X_p\}$，目标是为每条轨迹 $X_p$ 构造医疗 Agent 任务。每个任务由指令 $q$、候选参考答案 $a$ 和来源证据 $e$ 组成。生成过程由策略 $\theta_r=(g_r,w_r)$ 控制：$g_r$ 是自然语言生成指导，$w_r$ 是任务类型和难度方向的采样权重，$r$ 为进化轮次。MedEvolve 先通过探索得到数据指导 $K_D$ 与环境指导 $K_E$，再利用评价反馈更新 $\theta_r$。整体流程见图~\ref{fig:overview}。
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/medevolve-overview-v7.pdf}
+\caption{MedEvolve 方法概览。（a）双探索分别从进化患者的纵向记录和只读工具交互中归纳数据指导 $K_D$ 与环境指导 $K_E$，在后续轮次中固定复用。（b）生成器以当前患者轨迹 $X_p$、两类探索指导与当前策略 $\theta_r=(g_r,w_r)$ 为条件生成候选任务，任务包含问题 $q$、参考答案 $a$ 与来源证据 $e$；核验重新读取原始记录，通过核验的任务进入质量（事实准确性 FA、临床合理性 CV、证据充分性 ES、题目清晰度 QC）、推理深度、独立解题与完成评价，参考答案与证据声明不提供给解题 Agent。（c）核验缺陷、评价得分与解题轨迹共同形成反馈 $F_r$，策略更新据此修订生成指导 $g_{r+1}$ 与方向权重 $w_{r+1}$；完成预定轮次后冻结策略 $\theta^*$，在独立患者集合上评测。}
+\label{fig:overview}
+\end{figure*}
 
 \subsection{数据探索与环境探索}
 
