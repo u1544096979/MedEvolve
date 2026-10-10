@@ -205,8 +205,8 @@ async def test_passed_candidate_is_not_fatal(monkeypatch, fault):
     else:
         changed["batch"]["questions"] = changed["batch"]["questions"][1:]
         changed["direction_indices"] = [1]
-    # 第二次自审针对修订后存活的题目数，删除方向的用例只剩一题。
-    second_review = review([True, True]) if fault == "changed_passed" else review([True])
+    # 第二次自审覆盖修订后存活的题目数：被删的已通过题由存档版本回填，两道题都还在。
+    second_review = review([True, True])
     result, calls, _ = await run_script(monkeypatch,
         [original, review([True, False]), changed, second_review])
 
@@ -235,3 +235,34 @@ async def test_third_review_can_reject_every_candidate(monkeypatch):
          review([False, False]), draft(version="二"), review([False, False])])
     assert result.status == "completed" and result.output == {"questions": []}
     assert len(calls) == 6
+
+
+@pytest.mark.asyncio
+async def test_passed_question_is_restored_from_the_archive(monkeypatch):
+    original = draft()
+    changed = deepcopy(original)
+    changed["batch"]["questions"][0]["reference_answer"] = "改动已通过答案"
+    changed["batch"]["questions"][0]["evidence"][0]["statement"] = "改动已通过证据"
+    result, calls, _ = await run_script(monkeypatch,
+        [original, review([True, False]), changed, review([True, True])])
+
+    assert result.status == "completed"
+    assert result.output == original["batch"]
+    assert len(calls) == 4
+    merges = [entry for entry in result.trace if entry.get("type") == "revision_merge"]
+    assert merges == [{"type": "revision_merge", "round": 1, "restored": [0]}]
+
+
+@pytest.mark.asyncio
+async def test_passed_question_deleted_by_revision_is_restored(monkeypatch):
+    original = draft()
+    changed = deepcopy(original)
+    changed["batch"]["questions"] = changed["batch"]["questions"][1:]
+    changed["direction_indices"] = [1]
+    result, calls, _ = await run_script(monkeypatch,
+        [original, review([True, False]), changed, review([True, True])])
+
+    assert result.status == "completed"
+    assert result.output == original["batch"]
+    merges = [entry for entry in result.trace if entry.get("type") == "revision_merge"]
+    assert merges == [{"type": "revision_merge", "round": 1, "restored": [0]}]

@@ -105,6 +105,24 @@ def validate_revision(previous, revised):
         raise ValueError("Revision added a direction")
 
 
+def merge_passed(previous, passed, revised):
+    """Restore every passed direction from the archived batch, whatever the revision returned."""
+    before = dict(zip(previous.direction_indices, previous.batch.questions, strict=False))
+    after = dict(zip(revised.direction_indices, revised.batch.questions, strict=False))
+    restored: list[int] = []
+    for index in passed:
+        if index >= len(previous.direction_indices):
+            continue
+        slot = previous.direction_indices[index]
+        if slot not in after or after[slot] != before[slot]:
+            restored.append(slot)
+        after[slot] = before[slot]
+    order = [slot for slot in previous.direction_indices if slot in after]
+    order += [slot for slot in revised.direction_indices if slot in after and slot not in order]
+    return (DirectedBatch(batch=TaskBatch(questions=[after[slot] for slot in order]),
+                          direction_indices=order), restored)
+
+
 def record(budget, stage, payload, *, status="completed", error=None):
     budget.records.append((stage, RunResult(trace=[payload], usage={
         "model_turns": 0, "tool_calls": 0, "input_tokens": 0,
@@ -176,8 +194,11 @@ async def generate_tasks(trajectory: PatientTrajectory, environment: Environment
                 return failed_run(run)
             revised, refine_drops = validate_draft(run.output, trajectory, directions)
             validate_revision(current, revised)
+            revised, restored = merge_passed(current, passed, revised)
             if refine_drops:
                 note("drops", stage=f"refine/{number}", drops=refine_drops)
+            if restored:
+                note("revision_merge", round=number, restored=restored)
             current = revised
             if not current.batch.questions:
                 return closing(budget.finish(directions, output=current.batch))
