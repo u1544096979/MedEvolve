@@ -11,6 +11,40 @@ from contracts import (EnvironmentInstance, EvaluationResult, Evidence,
 from experiments import runner, summarize_run
 
 
+@pytest.mark.asyncio
+async def test_workflow_empty_position_budget_cutoff_marks_manifest_incomplete(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[2]
+    values = json.loads((root / 'configs/physicianbench-comparison.json').read_text())
+    values.update(method='workflow', evaluation_patients=['p'], evolution_patients=[],
+                  round_patients=[], output_dir=str(tmp_path), run_id='workflow-budget-test')
+    values['runtime']['budgets']['generator']['max_model_turns'] = 2
+    config = ExperimentConfig.model_validate(values)
+    trajectory = PatientTrajectory(patient_id='p', environment=config.environment.name,
+        text='[undated] Observation/o1\n{}',
+        sources=[Evidence(source_id='Observation/o1', statement='{}')])
+    located = {'focuses': [dict(direction_index=index, clinical_focus='临床评估',
+                               source_ids=['Observation/o1']) for index in (0, 2)]}
+    call = AsyncMock(side_effect=[RunResult(status='completed', output=output, trace=[],
+        usage={'model_turns': 1, 'tool_calls': 0})
+        for output in (located, {'questions': []})])
+    monkeypatch.setattr('runtime.call_llm', call)
+    monkeypatch.setattr(runner, 'create_environment', AsyncMock(return_value=EnvironmentInstance(
+        instance_id='cache', endpoint='http://unused', environment=config.environment.name)))
+    monkeypatch.setattr(runner, 'prepare_trajectory', AsyncMock(return_value=trajectory))
+    monkeypatch.setattr(runner, 'release_environment', AsyncMock())
+    evaluate = AsyncMock(side_effect=AssertionError('unexpected evaluation'))
+    monkeypatch.setattr(runner, 'evaluate_task', evaluate)
+
+    await runner.run_experiment(config)
+
+    manifest = json.loads((tmp_path / 'manifest.json').read_text())
+    attempts = json.loads((tmp_path / 'evaluation/attempts.json').read_text())
+    assert manifest['status'] == manifest['generation']['status'] == 'failed'
+    assert manifest['generation']['incomplete'] == 1
+    assert attempts[0]['status'] == 'budget_exhausted' and attempts[0]['produced'] == 0
+    assert call.await_count == 2 and evaluate.await_count == 0
+
+
 @pytest.mark.parametrize('status,produced', [('completed', 1), ('completed', 0), ('failed', 0)])
 def test_workflow_pool_and_public_evaluation(tmp_path, monkeypatch, status, produced):
     root = Path(__file__).resolve().parents[2]

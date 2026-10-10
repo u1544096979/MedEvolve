@@ -449,6 +449,20 @@ async def test_budget_blocks_check_at_three_turns_and_allows_full_flow_at_four(m
 
 
 @pytest.mark.asyncio
+async def test_empty_position_then_budget_cutoff_has_no_output(monkeypatch):
+    call = substitute([completed(located()), completed({"questions": []})])
+    monkeypatch.setattr("runtime.call_llm", call)
+
+    result = await workflow.generate_tasks(patient(), environment(), directions_pool(),
+                                           runtime(max_model_turns=2))
+
+    assert result.status == "budget_exhausted"
+    assert result.output is None
+    assert result.error == "generate_1: Cumulative generator model budget exhausted"
+    assert call.await_count == result.usage["model_turns"] == 2
+
+
+@pytest.mark.asyncio
 async def test_empty_nodes_skip_check_and_single_candidate_is_still_checked(monkeypatch):
     empty = substitute([completed(located()), completed({"questions": []}), completed({"questions": []})])
     monkeypatch.setattr("runtime.call_llm", empty)

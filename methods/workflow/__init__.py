@@ -222,9 +222,9 @@ async def generate_tasks(
             ),
             output_type=TaskBatch,
         )
-        if generated.status == "failed":
-            # An LLM call that fails is not a rejected output: it stays fatal for the patient.
-            return _finish(budget, selected, focuses, status="failed",
+        if generated.status != "completed":
+            # 调用失败或预算耗尽必须整批终止，不能当作内容校验失败。
+            return _finish(budget, selected, focuses, status=generated.status,
                            error=f"{stage}: {generated.error}", drops=drops)
         validated = validate_task_batch(generated, [direction], max_questions=1)
         if validated.status != "completed":
@@ -244,9 +244,7 @@ async def generate_tasks(
 
     if not candidates:
         if failed_positions == len(kept):
-            exhausted = any(drop.get("status") == "budget_exhausted" for drop in drops)
-            return _finish(budget, selected, focuses,
-                           status="budget_exhausted" if exhausted else "failed",
+            return _finish(budget, selected, focuses, status="failed",
                            error="every generation position failed", drops=drops)
         return _finish(budget, selected, focuses, output=TaskBatch(questions=[]), drops=drops)
 
