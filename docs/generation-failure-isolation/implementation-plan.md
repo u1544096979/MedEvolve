@@ -407,7 +407,8 @@ git commit -m "feat(workflow): 生成位置独立成败
 ```python
 @pytest.mark.asyncio
 @pytest.mark.parametrize("verdicts,expected_kept", [
-    ("duplicate", []),
+    ("duplicate", [0]),
+    ("conflicting", []),
     ("missing", [0]),
     ("out_of_range", [0]),
 ])
@@ -415,6 +416,8 @@ async def test_unjudged_candidates_are_dropped_not_fatal(monkeypatch, verdicts, 
     review = reviews()
     replacement = {
         "duplicate": {"reviews": [review["reviews"][0], review["reviews"][0]]},
+        "conflicting": {"reviews": [review["reviews"][0],
+                                    {**review["reviews"][0], "clarity": False}]},
         "missing": {"reviews": [review["reviews"][0]]},
         "out_of_range": {"reviews": [review["reviews"][0], {**review["reviews"][1], "index": 5}]},
     }[verdicts]
@@ -445,23 +448,29 @@ def _decisions(review: BatchReview,
                questions: list[GeneratedQuestion]) -> tuple[list[dict], list[dict]]:
     """Judge every candidate once, dropping the ones the check did not report."""
     judged: dict[int, QuestionReview] = {}
+    conflicting: set[int] = set()
     drops: list[dict] = []
     for item in review.reviews:
-        if not 0 <= item.index < len(questions):
+        if item.index >= len(questions):
             drops.append({"index": item.index, "reason": "review index is outside the candidates"})
             continue
-        if item.index in judged:
-            drops.append({"index": item.index, "reason": "candidate was reviewed twice"})
-            continue
-        judged[item.index] = item
+        previous = judged.get(item.index)
+        if previous is None:
+            judged[item.index] = item
+        elif previous != item:
+            # Two conflicting verdicts for one candidate leave no judgement to trust.
+            judged.pop(item.index)
+            conflicting.add(item.index)
     decisions: list[dict] = []
     for index in range(len(questions)):
         item = judged.get(index)
         if item is None:
-            drops.append({"index": index, "reason": "candidate was not reviewed"})
+            reason = ("candidate was reviewed with conflicting verdicts" if index in conflicting
+                      else "candidate was not reviewed")
+            drops.append({"index": index, "reason": reason})
             decisions.append({"index": index, "keep": False, "clarity": False,
                               "answer_alignment": False, "citations_supported": False,
-                              "reason": "candidate was not reviewed"})
+                              "reason": reason})
             continue
         decisions.append({
             "index": index,
