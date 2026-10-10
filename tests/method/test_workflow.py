@@ -168,7 +168,7 @@ def test_selected_focuses_drop_unknown_sources_and_keep_the_rest():
     focuses, drops = workflow._selected_focuses(mixed, pool, patient())
 
     assert [focus.source_ids for focus in focuses] == [["Observation/o1"], ["MedicationRequest/m1"]]
-    assert drops == [{"focus": 0, "reason": "unknown source",
+    assert drops == [{"stage": "locate", "focus": 0, "reason": "unknown source",
                       "source_ids": ["Observation/missing"]}]
 
 
@@ -333,7 +333,8 @@ async def test_invalid_node_output_drops_only_that_position(monkeypatch, stage_i
     questions = TaskBatch.model_validate(result.output).questions
     assert [question.task_type for question in questions] == [expected_type]
     drops = [entry for entry in result.trace if entry.get("type") == "drops"]
-    assert [entry["drops"][0]["stage"] for entry in drops] == [f"generate_{stage_index - 1}"]
+    assert [entry["stage"] for entry in drops] == [f"generate_{stage_index - 1}"]
+    assert all("stage" not in item for entry in drops for item in entry["drops"])
     assert result.trace[-1]["type"] == "internal_check"
 
 
@@ -350,6 +351,8 @@ async def test_all_positions_failed_still_fails_the_patient(monkeypatch):
     assert result.output is None
     assert result.error == "every generation position failed"
     assert call.await_count == 3
+    assert [entry["stage"] for entry in result.trace if entry.get("type") == "drops"] == [
+        "generate_0", "generate_1"]
 
 
 @pytest.mark.asyncio
@@ -492,7 +495,7 @@ async def test_locate_with_one_unknown_source_still_generates(monkeypatch):
     assert result.status == "completed"
     assert call.await_count == 3
     assert [entry for entry in result.trace if entry.get("type") == "drops"] == [
-        {"type": "drops",
+        {"type": "drops", "stage": "locate",
          "drops": [{"focus": 3, "reason": "unknown source",
                     "source_ids": ["MedicationRequest/missing"]}]}]
     assert result.trace[-2] == {
@@ -500,3 +503,29 @@ async def test_locate_with_one_unknown_source_still_generates(monkeypatch):
         "selected_directions": [0, 3],
         "focuses": [focus.model_dump(mode="json") for focus in located.focuses],
     }
+
+
+@pytest.mark.asyncio
+async def test_drops_are_grouped_by_stage_in_first_seen_order(monkeypatch):
+    selection = pool_selection()
+    located = selection.model_copy(update={"focuses": [
+        selection.focuses[0],
+        selection.focuses[1].model_copy(update={"source_ids": ["MedicationRequest/missing"]})]})
+    call = substitute([completed(located.model_dump(mode="json")),
+                       completed({"questions": [{**first_candidate(), "instruction": "   "}]})])
+    monkeypatch.setattr("runtime.call_llm", call)
+
+    result = await workflow.generate_tasks(patient(), environment(), directions_pool(), runtime())
+
+    assert result.status == "failed" and result.error == "every generation position failed"
+    assert [entry for entry in result.trace if entry.get("type") == "drops"] == [
+        {"type": "drops", "stage": "locate",
+         "drops": [{"focus": 3, "reason": "unknown source",
+                    "source_ids": ["MedicationRequest/missing"]}]},
+        {"type": "drops", "stage": "generate_0",
+         "drops": [{"reason": "instruction and reference_answer must not be empty",
+                    "status": "failed"}]},
+    ]
+    assert [entry["type"] for entry in result.trace
+            if entry.get("type") in {"drops", "selection"}] == [
+        "drops", "drops", "selection"]

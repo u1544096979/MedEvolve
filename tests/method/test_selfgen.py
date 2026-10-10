@@ -160,6 +160,40 @@ async def test_unjudged_candidates_are_treated_as_failed(monkeypatch, bad):
                for item in entry["drops"]]
     assert "candidate was not reviewed" in reasons
 
+
+@pytest.mark.asyncio
+async def test_agreeing_duplicate_verdicts_keep_the_candidate(monkeypatch):
+    duplicate = {"questions": [
+        dict(candidate_index=0, passed=True, issues=[]),
+        dict(candidate_index=0, passed=True, issues=[]),
+        dict(candidate_index=1, passed=True, issues=[]),
+    ]}
+    result, calls, _ = await run_script(monkeypatch, [draft(), duplicate])
+
+    assert result.status == "completed" and len(calls) == 2
+    assert result.output == draft()["batch"]
+    assert [entry for entry in result.trace if entry.get("type") == "drops"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdicts", [[True, False], [True, False, True]])
+async def test_disagreeing_duplicate_verdicts_drop_the_candidate(monkeypatch, verdicts):
+    conflicting = {"questions": [
+        dict(candidate_index=0, passed=passed,
+             issues=[] if passed else ["答案遗漏引用，需补齐原始证据"])
+        for passed in verdicts
+    ]}
+    result, calls, _ = await run_script(monkeypatch,
+        [draft(), conflicting, draft(version="修订一"), review([True, True])])
+
+    assert result.status == "completed" and len(calls) == 4
+    assert [entry for entry in result.trace if entry.get("type") == "drops"] == [{
+        "type": "drops", "stage": "self_review/1", "drops": [
+            {"index": 0, "reason": "candidate was reviewed with conflicting verdicts"},
+            {"index": 1, "reason": "candidate was not reviewed"},
+        ]}]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad", [
     {"questions": [dict(candidate_index=i, passed=True, issues=["有问题"]) for i in (0, 1)]},
@@ -192,7 +226,29 @@ async def test_bad_draft_question_is_dropped_and_the_rest_continues(monkeypatch,
     assert result.status == "completed" and len(calls) == 2
     assert result.output == {"questions": [changed["batch"]["questions"][1]]}
     assert result.trace[-1]["type"] == "drops"
+    assert result.trace[-1]["stage"] == "candidate_generation"
     assert result.trace[-1]["drops"][0]["index"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slots,survivor,reason", [
+    ([2, 1], 1, "direction index is missing or outside the two positions"),
+    ([0, 0], 0, "direction index is duplicated"),
+])
+async def test_bad_direction_index_is_dropped_and_the_rest_continues(monkeypatch, slots, survivor,
+                                                                    reason):
+    # `draft()` builds `direction_indices` parallel to its questions, so the malformed pairing
+    # has to be written out explicitly.
+    changed = draft()
+    changed["direction_indices"] = slots
+    result, calls, _ = await run_script(monkeypatch, [changed, review([True])])
+
+    assert result.status == "completed" and len(calls) == 2
+    assert result.output == {"questions": [changed["batch"]["questions"][survivor]]}
+    assert result.trace[-1] == {
+        "type": "drops", "stage": "candidate_generation",
+        "drops": [{"index": 1 - survivor, "reason": reason}],
+    }
 
 
 @pytest.mark.asyncio

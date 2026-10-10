@@ -80,21 +80,32 @@ def validate_review(value):
 
 
 def passed_indices(review, size):
-    """Indices the review passed; every candidate it did not judge counts as failed."""
+    """Indices the review passed; every candidate it did not judge counts as failed.
+
+    A candidate judged twice with disagreeing verdicts has no verdict to trust, and the
+    later verdicts for it cannot restore that trust.
+    """
     judged: dict[int, QuestionReview] = {}
+    conflicting: set[int] = set()
     drops: list[dict] = []
     for item in review.questions:
         if not 0 <= item.candidate_index < size:
             drops.append({"index": item.candidate_index, "reason": "review index is outside the candidates"})
             continue
-        if item.candidate_index in judged:
-            drops.append({"index": item.candidate_index, "reason": "candidate was reviewed twice"})
+        if item.candidate_index in conflicting:
             continue
-        judged[item.candidate_index] = item
+        previous = judged.get(item.candidate_index)
+        if previous is None:
+            judged[item.candidate_index] = item
+        elif previous.passed != item.passed:
+            judged.pop(item.candidate_index)
+            conflicting.add(item.candidate_index)
     passed = sorted(index for index, item in judged.items() if item.passed)
     for index in range(size):
         if index not in judged:
-            drops.append({"index": index, "reason": "candidate was not reviewed"})
+            reason = ("candidate was reviewed with conflicting verdicts" if index in conflicting
+                      else "candidate was not reviewed")
+            drops.append({"index": index, "reason": reason})
     return passed, drops
 
 

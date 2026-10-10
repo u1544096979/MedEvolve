@@ -77,13 +77,13 @@ def _selected_focuses(selection: FocusSelection, directions: list[GenerationDire
         valid = [source_id for source_id in focus.source_ids if source_id in known]
         unknown = [source_id for source_id in focus.source_ids if source_id not in known]
         if not valid:
-            drops.append({"focus": focus.direction_index,
+            drops.append({"stage": "locate", "focus": focus.direction_index,
                           "reason": "unknown source" if unknown else "focus has no valid source",
                           "source_ids": unknown or list(focus.source_ids)})
             continue
         if unknown:
-            drops.append({"focus": focus.direction_index, "reason": "unknown source",
-                          "source_ids": unknown})
+            drops.append({"stage": "locate", "focus": focus.direction_index,
+                          "reason": "unknown source", "source_ids": unknown})
         kept.append(focus.model_copy(update={"source_ids": valid}))
     if not kept:
         raise ValueError("no focus survives source validation")
@@ -112,7 +112,8 @@ def _decisions(review: BatchReview,
     drops: list[dict] = []
     for item in review.reviews:
         if item.index >= len(questions):
-            drops.append({"index": item.index, "reason": "review index is outside the candidates"})
+            drops.append({"stage": "check", "index": item.index,
+                          "reason": "review index is outside the candidates"})
             continue
         if item.index in conflicting:
             # Once two verdicts disagree, later ones cannot restore trust.
@@ -130,7 +131,7 @@ def _decisions(review: BatchReview,
         if item is None:
             reason = ("candidate was reviewed with conflicting verdicts" if index in conflicting
                       else "candidate was not reviewed")
-            drops.append({"index": index, "reason": reason})
+            drops.append({"stage": "check", "index": index, "reason": reason})
             decisions.append({"index": index, "keep": False, "clarity": False,
                               "answer_alignment": False, "citations_supported": False,
                               "reason": reason})
@@ -146,13 +147,23 @@ def _decisions(review: BatchReview,
     return decisions, drops
 
 
+def _drop_entries(drops: list[dict]) -> list[dict]:
+    """One trace entry per stage, in first-seen order, with the stage lifted onto the entry."""
+    grouped: dict[str, list[dict]] = {}
+    for item in drops:
+        grouped.setdefault(item["stage"], []).append(
+            {key: value for key, value in item.items() if key != "stage"})
+    return [{"type": "drops", "stage": stage, "drops": items}
+            for stage, items in grouped.items()]
+
+
 def _finish(budget: GenerationBudget, selected: list[GenerationDirection],
             focuses: list[ClinicalFocus], *, output: TaskBatch | None = None,
             status: str | None = None, error: str | None = None,
             drops: list[dict] | None = None) -> RunResult:
     """Close the run, recording dropped candidates before the located selection."""
     result = budget.finish(selected, output=output, status=status, error=error)
-    entries = [{"type": "drops", "drops": drops}] if drops else []
+    entries = _drop_entries(drops) if drops else []
     entries.append(_selection_entry(focuses))
     return result.model_copy(update={"trace": [*result.trace, *entries]})
 
