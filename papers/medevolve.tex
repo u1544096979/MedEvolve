@@ -489,6 +489,13 @@ MedEvolve 的生成指导从特定环境的患者记录与工具接口中提炼�
 
 以下为当前公开实现中主方法的关键提示词原文节选。探索输出可复用指导；生成器输入患者轨迹、探索指导、当前策略及两个采样方向，输出问题、候选答案与逐来源证据；任务评价与独立解题结果用于反馈分析，更新生成指导和方向权重。
 
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/appendix-prompts-overview.pdf}
+\caption{MedEvolve 核心提示词总览。每张卡片概括一个角色的输入、关键约束与输出结构：探索角色（A.1、A.2）生成固定且不绑定患者的指导 $K_D$ 与 $K_E$；生成角色（A.3）在当前策略 $\theta_r$ 下出题；反馈分析与策略更新（A.4）将评价结果转化为 $\theta_{r+1}$。提示词原文见各小节。}
+\label{fig:app-prompts}
+\end{figure*}
+
 \subsection{数据探索}
 
 \begin{Prompt}
@@ -556,6 +563,13 @@ evidence 每条 statement 只陈述该 source_id 实际支持的事实；跨记�
 
 以下案例来自 PhysicianBench 一次进化运行的第一轮记录。
 
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/appendix-case-flow.pdf}
+\caption{一次证据核验失败转化为生成指导修订的案例（PhysicianBench，第 1 轮，任务 \texttt{0001:1:1}）。生成任务将高脂血症记录声明为「高血糖」，且以缺失的复查结果推断血糖「得到控制」；核验与轮末反馈指出这两点后，策略更新为纵向变化任务加入「先确认可比数据」的约束。}
+\label{fig:app-case}
+\end{figure*}
+
 \textbf{生成任务。}“考虑患者在2024年1月5日和2024年1月21日的实验室结果，评估其血糖和血脂水平的变化，以及对其健康管理的潜在影响。请使用相关的观察和诊断资料支持你的评估。”候选参考答案包含：“在1月21日的记录中，未见到进一步的血糖异常记录，说明在一定程度上患者的血糖得到控制。”
 
 \textbf{证据核验。}任务将 \texttt{Condition/2402} 声明为“高血糖”，原始记录却为高脂血症（ICD-10-CM E78.5），核验未通过。轮末反馈另指出：缺失血糖复查结果不能支持“得到控制”。
@@ -568,6 +582,14 @@ evidence 每条 statement 只陈述该 source_id 实际支持的事实；跨记�
 \label{app:metrics}
 
 \subsection{证据核验提示词}
+
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/appendix-verification-depth.pdf}
+\caption{证据核验与推理深度评价提示词。左：先逐条核验证据声明，再核验整道题；右：推理深度 1--4 级、捷径检查，以及两名裁判取中位数并向下取整后，聚合层级不低于 3 且通过核验的任务记为高阶题。}
+\label{fig:app-verify}
+\end{figure*}
 
 核验先逐条重读引用的原始记录，再检查题目及候选答案整体是否成立。以下为当前核验提示词的关键节选。
 \begin{Prompt}
