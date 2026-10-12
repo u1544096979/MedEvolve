@@ -359,9 +359,9 @@
 
 \section{引言}
 
-纵向电子病历记录患者多次就诊中的诊断、检查与治疗，是构建医疗 Agent 任务的主要数据来源。MedAgentBench 与 PhysicianBench 在此类环境中评测 LLM Agent（Jiang et al., 2025；Liu et al., 2026），但任务通常依赖临床专家设计与审核，难以大规模扩展。自动生成方法中，TaskCraft 从网页、PDF 和图像生成任务，并通过深度与宽度扩展提高复杂度（Shi et al., 2025）；CuES 通过环境交互探索并合成任务（Mai et al., 2025）。两者均未针对纵向病历结构及只读工具下的证据获取约束设计。
+纵向电子病历记录患者多次就诊中的诊断、检查与治疗，是构建医疗 Agent 任务的主要数据来源。MedAgentBench 与 PhysicianBench 在此类环境中评测 LLM Agent~\citep{jiang2025medagentbench,liu2026physicianbench}，但任务通常依赖临床专家设计与审核，难以大规模扩展。自动生成方法中，TaskCraft 从文档内容构建原子任务，经核验后进行深度与宽度扩展，并利用核验通过率优化少样本提示配置~\citep{shi2025taskcraft}；CuES 与 AgentEvolver 从环境交互轨迹中合成任务，并通过执行检查验证可行性~\citep{mai2025cues,zhai2025agentevolver}。上述工作从文档内容或环境交互中构造可核验任务。本文进一步关注多患者纵向病历中的临床事件、时间关系及证据模式，并利用任务核验与独立解题反馈，跨患者更新生成指导和任务方向权重。
 
-纵向病历任务生成面临两个困难。首先，任务是否成立同时取决于病例内容与工具能力：当前患者轨迹无法揭示跨患者反复出现的临床关系及其证据分布，完整轨迹也可能超出输入预算；所需证据能否通过工具检索，还需实际交互核查。其次，固定生成指导难以在不同病例上维持稳定的质量与难度，问题往往在证据核验或独立解题后才暴露。
+纵向病历任务生成面临两个困难。首先，任务是否成立同时取决于病例内容与工具能力：当前患者轨迹无法揭示跨患者反复出现的临床关系及其证据分布，完整轨迹也可能超出输入预算；所需证据能否通过工具检索，还需实际交互核查。其次，不同病例所支持的任务类型与推理要求不同，生成指导需要吸收证据核验和独立解题中暴露的任务构造问题。
 
 本文提出 MedEvolve，通过数据与环境双探索提炼可复用指导，再利用核验与独立解题反馈，跨患者更新生成策略，整个过程不更新模型参数。主要贡献包括：（1）结合临床事件模式与工具访问约束，支持有证据依据的任务生成；（2）利用评价反馈修订自然语言生成指导和任务方向权重；（3）在两个 EHR 环境中评价有效高阶任务产出，并检验合成任务的下游经验学习价值。
 
@@ -414,7 +414,7 @@
 
 \subsection{实验一：有效高阶题生成}
 
-我们比较不同生成方式能否在相同患者和题数上限下产出更多有效高阶任务。SingleShot 单次生成任务，Workflow 采用定位、生成与筛选流程，SelfRefine 通过自反馈修订候选，TaskCraft 通过深度与宽度扩展提高复杂度。EnvExplore 使用环境探索指导与固定初始策略；MedEvolve 则结合数据与环境双探索，使用两轮反馈更新后的完整策略。各方法的调用与计算投入不同，比较限定于共同患者和题数上限；具体流程与预算见附录~\ref{app:methods}。
+我们比较不同生成方式能否在相同患者和题数上限下产出更多有效高阶任务。SingleShot 单次生成任务，Workflow 采用定位、生成与筛选流程，SelfRefine~\citep{madaan2023selfrefine} 通过自反馈修订候选，TaskCraft 通过深度与宽度扩展提高复杂度。EnvExplore 使用环境探索指导与固定初始策略；MedEvolve 则结合数据与环境双探索，使用两轮反馈更新后的完整策略。各方法的调用与计算投入不同，比较限定于共同患者和题数上限；具体流程与预算见附录~\ref{app:methods}。
 
 \begin{table*}[t]
 \centering
@@ -444,7 +444,7 @@ SelfRefine & 4（2.5\%） & 2.20 & 2（1.3\%） & 2.00 \\
 
 \subsection{实验二：合成任务补充官方任务训练}
 
-我们进一步检验合成任务能否补充官方任务，改善经验学习后的测试表现。在 PhysicianBench 中，ACE、Reflexion（Shinn et al., 2023）与 OpenClaw 分别从两种训练设置中积累经验：“官方 20”使用 20 道官方任务；“官方＋合成 40”在同一批官方任务上增加 20 道通过核验的 MedEvolve 任务。两组使用同一执行模型 Qwen3.8-27B，固定模型参数，并在训练后冻结经验，在共同的 50 道官方测试任务上评测。参考答案仅用于评分；框架机制与复现设置见附录~\ref{app:exp2}。
+我们进一步检验合成任务能否补充官方任务，改善经验学习后的测试表现。在 PhysicianBench 中，ACE~\citep{zhang2026ace}、Reflexion~\citep{shinn2023reflexion} 与 OpenClaw~\citep{openclaw2026} 分别从两种训练设置中积累经验：“官方 20”使用 20 道官方任务；“官方＋合成 40”在同一批官方任务上增加 20 道通过核验的 MedEvolve 任务。两组使用同一执行模型 Qwen3.8-27B，固定模型参数，并在训练后冻结经验，在共同的 50 道官方测试任务上评测。参考答案仅用于评分；框架机制与复现设置见附录~\ref{app:exp2}。
 
 \par\medskip\noindent
 \begin{minipage}{\columnwidth}
@@ -481,23 +481,7 @@ OpenClaw & 24.0\%（12/50） & 20.0\%（10/50） & $-4.0$ pp \\
 
 MedEvolve 的生成指导从特定环境的患者记录与工具接口中提炼，当前独立患者评测考察的是同一环境内的策略迁移。当医疗机构、记录结构或证据检索工具发生变化时，已有指导的适用性及所需调整尚未得到系统评价。
 
-\section*{参考文献}
-
-Jiang, Yixing, et al. 2025. \href{https://arxiv.org/abs/2501.14654}{MedAgentBench: A Realistic Virtual EHR Environment to Benchmark Medical LLM Agents}. arXiv:2501.14654.
-
-Liu, Ruoqi, et al. 2026. \href{https://arxiv.org/abs/2605.02240}{PhysicianBench: Evaluating LLM Agents in Real-World EHR Environments}. arXiv:2605.02240.
-
-Shi, Dingfeng, et al. 2025. \href{https://arxiv.org/abs/2506.10055}{TaskCraft: Automated Generation of Agentic Tasks}. arXiv:2506.10055.
-
-Mai, Shinji, et al. 2025. \href{https://arxiv.org/abs/2512.01311}{CuES: A Curiosity-driven and Environment-grounded Synthesis Framework for Agentic RL}. arXiv:2512.01311.
-
-Shinn, Noah, et al. 2023. \href{https://arxiv.org/abs/2303.11366}{Reflexion: Language Agents with Verbal Reinforcement Learning}. arXiv:2303.11366.
-
-Zhai, Yunpeng, et al. 2025. \href{https://arxiv.org/abs/2511.10395}{AgentEvolver: Towards Efficient Self-Evolving Agent System}. arXiv:2511.10395.
-
-Madaan, Aman, et al. 2023. \href{https://arxiv.org/abs/2303.17651}{Self-Refine: Iterative Refinement with Self-Feedback}. arXiv:2303.17651.
-
-Kassis, Timothy, Vinayak Agarwal, Yuhuan He, Darshil Patel, and Aubrey M. Brueckner. 2026. \href{https://arxiv.org/abs/2609.00065}{Scientific Agent Skills: A Library of Procedural Knowledge for Research Agents}. https://doi.org/10.48550/arXiv.2609.00065.
+\bibliography{english/references}
 
 \appendix
 
@@ -654,6 +638,6 @@ $^\dagger$ PhysicianBench 上 EnvExplore 的数量来自冻结的旧批次，与
 
 \section{写作辅助工具}
 
-中文稿的结构组织、方法描述核对与证据状态检查使用 Scientific Agent Skills 的 scientific-writing 技能（Kassis et al., 2026）辅助。文献与科学结论的最终核验由作者负责。
+中文稿的结构组织、方法描述核对与证据状态检查使用 Scientific Agent Skills 的 scientific-writing 技能~\citep{kassis2026skills} 辅助。文献与科学结论的最终核验由作者负责。
 
 \end{document}
