@@ -7,7 +7,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx,booktabs,multirow,tabularx,array}
 \usepackage{placeins,xurl,caption}
-\newcommand{\pending}{\textemdash}
+\newcolumntype{Y}{>{\centering\arraybackslash}X}
 \title{Evidence Grounding and Strategy Evolution for Agent Task Generation from Longitudinal EHRs}
 \author{}
 \hypersetup{pdftitle={Evidence Grounding and Strategy Evolution for Agent Task Generation from Longitudinal EHRs},pdfauthor={}}
@@ -27,9 +27,9 @@ MedEvolve achieves higher verified higher-order task yield than the baselines on
 \label{fig:overview}
 \end{figure*}
 
-Longitudinal electronic health records (EHRs) document diagnoses, tests, and treatments across encounters and provide the basis for medical agent tasks. MedAgentBench~\citep{jiang2025medagentbench} and PhysicianBench~\citep{liu2026physicianbench} evaluate LLM agents in these environments, but expert task design and review limit scalability. TaskCraft~\citep{shi2025taskcraft} generates tasks from web pages, PDFs, and images through depth and width expansion; CuES~\citep{mai2025cues} synthesizes tasks through environment exploration. Neither is designed for longitudinal EHR structure and evidence retrieval through read-only tools.
+Longitudinal electronic health records (EHRs) document diagnoses, tests, and treatments across encounters and are a primary source of medical agent tasks. MedAgentBench and PhysicianBench evaluate LLM agents in such environments~\citep{jiang2025medagentbench,liu2026physicianbench}, but task design and review typically rely on clinical experts, limiting scalability. Among automatic generation methods, TaskCraft constructs atomic tasks from document content, verifies them, applies depth and width expansion, and optimizes few-shot prompt configurations using verification pass rates~\citep{shi2025taskcraft}. CuES and AgentEvolver synthesize tasks from environment interaction trajectories and check feasibility through execution~\citep{mai2025cues,zhai2025agentevolver}. These approaches construct verifiable tasks from documents or environment interactions. We further examine clinical events, temporal relationships, and evidence patterns in longitudinal records across patients, and use verification and independent-solving feedback to update generation guidance and task-direction weights across patients.
 
-Task generation faces two challenges. First, task validity depends on both patient records and tool capabilities. A single trajectory does not reveal recurring clinical relationships or evidence distributions across patients, and complete trajectories may exceed the input budget. Whether the required evidence is retrievable must also be checked through tool interaction. Second, fixed guidance yields uneven task quality and difficulty across patients; defects often emerge only during verification or independent solving.
+Task generation from longitudinal records faces two challenges. First, task validity depends on both patient records and tool capabilities. A single trajectory does not reveal recurring clinical relationships or evidence distributions across patients, and complete trajectories may exceed the input budget. Whether the required evidence is retrievable must also be checked through tool interaction. Second, different cases support different task types and reasoning demands, so generation guidance needs to incorporate construction issues revealed by evidence verification and independent solving.
 
 We propose MedEvolve, which combines data and environment exploration with feedback-driven strategy updates across patients, without changing model parameters. Our contributions are: (1)~grounding task generation in clinical event patterns and tool-access constraints; (2)~using evaluation feedback to revise natural-language guidance and task-direction weights; and (3)~evaluating valid higher-order task yield in two EHR environments and the downstream value of synthetic tasks for experience learning.
 
@@ -38,8 +38,6 @@ We propose MedEvolve, which combines data and environment exploration with feedb
 \subsection{Problem Setting}
 
 Given a medical environment $\mathcal{E}$ and a set of longitudinal patient trajectories $\mathcal{D}=\{X_p\}$, the goal is to construct a medical agent task for each trajectory $X_p$. Each task consists of an instruction $q$, a candidate reference answer $a$, and source evidence $e$. Generation is controlled by a strategy $\theta_r=(g_r,w_r)$, where $g_r$ is natural-language generation guidance, $w_r$ holds sampling weights over task types and difficulty directions, and $r$ is the evolution round. MedEvolve first obtains data guidance $K_D$ and environment guidance $K_E$ through exploration, then updates $\theta_r$ using evaluation feedback. Figure~\ref{fig:overview} shows the overall pipeline.
-
-
 
 \subsection{Data and Environment Exploration}
 
@@ -93,23 +91,21 @@ Different rounds use different patient batches to generate tasks. After the sche
 
 \subsection{Evaluation Conditions and Metrics}
 
-\textbf{Environments and comparison conditions.} We use 108 PhysicianBench patients and 100 MedAgentBench patients with clinical records, reserving 81 and 75, respectively, for held-out evaluation and the remainder for strategy evolution. The sets are patient-disjoint. All methods share the held-out patients and generation model, GPT-5.4-nano, and generate at most two read-only tasks per patient, yielding fixed totals of 162 and 150 requested tasks. Patient splits and information-access rules appear in Appendix~\ref{app:splits}.
+\textbf{Environments and comparison conditions.} We use 108 PhysicianBench patients and 100 MedAgentBench patients with clinical records, reserving 81 and 75, respectively, for held-out evaluation and the remainder for strategy evolution. The sets are patient-disjoint. All methods share the held-out patients and generation model, GPT-5.4-nano, and generate at most two read-only tasks per patient, yielding fixed totals of 162 and 150 requested tasks. Patient splits and information-access rules appear in Appendix~\ref{app:env}.
 
-\textbf{Metrics.} Tasks are verified against source records. GPT-4o-mini and GPT-5.4-nano independently assess the minimum reasoning required, with scores aggregated into levels 1--4. Verified tasks at level 3 or above count as higher-order (HO). Our primary metrics are HO count and yield, the latter dividing HO count by the fixed requested-task total and thus accounting for generation failures and invalid tasks. Mean level across all verified tasks with difficulty scores is an auxiliary metric. Appendix~\ref{app:scoring} details scoring and aggregation.
+\textbf{Metrics.} Tasks are verified against source records. GPT-4o-mini and GPT-5.4-nano independently assess the minimum reasoning required, with scores aggregated into levels 1--4. Verified tasks at level 3 or above count as higher-order (HO). Our primary metrics are HO count and yield, the latter dividing HO count by the fixed requested-task total and thus accounting for generation failures and invalid tasks. Mean level across all verified tasks with difficulty scores is an auxiliary metric. Appendix~\ref{app:metrics} details scoring and aggregation.
 
 \subsection{Experiment 1: Generating Valid Higher-Order Tasks}
 
 We compare generation methods under a shared patient set and task-count limit. SingleShot generates in one pass; Workflow uses localization, generation, and filtering; SelfRefine~\citep{madaan2023selfrefine} revises candidates through self-feedback; TaskCraft applies depth and width expansion. EnvExplore uses environment guidance with a fixed initial strategy, whereas MedEvolve combines data and environment exploration with the full strategy after two feedback-update rounds. Computational costs differ across methods; the comparison controls patients and task counts. Appendix~\ref{app:methods} describes procedures and budgets.
 
-
-
 MedEvolve achieves the highest HO yield in both environments (Table~\ref{tab:exp1}), with a larger margin over the closest baseline, EnvExplore, on MedAgentBench: 13 additional tasks and an 8.6-percentage-point gain, compared with two tasks and 1.2 points on PhysicianBench. The full framework therefore leads in this evaluation, although the PhysicianBench margin is small.
 
-Verification rate and HO yield capture different task properties. TaskCraft produces no HO tasks and has a mean level near 1. MedEvolve has a lower verification rate than some baselines but retains the most valid HO tasks (Appendix~\ref{app:extra-results}); verification rate alone does not capture reasoning demands. Mean level also requires attention to sample size: Workflow slightly exceeds MedEvolve on PhysicianBench (2.30 vs.\ 2.27), based on only 10 verified tasks.
+Verification rate and HO yield capture different task properties. TaskCraft produces no HO tasks and has a mean level near 1. MedEvolve has a lower verification rate than some baselines but retains the most valid HO tasks (Appendix~\ref{app:counts}); verification rate alone does not capture reasoning demands. Mean level also requires attention to sample size: Workflow slightly exceeds MedEvolve on PhysicianBench (2.30 vs.\ 2.27), based on only 10 verified tasks.
 
 \subsection{Experiment 2: Supplementing Official Training Tasks with Synthetic Tasks}
 
-We test whether synthetic tasks supplement official tasks for experience learning. In PhysicianBench, ACE, Reflexion~\citep{shinn2023reflexion}, and OpenClaw each learn under two settings: \emph{Official 20} uses 20 official tasks; \emph{Official + Synthetic 40} adds 20 verified MedEvolve tasks to those same tasks. Both settings use Qwen3.8-27B with fixed model parameters. Experience is frozen after training, and both settings are evaluated on the same 50 official test tasks. Reference answers are used only for scoring. Appendix~\ref{app:harness} details framework mechanisms and reproducibility settings.
+We test whether synthetic tasks supplement official tasks for experience learning. In PhysicianBench, ACE~\citep{zhang2026ace}, Reflexion~\citep{shinn2023reflexion}, and OpenClaw~\citep{openclaw2026} each learn under two settings: \emph{Official 20} uses 20 official tasks; \emph{Official + Synthetic 40} adds 20 verified MedEvolve tasks to those same tasks. Both settings use Qwen3.8-27B with fixed model parameters. Experience is frozen after training, and both settings are evaluated on the same 50 official test tasks. Reference answers are used only for scoring. Appendix~\ref{app:exp2} details framework mechanisms and reproducibility settings.
 
 \par\medskip\noindent
 \begin{minipage}{\columnwidth}
@@ -152,154 +148,114 @@ MedEvolve derives generation guidance from patient records and tool interfaces w
 
 \bibliography{references}
 
-\clearpage
 \appendix
 
-\section{Exploration and Generation Interfaces}
-\label{app:interfaces}
+\twocolumn[{
+\begin{minipage}{\textwidth}
+\section{Core Prompts and a Real Example}
 
-\subsection{Data Exploration}
-\label{app:data-explore}
-Exploration tools expose open patient IDs, budgeted trajectories, and optional compressed summaries. Inputs retain patient identifiers, source pointers, and coverage flags; the output is patient-agnostic natural-language guidance $K_D$. The guide summarizes data organization, temporal change, event relations, evidence citation patterns, and supportable questioning conditions, without retaining individual clinical values or source IDs.
+Figure~\ref{fig:app-prompts} presents excerpts of the core prompts for dual exploration, task generation, feedback analysis, and strategy updates. The five generation directions are diagnosis and explanation, testing and risk stratification, treatment planning, medication prescribing, and treatment replanning. Two directions are sampled per patient according to their weights.
 
-Compressed summaries locate candidate patterns; original records support concrete claims. Missing records and budget truncation are stated separately. Time windows, record counts, and clinical relations in $K_D$ are inductive questioning constraints, not hard-coded medical rules applied uniformly across patients.
-
-\subsection{Environment Exploration}
-\label{app:env-explore}
-Environment exploration queries native read-only tools in an isolated instance over open patients. Guidance $K_E$ records validated parameters, return shapes, pagination and truncation behavior, and typical retrieval procedures, and distinguishes call failures from unverified capabilities. Patient-specific observations stay out of the shared guide.
-
-\subsection{Guidance Revision Example}
-\label{app:guidance-example}
-\begin{figure}[!t]
 \centering
-\includegraphics[width=\columnwidth]{figures/medevolve-strategy-example-en.png}
-\caption{Example feedback-driven revision of generation guidance $g_r$. Verification feedback flags insufficient follow-up evidence; the revised guidance adds baseline/follow-up and comparability checks and restricts conclusions when evidence is weak. The example illustrates how $g_r$ can change, not that updates improve held-out metrics. Text is paraphrased from one evolution trace.}
-\label{fig:app-guidance}
-\end{figure}
+\includegraphics[width=\textwidth]{figures/appendix-prompts-overview.pdf}
+\captionof{figure}{Excerpts of MedEvolve's core prompts for data exploration, environment exploration, task generation, feedback analysis, and strategy updates.}
+\label{fig:app-prompts}
+\par\medskip\raggedright
+Figure~\ref{fig:app-case} presents a concise example from an evolution run in PhysicianBench, linking task generation, source-record verification, end-of-round feedback, and strategy updates. Feedback analysis turns verification issues into generation constraints applicable to other patients, rather than merely correcting the current answer. The figure retains key excerpts of the question, candidate answer, and revised guidance to illustrate this process.
+\end{minipage}
+}]
 
-\subsection{Task Generation and Strategies}
-\label{app:gen-strategy}
-A task records patient ID, clinical category, question, candidate reference answer, source identifiers with per-source factual claims, and execution requirements. The shared generation interface leaves the temporal-view field empty and requires read-only execution. One generation call receives the budgeted trajectory, $K_D$, $K_E$, current guidance $g_r$, and two sampled directions $Z_{p,r}$, and returns at most two candidates.
-
-The strategy is $\theta_r=(g_r,w_r)$ with natural-language guidance and direction weights over five clinical categories and difficulty descriptions. Directions are sampled proportional to weights (at least one positive). $K_D$ and $K_E$ stay fixed during updates; only $g_r$ and $w_r$ change. Evolution rounds sample from the current weights; held-out evaluation uses the frozen updated guidance, task-direction descriptions, and weights.
-
-\section{Environments, Patients, and Information Access}
-\label{app:splits}
-
-\begin{table}[!t]
+\twocolumn[{
+\begin{minipage}{\textwidth}
 \centering
-\small
-\setlength{\tabcolsep}{4pt}
-\caption{Generation-side patient splits (seed~42).}
-\label{tab:app-splits}
-\begin{tabular}{@{}lcccc@{}}
-\toprule
-Env & Pool & Evo. & Held-out & Rounds \\
-\midrule
-PhysicianBench & 108 & 27 & 81 & 13/14 \\
-MedAgentBench & 100 & 25 & 75 & 12/13 \\
-\bottomrule
-\end{tabular}
-\end{table}
+\includegraphics[width=\textwidth]{figures/appendix-case-flow.pdf}
+\captionof{figure}{A real example of evidence verification and guidance revision.}
+\label{fig:app-case}
+\par\medskip\raggedright
+\section{Evidence Verification and Reasoning Assessment}
+\label{app:metrics}
 
-Table~\ref{tab:app-splits} freezes evolution and held-out lists under seed~42 with prior exploration-exposure constraints; patients do not cross sets. Trajectories are ordered by record time and budgeted for model input; verification rereads original sources rather than input summaries. Initial exploration and generation expose query tools only. The public interface does not enable temporal-view isolation, so time language in a question does not hide later records server-side. The training and test split for Experiment~2 is separate from the generation-side patient split. Training uses 20 official tasks and, in the mixed setting, 20 verified synthetic tasks; both settings share 50 official test tasks. The frozen manifest records selected tasks, patients, splits, file hashes, and generation sources.
+Figure~\ref{fig:app-verify} summarizes the key prompts for evidence verification and reasoning-depth assessment, together with score aggregation rules.
 
-\section{Generation Methods and Budgets}
-\label{app:methods}
+Higher-order yield uses the fixed requested-task total as its denominator (162 for PhysicianBench; 150 for MedAgentBench). Generation shortfalls and invalid tasks are not removed from the denominator. Mean level includes only verified tasks with complete difficulty scores.
+\end{minipage}
+}]
 
-TaskCraft maps patient records and read-only FHIR tools onto atomic extraction, verification, and depth/width expansion; both branches start from atomic tasks, share a generation budget, and record acceptance separately from final filtering. Workflow runs localize--generate--filter with filtering only. SingleShot emits at most two tasks in one pass. SelfRefine drafts, self-critiques, and revises within a patient batch (up to three critiques and two revisions; early stop on pass). EnvExplore obtains environment guidance once, then generates under a fixed initial strategy. MedEvolve uses dual exploration and the full strategy after two rounds of cross-patient feedback-driven updates. All methods share the output schema and external evaluation; internal calls and filters are logged separately.
+\twocolumn[{
+\begin{minipage}{\textwidth}
+\centering
+\includegraphics[width=\textwidth]{figures/appendix-verification-depth.pdf}
+\captionof{figure}{Prompts for evidence verification and reasoning-depth assessment. Left: verify each evidence claim, then the whole task. Right: reasoning levels 1--4, shortcut checks, and aggregation. The median of two judges' scores is rounded down; verified tasks with an aggregate level of at least 3 count as higher-order tasks.}
+\label{fig:app-verify}
+\end{minipage}
+}]
 
-Matching task counts are not treated as identical token budgets. Exploration and updates count toward MedEvolve cost; shared evaluation is reported separately; reused historical calls are deduplicated from original logs.
+\section{Experimental and Reproducibility Settings}
 
-\section{Scoring, Aggregation, and Statistics}
-\label{app:scoring}
+\subsection{Patient Splits and Information Access}
+\label{app:env}
 
-\subsection{Quality and Reasoning Depth}
-\label{app:quality}
-Quality uses four 1--5 dimensions scored independently: factual accuracy (FA), clinical validity (CV), evidence sufficiency (ES), and question clarity (QC). Rough anchors: 5~=~fully accurate/supported/clear; 3~=~mostly correct with material gaps; 1~=~severe error, unsupported inference, or unusable question. Reasoning depth is labeled from task demand and evidence structure: (1)~factual retrieval, (2)~single-step judgment, (3)~cross-record integration, (4)~clinical decision-making; levels 3--4 count as higher-order (HO). Category and depth are recorded separately; treatment-planning items are not auto-labeled as level~4.
-
-The judges are GPT-4o-mini and GPT-5.4-nano. For task $i$ and dimension $d$, two judges yield $s_{i,d}^{(1)},s_{i,d}^{(2)}$; we take
-\[
-s_{i,d}=\left\lfloor\operatorname{median}\bigl(s_{i,d}^{(1)},s_{i,d}^{(2)}\bigr)\right\rfloor.
-\]
-Depth uses the same aggregation. The protocol requires two valid judge outputs; a single success does not impute a missing score.
-
-\subsection{Evidence Structure and Rate Denominators}
-\label{app:denominators}
-Deduplicated cited sources $S_i$ give evidence count $|S_i|$; resource-type count uses recognizable type prefixes. Parseable timestamps $T_i$ define span $\Delta_i=(\max T_i-\min T_i)$ in days (missing if none; zero if one). Span summaries use non-missing values only.
-
-Higher-order task count includes only verified tasks with an aggregate difficulty level of at least 3. Higher-order yield divides this count by the fixed requested-task count. Mean level divides the sum of aggregate levels by the number of verified tasks with difficulty scores. Verification pass rate divides the verified-task count by the actual generated-task count. Experiment~2 divides the number of fully successful test tasks by all 50 planned test tasks.
-
-Generation failures and invalid tasks remain in yield accounting and are not removed from the denominator. Scoring failures in Experiment~2 are reported as missing coverage, rather than relabeled as success or failure. Zero denominators are reported as missing.
-
-\subsection{Uncertainty}
-\label{app:uncertainty}
-The higher-order task comparisons in Experiment~1 do not include interval estimates. Experiment~2 uses one seed and 50 planned test tasks.
-
-\section{Experience Learning and Official Evaluation}
-\label{app:harness}
-
-\begin{table*}[t]
+\begin{table}[!ht]
 \centering
 \small
-\setlength{\tabcolsep}{4pt}
-\renewcommand{\arraystretch}{1.15}
-\begin{tabularx}{\textwidth}{@{}lXXX@{}}
+\caption{Clinical patient pools and splits for two evolution rounds.}
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}lYYYY@{}}
 \toprule
-Framework & Persisted experience & Training updates & Test state \\
+Environment & Total & Evol. & Eval. & Round sizes \\
 \midrule
-OpenClaw & Skills and an isolated state directory & Native Skill Workshop; whether it is triggered is recorded & Frozen skills; learning and background maintenance disabled \\
-ACE & Playbook & Reflector and Curator updates & Generator only \\
-Reflexion & Reflections and transferable experience & Failure reflection and a limited number of retries & Actor only, reading stored experience \\
+PhysicianBench & 108 & 27 & 81 & 13 / 14 \\
+MedAgentBench & 100 & 25 & 75 & 12 / 13 \\
 \bottomrule
 \end{tabularx}
-\caption{Experience representations and update mechanisms of the three frameworks.}
-\label{tab:app-harness}
-\end{table*}
+\end{table}
 
-The two training settings maintain separate configurations and experience stores and start from the same initial state. Reflexion's cross-task experience distillation is adapted to the medical setting: it stores applicability conditions, operational steps, and lessons from errors, without patient identifiers, individual clinical values, or per-task answers. Each new task retrieves at most three relevant experience entries under frozen rules. Test-time scoring does not trigger reflection or retries.
+Only patients with clinical records enter the pool; MedAgentBench patients with demographics alone are excluded from generation. Patient lists are frozen with seed 42, and patients previously exposed during exploration remain in the evolution set. Evolution and held-out evaluation patients are disjoint. Model inputs are trimmed to the budget, whereas verification reads the original sources. Generation and solving are read-only; time constraints in a question do not imply that tools hide later records.
 
-The execution model is Qwen3.8-27B with thinking disabled, a model-call budget of 100, and seed~42. Both training settings share the same 20 official tasks. The mixed setting adds 20 verified MedEvolve-generated tasks, with 10 generated by GPT-4o-mini and 10 by GPT-5.4-nano.
+\subsection{Models and Baseline Adaptation}
+\label{app:methods}
 
-PhysicianBench uses official tasks and checkpoint-based scoring, with actual file deliverables, execution traces, and the task's FHIR instance. Missing official assets or scoring errors are retained as unavailable results; shared LLM judgments do not replace native scores. Reference answers are used only for scoring and are withheld from execution and learning.
+In Experiment 1, GPT-5.4-nano is used for generation, independent solving, verification, and completion assessment. GPT-4o-mini and GPT-5.4-nano judge difficulty. All six methods share the held-out patients, a limit of two tasks per patient, and the common evaluation protocol.
 
-Test scoring is isolated from task solving, and the medical instance used for execution is retained until scoring finishes. Each task uses a copy of the frozen experience. Reference answers, scoring results, and full conversations are not written back to the final experience store. Experience hashes are checked before and after testing, and both the planned task count and scoring coverage are reported.
+TaskCraft adapts patient records and read-only FHIR tools to conclusion extraction, atomic task generation, verification, and depth/width expansion. The two expansion branches start independently and share the generation budget. Workflow performs localization, generation, and filtering; SingleShot generates in one pass. SelfRefine uses at most three self-reviews and two revisions, stopping early upon acceptance. EnvExplore uses environment guidance and a fixed initial strategy. MedEvolve uses dual exploration and the full strategy after two update rounds. Internal call counts differ, so the comparison does not control for equal computational expenditure.
 
-\section{Generation and Verification Counts}
-\label{app:extra-results}
+\subsection{Downstream Experience Learning and Official Evaluation}
+\label{app:exp2}
 
-\begin{table*}[t]
+The execution model is Qwen3.8-27B with UD-Q4\_K\_M quantization, thinking disabled, a budget of 100 model calls per task, and seed 42. Both settings start from the same initial state and share 20 official training tasks. The mixed setting adds verified MedEvolve tasks: 10 generated by GPT-4o-mini and 10 by GPT-5.4-nano. Experience is frozen after training, and both settings are scored on the same 50 official test tasks using PhysicianBench's native checkpoints. Reference answers are used only for scoring.
+
+ACE updates a strategy playbook; Reflexion stores reflections and transferable experience; OpenClaw updates skills through its native Skill Workshop. Reflexion retrieves at most three relevant experiences per task and stores no patient identifiers, individual clinical values, or task-specific answers. Experience is not updated during testing, and scores do not trigger reflection or retries.
+
+Test success rates use all 50 planned tasks as the denominator. ACE completes scoring for 48 tasks in the official-only setting and 50 in the mixed setting; both settings for Reflexion and OpenClaw cover all 50 tasks.
+
+\newpage
+\section{Supplementary Task Counts}
+\label{app:counts}
+
+\begin{table}[!ht]
 \centering
 \small
-\setlength{\tabcolsep}{5pt}
-\renewcommand{\arraystretch}{1.1}
-\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrr@{}}
+\caption{Task counts by method in Experiment 1 (generation model: GPT-5.4-nano). Verified denotes tasks that pass evidence verification.}
+\label{tab:counts}
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}lrrrr@{}}
 \toprule
  & \multicolumn{2}{c}{PhysicianBench} & \multicolumn{2}{c}{MedAgentBench} \\
 \cmidrule(lr){2-3}\cmidrule(lr){4-5}
-Method & Generated / verified & Pass rate & Generated / verified & Pass rate \\
+Method & Generated & Verified & Generated & Verified \\
 \midrule
-MedEvolve & 157 / 70 & 44.6\% & 146 / 104 & 71.2\% \\
-TaskCraft & 128 / 125 & 97.7\% & 111 / 108 & 97.3\% \\
-Workflow & 32 / 10 & 31.3\% & 11 / 3 & 27.3\% \\
-SingleShot & 162 / 122 & 75.3\% & 150 / 127 & 84.7\% \\
-SelfRefine & 12 / 10 & 83.3\% & 7 / 6 & 85.7\% \\
-EnvExplore & 149 / 107$^\dagger$ & 71.8\%$^\dagger$ & 141 / 108 & 76.6\% \\
+MedEvolve & 157 & 70 & 146 & 104 \\
+EnvExplore & 141 & 93 & 141 & 108 \\
+TaskCraft & 128 & 125 & 111 & 108 \\
+Workflow & 32 & 10 & 11 & 3 \\
+SingleShot & 162 & 122 & 150 & 127 \\
+SelfRefine & 12 & 10 & 7 & 6 \\
 \bottomrule
 \end{tabular*}
-\caption{Generation and verification counts with GPT-5.4-nano from frozen earlier batches. Entries give actual generated and verified task counts; pass rate divides verified by generated tasks.}
-\label{tab:counts}
-\end{table*}
+\end{table}
 
-$^\dagger$ EnvExplore's PhysicianBench counts come from a frozen earlier batch, rather than the latest run that produced the 21 higher-order tasks in Table~\ref{tab:exp1}. These counts cannot serve as the denominator for those 21 tasks.
-
-\section{Illustrative Cases}
-\label{app:cases}
-
-Author-verified illustrative cases are pending and are not included in this draft.\pending
-
-
-\section*{Writing Assistance}
-Manuscript organization and evidence-status checks were assisted by the scientific-writing skill from Scientific Agent Skills~\citep{kassis2026skills}. The authors remain responsible for verifying the literature and scientific claims.
+\paragraph{Writing Assistance}
+Manuscript organization, method-description checks, and evidence-status checks were assisted by the scientific-writing skill from Scientific Agent Skills~\citep{kassis2026skills}. The authors remain responsible for verifying the literature and scientific claims.
 
 \end{document}
