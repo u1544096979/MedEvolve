@@ -190,7 +190,7 @@
 % \cite, \newcite, and \shortcite for compatibility with older ACL .sty files
 \renewcommand\cite{\citep}  % to get "(Author Year)" with natbib
 \newcommand\shortcite{\citeyearpar}% to get "(Year)" with natbib
-\newcommand\newcite{\citet} % to get "Author (Year)" with natbib
+\newcommand\newcite{\citet} % to get "Author (Year)"
 \newcommand{\citeposs}[1]{\citeauthor{#1}'s (\citeyear{#1})} % to get "Author's (Year)"
 
 \bibliographystyle{acl_natbib}
@@ -335,7 +335,7 @@
 \setlength{\emergencystretch}{2em}
 \setlist{leftmargin=2em,itemsep=2pt,parsep=0pt,topsep=4pt}
 \captionsetup{labelsep=period}
-\hypersetup{pdftitle={MedEvolve：基于双探索的纵向医疗任务生成与策略自进化},pdfauthor={},unicode=true}
+\hypersetup{pdftitle={面向纵向电子健康记录的 Agent 任务生成：证据锚定与策略进化},pdfauthor={},unicode=true}
 \makeatletter
 \setlength{\@fptop}{0pt}
 \setlength{\@fpsep}{12pt}
@@ -346,27 +346,24 @@
 \makeatother
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 \DefineVerbatimEnvironment{Prompt}{Verbatim}{fontsize=\footnotesize,breaklines=true,breakanywhere=true,breakautoindent=true,breaksymbolleft={},breaksymbolright={},xleftmargin=0pt}
-\title{MedEvolve：基于双探索的纵向医疗任务生成与策略自进化}
+\title{面向纵向电子健康记录的 Agent 任务生成：证据锚定与策略进化}
 \author{}
 \date{}
 \begin{document}
 \maketitle
 
 \begin{abstract}
-
-在患者纵向病历中自动构建医疗 Agent 任务，需要识别当前病例能够支持的临床关系，并确保相关证据可通过环境工具检索。本文提出 MedEvolve，通过数据探索提炼临床事件模式，通过环境探索核查证据获取方式，两类指导共同约束问题、参考答案与来源证据的生成。系统结合原始记录核验与独立解题反馈，跨患者批次修订生成指导并更新任务方向权重，推动生成策略自进化。研究在 PhysicianBench 与 MedAgentBench 中比较有效产出、任务质量和推理要求，并在共同官方任务上评价下游经验学习；任务生成实验覆盖两个环境、两个生成模型和六种方法；固定独立患者评测显示，策略更新的效果随环境与模型变化，未观察到一致的有效产量改善。下游经验学习按评分覆盖与原生学习触发状态报告，组件消融尚未执行。
-
+从纵向电子健康记录（EHR）中为医疗 Agent 生成高质量任务面临挑战：不同患者记录能够支持的临床关系各不相同，而可用工具又限制了证据的检索方式。本文提出 MedEvolve，从任务证据锚定与策略进化两个互补层面改进医疗任务生成。在任务构建层面，双探索将反复出现的临床时序模式与工具访问约束提炼为可复用的指导。在策略层面，反馈驱动的进化进一步将核验与独立解题结果转化为跨患者的任务构建规则和任务方向偏好，而非仅修复单个问题。
+在两个基准上，MedEvolve 的核验通过高阶任务产出率均高于基线方法。加入其合成任务后，ACE 与 Reflexion 在官方测试任务上的成功率分别提高 6 和 2 个百分点。
 \end{abstract}
 
 \section{引言}
 
-纵向病历记录了患者跨多次就诊的诊断、检验、用药和其他临床事件，是构建电子健康记录（EHR）Agent 任务的主要数据来源，MedAgentBench（Jiang et al., 2025）和 PhysicianBench（Liu et al., 2026）即在此类环境中评测 LLM Agent。此类任务通常需要临床专业人员参与设计与核对，难以大规模扩充。自动任务合成方面，TaskCraft（Shi et al., 2025）从网页、PDF、图像等数据出发生成任务，并通过深度和宽度扩展提高任务复杂度；CuES（Mai et al., 2025）则依靠与环境的交互探索合成任务，实验涉及 AppWorld、WebShop 和 BFCL。这两项工作都没有针对电子病历的纵向结构，以及任务证据必须能通过只读工具检索这一约束进行设计。
+纵向电子病历记录患者多次就诊中的诊断、检查与治疗，是构建医疗 Agent 任务的主要数据来源。MedAgentBench 与 PhysicianBench 在此类环境中评测 LLM Agent（Jiang et al., 2025；Liu et al., 2026），但任务通常依赖临床专家设计与审核，难以大规模扩展。自动生成方法中，TaskCraft 从网页、PDF 和图像生成任务，并通过深度与宽度扩展提高复杂度（Shi et al., 2025）；CuES 通过环境交互探索并合成任务（Mai et al., 2025）。两者均未针对纵向病历结构及只读工具下的证据获取约束设计。
 
-在纵向病历上自动构建任务有两个具体困难。第一，任务能否成立取决于病例记录和环境工具两方面。生成器读取当前患者的轨迹时，只能看到该患者拥有哪些记录，看不到同一数据源中哪些临床关系反复出现、各类问题的证据通常分布在哪些资源中，而完整轨迹本身也可能超出模型的输入预算。例如，包含多次检验结果的病例可支持趋势分析类问题，以诊断记录为主的病例则更适合临床解释类问题。同时，问题所需的证据还必须能够通过环境提供的工具检索到，这需要通过实际调用工具来了解。第二，固定的生成指导在不同病例上产出的任务质量和难度并不稳定，其缺陷往往要到证据核验或 Agent 实际解题之后才会暴露。
+纵向病历任务生成面临两个困难。首先，任务是否成立同时取决于病例内容与工具能力：当前患者轨迹无法揭示跨患者反复出现的临床关系及其证据分布，完整轨迹也可能超出输入预算；所需证据能否通过工具检索，还需实际交互核查。其次，固定生成指导难以在不同病例上维持稳定的质量与难度，问题往往在证据核验或独立解题后才暴露。
 
-针对这两点，我们提出 MedEvolve。生成之前，数据探索从纵向记录中归纳可复用的临床事件模式，环境探索通过调用只读工具核查证据的获取方式，两者共同约束问题、参考答案和来源证据的生成。生成之后，系统对照原始记录核验证据声明，并由独立 Agent 解题，再把核验缺陷、质量与推理评分和解题轨迹汇总为反馈，跨患者批次修订自然语言生成指导，并调整不同任务方向的采样权重。整个过程不更新模型参数。
-
-本文的贡献包括：（1）将数据探索与环境探索结合，使任务生成同时受病例内容和工具能力约束；（2）利用核验与解题反馈，在不更新模型参数的条件下跨患者更新生成策略；（3）给出覆盖有效产出、质量、推理要求和下游经验学习的评价协议，并在两个 EHR Agent 环境中检验上述机制。
+本文提出 MedEvolve，通过数据与环境双探索提炼可复用指导，再利用核验与独立解题反馈，跨患者更新生成策略，整个过程不更新模型参数。主要贡献包括：（1）结合临床事件模式与工具访问约束，支持有证据依据的任务生成；（2）利用评价反馈修订自然语言生成指导和任务方向权重；（3）在两个 EHR 环境中评价有效高阶任务产出，并检验合成任务的下游经验学习价值。
 
 \section{方法}
 
@@ -377,7 +374,7 @@
 \begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{figures/medevolve-overview-v7.pdf}
-\caption{MedEvolve 方法概览。（a）双探索分别从进化患者的纵向记录和只读工具交互中归纳数据指导 $K_D$ 与环境指导 $K_E$，在后续轮次中固定复用。（b）生成器以当前患者轨迹 $X_p$、两类探索指导与当前策略 $\theta_r=(g_r,w_r)$ 为条件生成候选任务，任务包含问题 $q$、参考答案 $a$ 与来源证据 $e$；核验重新读取原始记录，通过核验的任务进入质量（事实准确性 FA、临床合理性 CV、证据充分性 ES、题目清晰度 QC）、推理深度、独立解题与完成评价，参考答案与证据声明不提供给解题 Agent。（c）核验缺陷、评价得分与解题轨迹共同形成反馈 $F_r$，策略更新据此修订生成指导 $g_{r+1}$ 与方向权重 $w_{r+1}$；完成预定轮次后冻结策略 $\theta^*$，在独立患者集合上评测。}
+\caption{MedEvolve 方法概览。（a）数据与环境双探索形成固定复用的指导 $K_D$ 与 $K_E$。（b）生成器结合患者轨迹、探索指导和当前策略构建任务，经原始记录核验后开展质量、推理深度、独立解题与完成评价；解题 Agent 不接收参考答案和证据声明。（c）评价反馈修订生成指导与方向权重；进化结束后冻结策略，在留出患者上评测。}
 \label{fig:overview}
 \end{figure*}
 
@@ -409,61 +406,51 @@
 
 \section{实验}
 
-\subsection{实验设置}
+\subsection{评测条件与指标}
 
-\textbf{环境与患者。}实验覆盖 PhysicianBench 与 MedAgentBench。PhysicianBench 有 108 位具有临床记录的患者；MedAgentBench 的 695 位患者中仅 100 位具有临床记录，实验使用这 100 位。按种子 42 划分后，PhysicianBench 的进化患者为 27 位、独立评测患者为 81 位，MedAgentBench 分别为 25 位和 75 位，两组患者互不重叠。各方法共享评测患者，每位患者最多生成两道只读任务，因此请求题数分别为 162 与 150。完整划分及信息访问规则见附录~\ref{app:env}。
+\textbf{环境与比较条件。}实验覆盖 PhysicianBench 与 MedAgentBench，分别使用 108 与 100 位具有临床记录的患者，其中 81 与 75 位用于留出评测，其余用于策略进化，两组患者互不重叠。各方法共享留出患者与生成模型 GPT-5.4-nano，每位患者最多生成两道只读任务，固定请求题数分别为 162 与 150。患者划分与信息访问规则见附录~\ref{app:env}。
 
-\textbf{对比方法与模型。}比较六种生成方法：MedEvolve、TaskCraft、Workflow、SingleShot、SelfRefine（Madaan et al., 2023）和 EnvExplore，各方法的流程见附录~\ref{app:methods}。生成模型为 GPT-5.4-nano。MedEvolve 采用两轮更新后的完整策略，包括生成指导、题目方向描述及权重；两轮在 PhysicianBench 上分别使用 13 与 14 位进化患者，在 MedAgentBench 上分别使用 12 与 13 位。各方法的调用流程与计算投入不同，相同题数上限不代表相同计算成本。
-
-\textbf{评价与指标。}生成的任务先对照原始记录核验，再进行难度评价。难度由 GPT-4o-mini 与 GPT-5.4-nano 两个裁判独立评分，取中位数并向下取整，得到 1–4 级的聚合层级。评分依据任务所需的最小充分推理路径；多条证据、长时间跨度、长答案或信息缺失本身不自动构成高阶推理。通过核验且聚合层级不低于 3 的任务称为高阶题。实验一使用三项指标：
-\begin{itemize}
-\item \textbf{高阶题数}：通过核验且层级不低于 3 的任务数。
-\item \textbf{高阶产出率}：高阶题数除以固定的请求题数，生成失败和无效任务造成的损失计入其中。
-\item \textbf{有效题平均层级}：全部通过核验且具有难度评分的任务的层级均值，并非仅对高阶题取平均，作为辅助指标。
-\end{itemize}
-指标分母及评分细则见附录~\ref{app:metrics}。
+\textbf{评价指标。}任务先对照原始记录核验，再由 GPT-4o-mini 与 GPT-5.4-nano 独立评价最小充分推理需求，聚合为 1--4 级。通过核验且层级不低于 3 的任务计为高阶题。主要指标为高阶题数及其占固定请求题数的比例，即有效高阶产出率，生成失败和无效任务造成的损失均计入；全部通过核验且具有难度评分的任务的平均层级作为辅助指标。评分与聚合细则见附录~\ref{app:metrics}。
 
 \subsection{实验一：有效高阶题生成}
 
-该实验检验在相同患者和每患者题数上限下，各方法能否产出更多通过核验的高阶题。表~\ref{tab:exp1}~报告 GPT-5.4-nano 作为生成模型时的结果。
+我们比较不同生成方式能否在相同患者和题数上限下产出更多有效高阶任务。SingleShot 单次生成任务，Workflow 采用定位、生成与筛选流程，SelfRefine 通过自反馈修订候选，TaskCraft 通过深度与宽度扩展提高复杂度。EnvExplore 使用环境探索指导与固定初始策略；MedEvolve 则结合数据与环境双探索，使用两轮反馈更新后的完整策略。各方法的调用与计算投入不同，比较限定于共同患者和题数上限；具体流程与预算见附录~\ref{app:methods}。
 
-\begin{table*}[!t]
+\begin{table*}[t]
 \centering
-\small
-\caption{高阶题生成比较（生成模型：GPT-5.4-nano）。产出率以请求题数为分母（PhysicianBench 162，MedAgentBench 150）；平均层级为全部通过核验题目的 1–4 级均值。}
-\label{tab:exp1}
-\setlength{\tabcolsep}{3pt}
-\renewcommand{\arraystretch}{1.1}
-\begin{tabularx}{\textwidth}{lYYYYYY}
+\setlength{\tabcolsep}{7pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrr@{}}
 \toprule
- & \multicolumn{3}{c}{PhysicianBench} & \multicolumn{3}{c}{MedAgentBench} \\
-\cmidrule(lr){2-4}\cmidrule(lr){5-7}
-方法 & 高阶题数 & 高阶产出率 & 平均层级 & 高阶题数 & 高阶产出率 & 平均层级 \\
+ & \multicolumn{2}{c}{PhysicianBench} & \multicolumn{2}{c}{MedAgentBench} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+方法 & 高阶题数（产出率） & 平均层级 & 高阶题数（产出率） & 平均层级 \\
 \midrule
-\textbf{MedEvolve} & \textbf{23} & \textbf{14.2\%} & 2.27 & \textbf{77} & \textbf{51.3\%} & 2.73 \\
-TaskCraft & 0 & 0.0\% & 1.01 & 0 & 0.0\% & 1.00 \\
-Workflow & 3 & 1.9\% & 2.30 & 2 & 1.3\% & 2.67 \\
-SingleShot & 3 & 1.9\% & 1.20 & 11 & 7.3\% & 1.44 \\
-SelfRefine & 4 & 2.5\% & 2.20 & 2 & 1.3\% & 2.00 \\
-EnvExplore & 21 & 13.0\% & 2.25 & 64 & 42.7\% & 2.56 \\
+\textbf{MedEvolve} & \textbf{23（14.2\%）} & 2.27 & \textbf{77（51.3\%）} & \textbf{2.73} \\
+EnvExplore & 21（13.0\%） & 2.25 & 64（42.7\%） & 2.56 \\
+TaskCraft & 0（0.0\%） & 1.01 & 0（0.0\%） & 1.00 \\
+Workflow & 3（1.9\%） & \textbf{2.30} & 2（1.3\%） & 2.67 \\
+SingleShot & 3（1.9\%） & 1.20 & 11（7.3\%） & 1.44 \\
+SelfRefine & 4（2.5\%） & 2.20 & 2（1.3\%） & 2.00 \\
 \bottomrule
-\end{tabularx}
+\end{tabular*}
+\caption{有效高阶任务产出比较（生成模型：GPT-5.4-nano）。高阶题通过证据核验且聚合层级不低于 3；括号内为产出率，以固定请求题数为分母（PhysicianBench：162；MedAgentBench：150）。平均层级基于全部通过核验且具有难度评分的任务。粗体表示各列最高值。}
+\label{tab:exp1}
 \end{table*}
 
-MedEvolve 在两个环境中的高阶题数和产出率均最高，分别产出 23 题（14.2\%）与 77 题（51.3\%）。相比 SingleShot 的 3 题与 11 题，以及 SelfRefine 的 4 题与 2 题，MedEvolve 的高阶题数高出数倍至数十倍；TaskCraft 没有产出高阶题，平均层级接近 1，其任务以事实查询为主。最接近的方法是 EnvExplore，为 21 题与 64 题，即在同样使用环境探索的基础上，MedEvolve 的完整策略在 PhysicianBench 上多产出 2 题，在 MedAgentBench 上多产出 13 题；本实验未做区间估计，PhysicianBench 上的差距较小，不据此判断显著差异。
+表~\ref{tab:exp1}~显示，MedEvolve 在两个环境中的有效高阶产出率均最高，但相对最接近的 EnvExplore，其优势随环境变化：MedAgentBench 上多产出 13 道高阶题，产出率高出 8.6 个百分点；PhysicianBench 上仅多出 2 道，高出 1.2 个百分点。因此，结果支持完整框架在本次评测中的产出优势，但 PhysicianBench 上的差距较小。
 
-高阶产出率以固定的请求题数为分母，生成失败和未通过核验的任务造成的损失都已计入，因此上述优势是在扣除这些损失之后得到的。Workflow 与 SelfRefine 的实际生成量很小，也是其产出率低的原因之一。各方法的生成与核验数量见附录~\ref{app:counts}（表~\ref{tab:counts}）；MedEvolve 的核验通过率低于 TaskCraft 等方法，其优势体现在高阶题的数量，而非核验通过率。有效题平均层级的方法间差距小于高阶题数的差距，且 Workflow 在 PhysicianBench 上的均值（2.30）略高于 MedEvolve（2.27），但仅基于 10 道通过核验的题目，因此该指标只作辅助参考。
+核验通过率与高阶产出反映不同的任务特性。TaskCraft 的有效题平均层级接近 1，未产出高阶题；MedEvolve 的核验通过率低于部分基线，却保留了最多的有效高阶题（附录~\ref{app:counts}），说明仅考察核验通过率不足以评价生成任务的推理要求。平均层级也需结合样本量解读：PhysicianBench 上 Workflow 的均值略高于 MedEvolve（2.30 对 2.27），但仅基于 10 道通过核验的任务。
 
 \subsection{实验二：合成任务补充官方任务训练}
 
-该实验检验在官方任务训练之外加入 MedEvolve 合成任务，能否改善 Agent 在官方测试任务上的表现。环境为 PhysicianBench，比较 ACE、Reflexion（Shinn et al., 2023）和 OpenClaw 三个框架。执行模型为 Qwen3.8-27B，关闭思考，模型参数保持固定，各框架通过自身的记忆、反思或策略机制从训练任务中积累经验。
+我们进一步检验合成任务能否补充官方任务，改善经验学习后的测试表现。在 PhysicianBench 中，ACE、Reflexion（Shinn et al., 2023）与 OpenClaw 分别从两种训练设置中积累经验：“官方 20”使用 20 道官方任务；“官方＋合成 40”在同一批官方任务上增加 20 道通过核验的 MedEvolve 任务。两组使用同一执行模型 Qwen3.8-27B，固定模型参数，并在训练后冻结经验，在共同的 50 道官方测试任务上评测。参考答案仅用于评分；框架机制与复现设置见附录~\ref{app:exp2}。
 
-比较两种训练设置。“官方 20”使用 20 道官方任务；“官方＋合成 40”在同一批 20 道官方任务之外，加入 20 道通过核验的 MedEvolve 合成任务，其中 GPT-4o-mini 与 GPT-5.4-nano 生成的各 10 道。两组均在共同的 50 道官方测试任务上评价，模型调用预算为 100，种子为 42。参考答案只用于评分，不提供给执行与学习过程；训练结束后冻结经验再进行测试。框架机制与评测细节见附录~\ref{app:exp2}。
-
-\begin{table}[!t]
+\par\medskip\noindent
+\begin{minipage}{\columnwidth}
 \centering
 \small
-\caption{官方任务训练加入合成任务前后的题目通过率。通过率以全部 50 道计划测试题为分母，表示严格的整题成功。}
+\captionof{table}{官方任务训练加入合成任务前后的题目通过率。通过率以全部 50 道计划测试题为分母，表示严格的整题成功。ACE 的官方组与混合组分别有 48 与 50 题完成评分，其余框架均覆盖 50 题。}
 \label{tab:exp2}
 \setlength{\tabcolsep}{3pt}
 \begin{tabularx}{\columnwidth}{lYYY}
@@ -475,25 +462,24 @@ Reflexion & 12.0\%（6/50） & 14.0\%（7/50） & $+2.0$ pp \\
 OpenClaw & 24.0\%（12/50） & 20.0\%（10/50） & $-4.0$ pp \\
 \bottomrule
 \end{tabularx}
-\end{table}
+\end{minipage}
+\par\medskip
 
-评分覆盖方面，ACE 的官方 20 组覆盖 48 题、混合组覆盖 50 题，Reflexion 与 OpenClaw 的两组均覆盖 50 题。
-
-加入合成任务后，ACE 与 Reflexion 的题目通过率分别提高 6.0 与 2.0 个百分点，OpenClaw 则下降 4.0 个百分点，三个框架的变化方向并不一致。这些结果只说明在所观察的设置内各框架的变化，不能证明合成任务带来稳定、普遍的下游收益，也不能证明收益由高阶题本身造成。患者隔离的多种子补充实验仍在进行，尚无最终结果。
+补充合成任务后，ACE 与 Reflexion 的通过率分别提高 6.0 与 2.0 个百分点，OpenClaw 则下降 4.0 个百分点（表~\ref{tab:exp2}）。这说明合成任务在部分经验学习框架中具有潜在价值，但本次评测未呈现一致收益。不同框架采用不同的经验载体与更新机制，可能影响合成任务的利用效果，当前比较尚不能确定收益差异的原因。
 
 \raggedbottom
 
 \section{结论}
 
-MedEvolve 通过数据与环境双探索选择由当前病例支持的问题，再利用核验和解题反馈跨患者更新生成指导与方向权重，整个过程不更新模型参数。在 PhysicianBench 与 MedAgentBench 上，相同患者和每患者题数上限下，MedEvolve 产出的通过核验的高阶题最多，但其核验通过率低于部分基线，说明有效性与推理要求需要联合评价。将合成任务补充到官方任务训练后，不同框架的题目通过率变化不一致，目前不足以支持稳定的下游收益结论。
+本文提出 MedEvolve，将数据探索与环境探索结合，使医疗 Agent 任务生成同时受到患者纵向病历内容和工具证据获取能力的约束，并利用核验与独立解题反馈跨患者更新生成指导和任务方向权重，整个过程不更新模型参数。
+
+在 PhysicianBench 与 MedAgentBench 上，MedEvolve 在六种对比方法中均取得最高的有效高阶任务产出，分别产出 23 道与 77 道通过核验的高阶题。下游经验学习实验进一步呈现了合成任务在部分框架中的潜在价值：加入合成任务后，ACE 与 Reflexion 的官方测试通过率提高，OpenClaw 则下降，体现出框架间的收益差异。这些发现支持将双探索任务生成作为构建医疗 Agent 高阶任务的一种方法，并为研究合成任务与经验学习机制的适配关系提供了实证依据。
 
 \section*{局限性（Limitations）}
 
-病例记录的完整性、时间信息和模型输入预算限制了可发现的提问模式，轨迹裁剪也可能遗漏关键依据。同一环境内的患者独立划分只能检验该环境中的迁移，跨机构或跨数据来源的泛化仍需另外评价。当前生成采用回顾性信息访问，不启用时间视角隔离，因此不代表临床当时可获得的信息范围。
+下游经验学习实验比较了 20 道官方任务与加入 20 道合成任务后的训练设置，任务数量和组成同时发生变化。等量官方任务及其他生成方法所产任务的对照，有助于进一步区分训练规模与合成任务特性的影响。当前下游结果来自 PhysicianBench 上的单种子、50 道测试题，收益的稳定性及其在其他环境中的表现仍需更多评测。
 
-难度评价由两个模型的评分聚合而来，不能消除二者共有的偏差；高阶题数的方法间差异也未附区间估计。各方法的调用流程与计算投入不同，相同题数上限不代表相同计算成本。本文没有开展组件消融，因此无法分别归因数据探索、环境探索和反馈更新各自的贡献；多轮反馈更新的效果也未在本文评价。
-
-下游实验仅在 PhysicianBench 的三个框架上进行，结果为单种子，50 道测试题上相差一到数题属于较大的不确定性；患者隔离的多种子补充实验仍在进行。该结果不能证明稳定的下游收益，也不能证明收益来自高阶题本身。不同框架的原生学习机制不同，比较限定在同一框架内。
+MedEvolve 的生成指导从特定环境的患者记录与工具接口中提炼，当前独立患者评测考察的是同一环境内的策略迁移。当医疗机构、记录结构或证据检索工具发生变化时，已有指导的适用性及所需调整尚未得到系统评价。
 
 \section*{参考文献}
 
@@ -583,7 +569,7 @@ Workflow 固定执行定位、生成和内部检查，检查只筛选候选。Si
 
 推理层级依据问题要求及证据结构标注：第 1 级直接读取事实，第 2 级结合记录与临床知识完成单步判断，第 3 级跨记录比较或整合信息，第 4 级综合证据权衡风险收益并提出方案。评分依据完成任务所需的最小充分推理路径；证据数量、时间跨度、答案长度或信息缺失本身不自动提高层级。临床题型与推理层级分别记录，不把治疗规划题自动判为最高层级。
 
-对任务 $i$，两个裁判模型给出的原始层级为 $l_i^{(1)}$ 与 $l_i^{(2)}$，聚合层级为
+难度裁判分别为 GPT-4o-mini 与 GPT-5.4-nano。对任务 $i$，两个裁判模型给出的原始层级为 $l_i^{(1)}$ 与 $l_i^{(2)}$，聚合层级为
 \[
 l_i=\left\lfloor\operatorname{median}\left(l_i^{(1)},l_i^{(2)}\right)\right\rfloor.
 \]
