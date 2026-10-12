@@ -30,15 +30,16 @@ MedEvolve closes this gap with dual exploration: data exploration identifies sup
 \subsection{Tasks and Strategies}
 Let $X_p$ be the longitudinal trajectory of patient $p$. A task is $\tau=(p,q,a,E)$ with question $q$, candidate reference answer $a$, and evidence $E$ as source identifiers with factual claims. The solver receives the question and patient context and accesses records through environment tools; reference answers and evidence claims remain on the evaluation side.
 
-Data and environment exploration produce fixed guides $K_D$ and $K_E$. At round $r$, the strategy is $\theta_r=(g_r,W_r)$: natural-language generation guidance $g_r$ and weighted directions $W_r=\{(c_j,d_j,w_j)\}_j$ over clinical categories (diagnosis/interpretation, testing/risk stratification, treatment planning, prescribing, and replanning) and difficulty descriptions. Each generation slot samples a direction proportional to $w_j$. The sampled direction constrains category and reasoning demand; the patient's evidence decides whether a concrete task is supportable.
+Data and environment exploration produce fixed guides $K_D$ and $K_E$. At round $r$, the strategy is $\theta_r=(g_r,w_r)$: natural-language generation guidance $g_r$ and direction weights $w_r=\{(c_j,d_j,w_j)\}_j$ over clinical categories (diagnosis/interpretation, testing/risk stratification, treatment planning, prescribing, and replanning) and difficulty descriptions. Each generation slot samples a direction proportional to $w_j$. The sampled direction constrains category and reasoning demand; the patient's evidence decides whether a concrete task is supportable.
 
 \subsection{Dual Exploration, Generation, and Verification}
-Data exploration summarizes event roles, temporal relations, and applicability conditions from evolution patients into $K_D$ (e.g., comparing measurements around a treatment anchor requires comparable pre/post records). Environment exploration uses read-only tools to record accessible record types and retrieval procedures as $K_E$. The guides connect clinical evidence requirements with retrieval capability (Figure~\ref{fig:overview}) and remain fixed after the initial exploration; subsequent feedback updates only $g_r$ and $W_r$. Interface details are in Appendix~\ref{app:interfaces}.
+Data exploration summarizes event roles, temporal relations, and applicability conditions from evolution patients into $K_D$ (e.g., comparing measurements around a treatment anchor requires comparable pre/post records). Environment exploration uses read-only tools to record accessible record types and retrieval procedures as $K_E$. The guides connect clinical evidence requirements with retrieval capability (Figure~\ref{fig:overview}) and remain fixed after the initial exploration; subsequent feedback updates only $g_r$ and $w_r$. Interface details are in Appendix~\ref{app:interfaces}.
 
 \begin{figure*}[!t]
 \centering
-\includegraphics[width=\textwidth]{figures/medevolve-overview-v5.pdf}
-\caption{Overview of MedEvolve. (a)~Dual exploration yields fixed data guidance $K_D$ and environment guidance $K_E$. (b)~Left-to-right: generate candidates from patient $X_p$, guides, $g_r$, and weights $W_r$; verify evidence against source records; evaluate quality, depth, blind solving, and completion. (c)~Defects and traces form feedback $F_r$ that updates $g_{r+1}$, $W_{r+1}$ (dashed loop). (d)~After evolution, freeze $\theta^*$ and evaluate on held-out patients.}
+\includegraphics[width=\textwidth]{figures/medevolve-overview-v7.pdf}
+\caption{Overview of MedEvolve. (a)~Dual exploration yields fixed data guidance $K_D$ and environment guidance $K_E$. (b)~Generate candidates for patient $X_p$ from the guides and the current strategy $\theta_r=(g_r,w_r)$; verification re-reads the source records, and tasks that pass are scored for quality (FA, CV, ES, QC), reasoning depth, blind solving, and completion. (c)~Verification defects, scores, and solve traces form feedback $F_r$, which updates the guidance $g_{r+1}$ and weights $w_{r+1}$; after the final round the frozen strategy $\theta^*$ is evaluated on held-out patients.}
+
 \label{fig:overview}
 \end{figure*}
 
@@ -141,7 +142,7 @@ Environment exploration queries native read-only tools in an isolated instance o
 \label{app:gen-strategy}
 A task records patient ID, clinical category, question, candidate reference answer, source identifiers with per-source factual claims, and execution requirements. The shared generation interface leaves the temporal-view field empty and requires read-only execution. One generation call receives the budgeted trajectory, $K_D$, $K_E$, current guidance $g_r$, and two sampled directions $Z_{p,r}$, and returns at most two candidates.
 
-The strategy is $\theta_r=(g_r,W_r)$ with natural-language guidance and weighted directions over five clinical categories and difficulty descriptions. Directions are sampled proportional to weights (at least one positive). $K_D$ and $K_E$ stay fixed during updates; only $g_r$ and $W_r$ change. Evolution rounds sample from current weights; held-out evaluation freezes the initial direction list and sampling seed while reading the updated $g_r$.
+The strategy is $\theta_r=(g_r,w_r)$ with natural-language guidance and direction weights over five clinical categories and difficulty descriptions. Directions are sampled proportional to weights (at least one positive). $K_D$ and $K_E$ stay fixed during updates; only $g_r$ and $w_r$ change. Evolution rounds sample from current weights; held-out evaluation freezes the initial direction list and sampling seed while reading the updated $g_r$.
 
 \section{Environments, Patients, and Information Access}
 \label{app:splits}
