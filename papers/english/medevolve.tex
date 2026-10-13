@@ -150,45 +150,40 @@ MedEvolve derives generation guidance from patient records and tool interfaces w
 
 \appendix
 
-\twocolumn[{
-\begin{minipage}{\textwidth}
+\clearpage
 \section{Core Prompts and a Real Example}
 
 Figure~\ref{fig:app-prompts} presents excerpts of the core prompts for dual exploration, task generation, feedback analysis, and strategy updates. The five generation directions are diagnosis and explanation, testing and risk stratification, treatment planning, medication prescribing, and treatment replanning. Two directions are sampled per patient according to their weights.
 
+\begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{figures/appendix-prompts-overview.pdf}
-\captionof{figure}{Excerpts of MedEvolve's core prompts for data exploration, environment exploration, task generation, feedback analysis, and strategy updates.}
+\caption{Excerpts of MedEvolve's core prompts for data exploration, environment exploration, task generation, feedback analysis, and strategy updates.}
 \label{fig:app-prompts}
-\par\medskip\raggedright
-Figure~\ref{fig:app-case} presents a concise example from an evolution run in PhysicianBench, linking task generation, source-record verification, end-of-round feedback, and strategy updates. Feedback analysis turns verification issues into generation constraints applicable to other patients, rather than merely correcting the current answer. The figure retains key excerpts of the question, candidate answer, and revised guidance to illustrate this process.
-\end{minipage}
-}]
+\end{figure*}
 
-\twocolumn[{
-\begin{minipage}{\textwidth}
+Figure~\ref{fig:app-case} presents a concise example from an evolution run in PhysicianBench, linking task generation, source-record verification, end-of-round feedback, and strategy updates. Feedback analysis turns verification issues into generation constraints applicable to other patients, rather than merely correcting the current answer. The figure retains key excerpts of the question, candidate answer, and revised guidance to illustrate this process.
+
+\begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{figures/appendix-case-flow.pdf}
-\captionof{figure}{A real example of evidence verification and guidance revision.}
+\caption{A real example of evidence verification and guidance revision.}
 \label{fig:app-case}
-\par\medskip\raggedright
+\end{figure*}
+
 \section{Evidence Verification and Reasoning Assessment}
 \label{app:metrics}
 
 Figure~\ref{fig:app-verify} summarizes the key prompts for evidence verification and reasoning-depth assessment, together with score aggregation rules.
 
 Higher-order yield uses the fixed requested-task total as its denominator (162 for PhysicianBench; 150 for MedAgentBench). Generation shortfalls and invalid tasks are not removed from the denominator. Mean level includes only verified tasks with complete difficulty scores.
-\end{minipage}
-}]
 
-\twocolumn[{
-\begin{minipage}{\textwidth}
+\begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{figures/appendix-verification-depth.pdf}
-\captionof{figure}{Prompts for evidence verification and reasoning-depth assessment. Left: verify each evidence claim, then the whole task. Right: reasoning levels 1--4, shortcut checks, and aggregation. The median of two judges' scores is rounded down; verified tasks with an aggregate level of at least 3 count as higher-order tasks.}
+\caption{Prompts for evidence verification and reasoning-depth assessment. Left: verify each evidence claim, then the whole task. Right: reasoning levels 1--4, shortcut checks, and aggregation. The median of two judges' scores is rounded down; verified tasks with an aggregate level of at least 3 count as higher-order tasks.}
 \label{fig:app-verify}
-\end{minipage}
-}]
+\end{figure*}
 
 \section{Experimental and Reproducibility Settings}
 
@@ -232,10 +227,10 @@ Test success rates use all 50 planned tasks as the denominator. ACE completes sc
 \section{Supplementary Task Counts}
 \label{app:counts}
 
-\begin{table}[!ht]
+\noindent\begin{minipage}{\columnwidth}
 \centering
 \small
-\caption{Task counts by method in Experiment 1 (generation model: GPT-5.4-nano). Verified denotes tasks that pass evidence verification.}
+\captionof{table}{Task counts by method in Experiment 1 (generation model: GPT-5.4-nano). Verified denotes tasks that pass evidence verification.}
 \label{tab:counts}
 \setlength{\tabcolsep}{2pt}
 \renewcommand{\arraystretch}{1.12}
@@ -253,7 +248,8 @@ SingleShot & 162 & 122 & 150 & 127 \\
 SelfRefine & 12 & 10 & 7 & 6 \\
 \bottomrule
 \end{tabular*}
-\end{table}
+\end{minipage}
+\par\medskip
 
 \paragraph{Writing Assistance}
 Manuscript organization, method-description checks, and evidence-status checks were assisted by the scientific-writing skill from Scientific Agent Skills~\citep{kassis2026skills}. The authors remain responsible for verifying the literature and scientific claims.
